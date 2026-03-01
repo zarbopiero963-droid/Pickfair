@@ -1,13 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "Add your description here"
+name = "pickfair"
+version = "3.19.1"
+description = "Pickfair Trading Bot"
 requires-python = ">=3.11"
-dependencies = [
-    "betfairlightweight>=2.22.0",
-    "customtkinter>=5.2.2",
-    "matplotlib>=3.10.8",
-    "numpy>=2.4.0",
-    "pytest>=9.0.2",
-    "telethon>=1.42.0",
+
+[tool.setuptools.packages.find]
+where = ["."]
+# Aggiungi qui tutte le cartelle del tuo progetto
+include = ["ai*", "controllers*", "plugins*"] 
+
+[tool.pytest.ini_options]
+# Diciamo a Pytest di aggiungere automaticamente la root al PYTHONPATH
+pythonpath = [
+  "."
+]
+testpaths = [
+    "tests",
 ]
