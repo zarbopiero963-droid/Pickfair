@@ -1,0 +1,60 @@
+name: Build Pickfair EXE
+
+on:
+  push:
+    branches: [ "main", "master" ] # 1. AVVIA LA BUILD AD OGNI MODIFICA SUL MAIN
+  tags:
+    - 'v*'                         # Avvia anche quando crei un tag (es. v1.0.0)
+  workflow_dispatch:               # Permette l'avvio manuale dal pulsante "Run workflow"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    # RIMOSSO: working-directory: python-app (il tuo codice è nella root)
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Installa Dipendenze
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller betfairlightweight telethon customtkinter numpy matplotlib pandas requests urllib3 certifi
+        
+    - name: Compila Eseguibile con PyInstaller
+      # Utilizzo gli stessi parametri che hai nel tuo BUILD.bat per includere plugin e hidden imports
+      run: >
+        pyinstaller --onefile --windowed --name Pickfair 
+        --add-data "plugins;plugins" 
+        --hidden-import=customtkinter 
+        --hidden-import=numpy 
+        --hidden-import=pandas 
+        --hidden-import=matplotlib 
+        --hidden-import=betfairlightweight 
+        --hidden-import=betfairlightweight.streaming 
+        --hidden-import=telethon 
+        --hidden-import=plugin_manager 
+        main.py
+
+    # 2. QUESTO CREA L'ARTIFATTO DA SCARICARE (Il file .exe)
+    - name: Carica EXE come Artifact (Scaricabile)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Pickfair-Windows-EXE
+        path: dist/Pickfair.exe
+        retention-days: 14 # Mantiene il file scaricabile per 14 giorni
+
+    # Manteniamo la tua logica di Release pubblica (si attiverà SOLO se fai un tag vX.X.X)
+    - name: Carica su Release pubblica (Solo su Tag)
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/Pickfair.exe
+        repository: petiro/Pickfair
+        token: ${{ secrets.RELEASE_TOKEN }}
