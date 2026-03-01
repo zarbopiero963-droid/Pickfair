@@ -27,7 +27,7 @@ def validate_selections(results: List[Dict], bet_type: str = "BACK") -> List[str
     errors = []
     for r in results:
         stake = Decimal(str(r.get("stake", 0)))
-        if stake < Decimal("1.00"): # Permettiamo 1.00 per simulazioni, ma il reale è 2.00
+        if stake < Decimal("1.00"):
             errors.append(f"Stake troppo basso: {stake:.2f} EUR")
         
         win = Decimal(str(r.get("profit_if_win", r.get("profitIfWins", 0))))
@@ -128,7 +128,7 @@ def _calculate_lay_dutching(selections: List[Dict], total_target_profit: float, 
             'price': float(price),
             'stake': float(stake),
             'liability': float(liability),
-            'profitIfWins': float(target_profit_dec) # Il profitto è netto se vince il banco
+            'profitIfWins': float(target_profit_dec)
         })
         
     return results, float(target_profit_dec), float(book_value * 100)
