@@ -3,7 +3,7 @@ name: Build Pickfair EXE
 on:
   push:
     branches: [ "main", "master" ]
-  tags: [ "v*" ]
+    tags: [ "v*" ]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,6 @@ jobs:
         pip install pyinstaller betfairlightweight telethon customtkinter numpy matplotlib pandas requests urllib3 certifi
         
     - name: Crea cartella plugins se mancante
-      # Questo risolve l'errore: crea la cartella se Git non l'ha caricata
       run: New-Item -ItemType Directory -Force -Path plugins
         
     - name: Compila Eseguibile con PyInstaller
