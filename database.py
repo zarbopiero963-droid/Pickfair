@@ -44,7 +44,6 @@ class Database:
         """Esegue query gestendo transazioni annidate (SAVEPOINT)."""
         conn = self._get_connection()
         try:
-            # Incrementiamo la profondità
             self._local.transaction_depth += 1
             sp_name = f"sp_{self._local.transaction_depth}"
             conn.execute(f"SAVEPOINT {sp_name}")
@@ -89,7 +88,6 @@ class Database:
                 status TEXT
             )
         ''')
-        # Aggiunta colonne sicura
         try:
             self._execute("ALTER TABLE settings ADD COLUMN password TEXT")
         except sqlite3.OperationalError:
