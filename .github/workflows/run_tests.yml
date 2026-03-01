@@ -20,15 +20,14 @@ jobs:
       with:
         python-version: "3.11"
 
-    - name: Installa le dipendenze
+    - name: Installa Dipendenze e Progetto (Enterprise Mode)
       run: |
         python -m pip install --upgrade pip
         pip install pytest pytest-cov numpy pandas betfairlightweight telethon customtkinter matplotlib requests
+        
+        # Installa il tuo progetto in modalità "editable" per risolvere TUTTI gli import
+        pip install -e .
 
     - name: Lancia tutti i test
-      # Diciamo a Python esattamente dove si trovano le tue cartelle (ai, controllers, ecc.)
-      env:
-        PYTHONPATH: ${{ github.workspace }}
-      # Usiamo 'python -m pytest' che è il metodo ufficiale per evitare il ModuleNotFoundError
       run: |
-        python -m pytest tests/ --ignore=tests/test_dutching_safety.py --ignore=tests/test_performance.py -v
+        pytest tests/ --ignore=tests/test_dutching_safety.py --ignore=tests/test_performance.py -v
