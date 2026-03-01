@@ -51,8 +51,6 @@ class AutomationEngine:
     def _evaluate_order(self, order: Dict, market_data: Dict):
         """Valuta le condizioni di uscita per un singolo ordine."""
         try:
-            # Qui si aggancia la logica del PnL per decidere il cashout
-            # Implementazione semplificata per la patch
             pass
         except Exception as e:
             logger.error(f"[AUTO] Errore valutazione ordine: {e}")
