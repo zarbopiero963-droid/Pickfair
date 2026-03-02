@@ -1,6 +1,7 @@
 """
 Costruzione dell'interfaccia utente (UI) per il Tab Telegram.
 Questa classe si occupa ESCLUSIVAMENTE di disegnare i widget.
+Nessuna logica applicativa qui dentro.
 Il wiring punta direttamente ai metodi e alle variabili di `app`.
 """
 import tkinter as tk
@@ -36,69 +37,99 @@ class TelegramTabUI:
         right_frame = ctk.CTkFrame(main_frame, fg_color='transparent')
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
-        # --- Configurazione Telegram ---
+        # --- 1. Configurazione Telegram ---
         config_frame = ctk.CTkFrame(left_frame, fg_color=COLORS['bg_panel'], corner_radius=8)
         config_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
         
-        ctk.CTkLabel(config_frame, text="Configurazione Telegram", font=FONTS['heading'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
-        ctk.CTkLabel(config_frame, text="Ottieni API ID e Hash su my.telegram.org", font=('Segoe UI', 8), text_color=COLORS['text_tertiary']).pack(anchor=tk.W, padx=10)
+        ctk.CTkLabel(config_frame, text="Configurazione Telegram", font=FONTS['heading'],
+                     text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        ctk.CTkLabel(config_frame, text="Ottieni API ID e Hash su my.telegram.org", 
+                     font=('Segoe UI', 8), text_color=COLORS['text_tertiary']).pack(anchor=tk.W, padx=10)
         
         settings = self.app.db.get_telegram_settings() or {}
         
         ctk.CTkLabel(config_frame, text="API ID:", text_color=COLORS['text_secondary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
         self.app.tg_api_id_var = tk.StringVar(value=settings.get('api_id', ''))
-        ctk.CTkEntry(config_frame, textvariable=self.app.tg_api_id_var, width=200, fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
+        ctk.CTkEntry(config_frame, textvariable=self.app.tg_api_id_var, width=200,
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
         
         ctk.CTkLabel(config_frame, text="API Hash:", text_color=COLORS['text_secondary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
         self.app.tg_api_hash_var = tk.StringVar(value=settings.get('api_hash', ''))
-        ctk.CTkEntry(config_frame, textvariable=self.app.tg_api_hash_var, width=200, fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
+        ctk.CTkEntry(config_frame, textvariable=self.app.tg_api_hash_var, width=200,
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
         
         ctk.CTkLabel(config_frame, text="Numero di Telefono (+39...):", text_color=COLORS['text_secondary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
         self.app.tg_phone_var = tk.StringVar(value=settings.get('phone_number', ''))
-        ctk.CTkEntry(config_frame, textvariable=self.app.tg_phone_var, width=150, fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
+        ctk.CTkEntry(config_frame, textvariable=self.app.tg_phone_var, width=150,
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
         
         ctk.CTkLabel(config_frame, text="Stake Automatico (EUR):", text_color=COLORS['text_secondary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
         self.app.tg_auto_stake_var = tk.StringVar(value=str(settings.get('auto_stake', '1.0')))
-        ctk.CTkEntry(config_frame, textvariable=self.app.tg_auto_stake_var, width=80, fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
+        ctk.CTkEntry(config_frame, textvariable=self.app.tg_auto_stake_var, width=80,
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(anchor=tk.W, padx=10)
         
         self.app.tg_auto_bet_var = tk.BooleanVar(value=bool(settings.get('auto_bet', 0)))
-        ctk.CTkCheckBox(config_frame, text="Piazza automaticamente", variable=self.app.tg_auto_bet_var, fg_color=COLORS['back'], hover_color=COLORS['back_hover'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
+        ctk.CTkCheckBox(config_frame, text="Piazza automaticamente", variable=self.app.tg_auto_bet_var,
+                        fg_color=COLORS['back'], hover_color=COLORS['back_hover'],
+                        text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(5, 0))
         
         self.app.tg_confirm_var = tk.BooleanVar(value=bool(settings.get('require_confirmation', 1)))
-        ctk.CTkCheckBox(config_frame, text="Richiedi conferma (solo se auto OFF)", variable=self.app.tg_confirm_var, fg_color=COLORS['back'], hover_color=COLORS['back_hover'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10)
+        ctk.CTkCheckBox(config_frame, text="Richiedi conferma (solo se auto OFF)", variable=self.app.tg_confirm_var,
+                        fg_color=COLORS['back'], hover_color=COLORS['back_hover'],
+                        text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10)
         
         auth_frame = ctk.CTkFrame(config_frame, fg_color='transparent')
         auth_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
         ctk.CTkLabel(auth_frame, text="Codice:", text_color=COLORS['text_secondary']).pack(side=tk.LEFT)
         self.app.tg_code_var = tk.StringVar()
-        ctk.CTkEntry(auth_frame, textvariable=self.app.tg_code_var, width=60, fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(side=tk.LEFT, padx=2)
+        ctk.CTkEntry(auth_frame, textvariable=self.app.tg_code_var, width=60,
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(side=tk.LEFT, padx=2)
         ctk.CTkLabel(auth_frame, text="2FA:", text_color=COLORS['text_secondary']).pack(side=tk.LEFT, padx=(10, 0))
         self.app.tg_2fa_var = tk.StringVar()
-        ctk.CTkEntry(auth_frame, textvariable=self.app.tg_2fa_var, width=80, show='*', fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(side=tk.LEFT, padx=2)
+        ctk.CTkEntry(auth_frame, textvariable=self.app.tg_2fa_var, width=80, show='*',
+                     fg_color=COLORS['bg_card'], border_color=COLORS['border']).pack(side=tk.LEFT, padx=2)
+                     
+        # 🟢 WIRING CONTROLLER (Auth isolata)
+        ctk.CTkButton(auth_frame, text="Invia Codice", command=self.app.telegram_controller.send_code,
+                      fg_color=COLORS['button_secondary'], hover_color=COLORS['bg_hover'],
+                      corner_radius=6, width=90).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(auth_frame, text="Verifica", command=self.app.telegram_controller.verify_code,
+                      fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
+                      corner_radius=6, width=70).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(auth_frame, text="Reset Sessione", command=self.app.telegram_controller.reset_session,
+                      fg_color=COLORS['button_danger'], hover_color='#c62828',
+                      corner_radius=6, width=100).pack(side=tk.LEFT, padx=5)
         
-        ctk.CTkButton(auth_frame, text="Invia Codice", command=self.app.telegram_controller.send_code, fg_color=COLORS['button_secondary'], hover_color=COLORS['bg_hover'], corner_radius=6, width=90).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(auth_frame, text="Verifica", command=self.app.telegram_controller.verify_code, fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'], corner_radius=6, width=70).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(auth_frame, text="Reset Sessione", command=self.app.telegram_controller.reset_session, fg_color=COLORS['button_danger'], hover_color='#c62828', corner_radius=6, width=100).pack(side=tk.LEFT, padx=5)
-        
-        self.app.tg_status_label = ctk.CTkLabel(config_frame, text=f"Stato: {self.app.telegram_status}", text_color=COLORS['text_secondary'])
+        self.app.tg_status_label = ctk.CTkLabel(config_frame, text=f"Stato: {self.app.telegram_status}",
+                                                text_color=COLORS['text_secondary'])
         self.app.tg_status_label.pack(anchor=tk.W, padx=10, pady=5)
         
         btn_frame = ctk.CTkFrame(config_frame, fg_color='transparent')
         btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        ctk.CTkButton(btn_frame, text="Salva", command=self.app.telegram_controller.save_settings, fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'], corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(btn_frame, text="Avvia Listener", command=self.app._start_telegram_listener, fg_color=COLORS['button_success'], hover_color='#4caf50', corner_radius=6, width=100).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(btn_frame, text="Ferma", command=self.app._stop_telegram_listener, fg_color=COLORS['button_danger'], hover_color='#c62828', corner_radius=6, width=70).pack(side=tk.LEFT, padx=2)
+        # 🟢 WIRING MISTO: Setting al controller, Listener (INTATTO) nel main
+        ctk.CTkButton(btn_frame, text="Salva", command=self.app.telegram_controller.save_settings,
+                      fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
+                      corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(btn_frame, text="Avvia Listener", command=self.app._start_telegram_listener,
+                      fg_color=COLORS['button_success'], hover_color='#4caf50',
+                      corner_radius=6, width=100).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(btn_frame, text="Ferma", command=self.app._stop_telegram_listener,
+                      fg_color=COLORS['button_danger'], hover_color='#c62828',
+                      corner_radius=6, width=70).pack(side=tk.LEFT, padx=2)
         
-        # --- Chat Monitorate ---
+        # --- 2. Chat Monitorate ---
         chats_frame = ctk.CTkFrame(left_frame, fg_color=COLORS['bg_panel'], corner_radius=8)
         chats_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
         
-        ctk.CTkLabel(chats_frame, text="Chat Monitorate", font=FONTS['heading'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        ctk.CTkLabel(chats_frame, text="Chat Monitorate", font=FONTS['heading'],
+                     text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
         
         chat_btn_frame = ctk.CTkFrame(chats_frame, fg_color='transparent')
         chat_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        ctk.CTkButton(chat_btn_frame, text="Rimuovi", command=self.app._remove_telegram_chat, fg_color=COLORS['button_danger'], hover_color='#c62828', corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(chat_btn_frame, text="Rimuovi", command=self.app._remove_telegram_chat,
+                      fg_color=COLORS['button_danger'], hover_color='#c62828',
+                      corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
         
         columns = ('name', 'enabled')
         self.app.tg_chats_tree = ttk.Treeview(chats_frame, columns=columns, show='headings', height=4)
@@ -110,17 +141,23 @@ class TelegramTabUI:
         
         self.app._refresh_telegram_chats_tree()
         
-        # --- Chat Disponibili ---
+        # --- 3. Chat Disponibili ---
         available_frame = ctk.CTkFrame(left_frame, fg_color=COLORS['bg_panel'], corner_radius=8)
         available_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
         
-        ctk.CTkLabel(available_frame, text="Chat Disponibili da Telegram", font=FONTS['heading'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        ctk.CTkLabel(available_frame, text="Chat Disponibili da Telegram", font=FONTS['heading'],
+                     text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
         
         avail_btn_frame = ctk.CTkFrame(available_frame, fg_color='transparent')
         avail_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
         
-        ctk.CTkButton(avail_btn_frame, text="Carica/Aggiorna Chat", command=self.app.telegram_controller.load_dialogs, fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'], corner_radius=6, width=140).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(avail_btn_frame, text="Aggiungi Selezionate", command=self.app._add_selected_available_chats, fg_color=COLORS['button_success'], hover_color='#4caf50', corner_radius=6, width=140).pack(side=tk.LEFT, padx=2)
+        # 🟢 WIRING CONTROLLER E MAIN
+        ctk.CTkButton(avail_btn_frame, text="Carica/Aggiorna Chat", command=self.app.telegram_controller.load_dialogs,
+                      fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
+                      corner_radius=6, width=140).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(avail_btn_frame, text="Aggiungi Selezionate", command=self.app._add_selected_available_chats,
+                      fg_color=COLORS['button_success'], hover_color='#4caf50',
+                      corner_radius=6, width=140).pack(side=tk.LEFT, padx=2)
         
         self.app.tg_available_status = ctk.CTkLabel(avail_btn_frame, text="", text_color=COLORS['text_secondary'])
         self.app.tg_available_status.pack(side=tk.RIGHT, padx=5)
@@ -144,20 +181,31 @@ class TelegramTabUI:
         
         self.app.available_chats_data = []
         
-        # --- Regole di Parsing ---
+        # --- 4. Regole di Parsing ---
         rules_frame = ctk.CTkFrame(left_frame, fg_color=COLORS['bg_panel'], corner_radius=8)
         rules_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
         
-        ctk.CTkLabel(rules_frame, text="Regole di Parsing", font=FONTS['heading'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
-        ctk.CTkLabel(rules_frame, text="Definisci pattern regex per riconoscere i segnali", font=('Segoe UI', 8), text_color=COLORS['text_tertiary']).pack(anchor=tk.W, padx=10)
+        ctk.CTkLabel(rules_frame, text="Regole di Parsing", font=FONTS['heading'],
+                     text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        ctk.CTkLabel(rules_frame, text="Definisci pattern regex per riconoscere i segnali", 
+                     font=('Segoe UI', 8), text_color=COLORS['text_tertiary']).pack(anchor=tk.W, padx=10)
         
         rules_btn_frame = ctk.CTkFrame(rules_frame, fg_color='transparent')
         rules_btn_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
         
-        ctk.CTkButton(rules_btn_frame, text="Aggiungi", command=self.app._add_signal_pattern, fg_color=COLORS['button_success'], hover_color='#4caf50', corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(rules_btn_frame, text="Modifica", command=self.app._edit_signal_pattern, fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'], corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(rules_btn_frame, text="Elimina", command=self.app._delete_signal_pattern, fg_color=COLORS['button_danger'], hover_color='#c62828', corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(rules_btn_frame, text="Attiva/Disattiva", command=self.app._toggle_signal_pattern, fg_color=COLORS['button_secondary'], hover_color=COLORS['bg_hover'], corner_radius=6, width=110).pack(side=tk.LEFT, padx=2)
+        # 🟢 WIRING AL MAIN (Tutto intatto)
+        ctk.CTkButton(rules_btn_frame, text="Aggiungi", command=self.app._add_signal_pattern,
+                      fg_color=COLORS['button_success'], hover_color='#4caf50',
+                      corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(rules_btn_frame, text="Modifica", command=self.app._edit_signal_pattern,
+                      fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
+                      corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(rules_btn_frame, text="Elimina", command=self.app._delete_signal_pattern,
+                      fg_color=COLORS['button_danger'], hover_color='#c62828',
+                      corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(rules_btn_frame, text="Attiva/Disattiva", command=self.app._toggle_signal_pattern,
+                      fg_color=COLORS['button_secondary'], hover_color=COLORS['bg_hover'],
+                      corner_radius=6, width=110).pack(side=tk.LEFT, padx=2)
         
         rules_columns = ('enabled', 'name', 'market', 'pattern')
         rules_tree_container = ctk.CTkFrame(rules_frame, fg_color='transparent')
@@ -180,11 +228,12 @@ class TelegramTabUI:
         
         self.app._refresh_rules_tree()
         
-        # --- Segnali Ricevuti ---
+        # --- 5. Segnali Ricevuti ---
         signals_frame = ctk.CTkFrame(right_frame, fg_color=COLORS['bg_panel'], corner_radius=8)
         signals_frame.pack(fill=tk.BOTH, expand=True)
         
-        ctk.CTkLabel(signals_frame, text="Segnali Ricevuti", font=FONTS['heading'], text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        ctk.CTkLabel(signals_frame, text="Segnali Ricevuti", font=FONTS['heading'],
+                     text_color=COLORS['text_primary']).pack(anchor=tk.W, padx=10, pady=(10, 5))
         
         signals_tree_container = ctk.CTkFrame(signals_frame, fg_color='transparent')
         signals_tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -212,6 +261,8 @@ class TelegramTabUI:
         self.app.tg_signals_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        ctk.CTkButton(signals_frame, text="Aggiorna Segnali", command=self.app._refresh_telegram_signals_tree, fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'], corner_radius=6).pack(pady=10)
+        ctk.CTkButton(signals_frame, text="Aggiorna Segnali", command=self.app._refresh_telegram_signals_tree,
+                      fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
+                      corner_radius=6).pack(pady=10)
         
         self.app._refresh_telegram_signals_tree()
