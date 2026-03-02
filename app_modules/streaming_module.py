@@ -1,14 +1,20 @@
+"""
+Streaming Module (Decoupled via EventBus)
+Gestisce l'apertura e chiusura dello stream Betfair.
+Non tocca mai la UI: pubblica i tick direttamente nel sistema nervoso centrale.
+"""
+
 import tkinter as tk
 from tkinter import messagebox
-import threading
 from theme import COLORS
 
 LIVE_REFRESH_INTERVAL = 5000
 
 class StreamingModule:
+    
     def _refresh_prices(self):
         """Manually refresh prices for current market."""
-        if not self.current_market:
+        if not getattr(self, 'current_market', None):
             return
         self._load_market(self.current_market['marketId'])
     
@@ -21,17 +27,24 @@ class StreamingModule:
     
     def _start_streaming(self):
         """Start streaming prices for current market."""
-        if not self.client or not self.current_market:
+        if not self.client or not getattr(self, 'current_market', None):
             self.stream_var.set(False)
             return
         
         try:
+            # 🚀 DECOUPLING PURO E PERFORMANCE BOOST:
+            # La callback dello stream spinge un dizionario nel Bus in background.
+            # Il thread di rete non aspetta MAI la UI.
             self.client.start_streaming(
                 [self.current_market['marketId']],
-                self._on_price_update
+                lambda market_id, runners_data: self.bus.publish(
+                    "MARKET_TICK", 
+                    {"market_id": market_id, "runners_data": runners_data}
+                )
             )
             self.streaming_active = True
-            self.stream_label.configure(text="STREAMING ATTIVO")
+            if hasattr(self, 'stream_label') and self.stream_label.winfo_exists():
+                self.stream_label.configure(text="STREAMING ATTIVO")
         except Exception as e:
             self.stream_var.set(False)
             messagebox.showerror("Errore Streaming", str(e))
@@ -42,75 +55,13 @@ class StreamingModule:
             self.client.stop_streaming()
         self.streaming_active = False
         self.stream_var.set(False)
-        self.stream_label.configure(text="")
+        if hasattr(self, 'stream_label') and self.stream_label.winfo_exists():
+            self.stream_label.configure(text="")
+            
+    # ==============================
+    # GESTIONE MODALITA' LIVE 
+    # ==============================
     
-    def _on_price_update(self, market_id, runners_data):
-        """Handle streaming price update with throttling lock."""
-        if not self.current_market or market_id != self.current_market['marketId']:
-            return
-        
-        with self._buffer_lock:
-            self._market_update_buffer[market_id] = runners_data
-            if not getattr(self, '_pending_tree_update', False):
-                self._pending_tree_update = True
-                self.root.after(200, self._throttled_refresh)
-
-    def _throttled_refresh(self):
-        """Process buffered streaming updates at safe intervals."""
-        with self._buffer_lock:
-            snapshot = dict(self._market_update_buffer)
-            self._market_update_buffer.clear()
-            self._pending_tree_update = False
-            
-        if not self.current_market:
-            return
-            
-        market_id = self.current_market['marketId']
-        runners_data = snapshot.get(market_id)
-        if not runners_data:
-            return
-            
-        def update_ui():
-            for runner_update in runners_data:
-                selection_id = str(runner_update['selectionId'])
-                try:
-                    item = self.runners_tree.item(selection_id)
-                    if not item:
-                        continue
-                        
-                    current_values = list(item['values'])
-                    back_prices = runner_update.get('backPrices', [])
-                    lay_prices = runner_update.get('layPrices', [])
-                    
-                    if back_prices:
-                        best_back = back_prices[0]
-                        current_values[2] = f"{best_back[0]:.2f}"
-                        current_values[3] = f"{best_back[1]:.0f}" if len(best_back) > 1 else "-"
-                    
-                    if lay_prices:
-                        best_lay = lay_prices[0]
-                        current_values[4] = f"{best_lay[0]:.2f}"
-                        current_values[5] = f"{best_lay[1]:.0f}" if len(best_lay) > 1 else "-"
-                    
-                    self.runners_tree.item(selection_id, values=current_values)
-                    
-                    if selection_id in self.selected_runners:
-                        if back_prices:
-                            self.selected_runners[selection_id]['backPrice'] = back_prices[0][0]
-                        if lay_prices:
-                            self.selected_runners[selection_id]['layPrice'] = lay_prices[0][0]
-                        bet_type = self.bet_type_var.get()
-                        if bet_type == 'BACK' and back_prices:
-                            self.selected_runners[selection_id]['price'] = back_prices[0][0]
-                        elif bet_type == 'LAY' and lay_prices:
-                            self.selected_runners[selection_id]['price'] = lay_prices[0][0]
-                        self._recalculate()
-                        
-                except Exception:
-                    pass
-        
-        self.uiq.post(update_ui)
-
     def _toggle_live_mode(self):
         """Toggle live-only mode."""
         if not self.client:
@@ -138,8 +89,7 @@ class StreamingModule:
                 events = self.client.get_live_events_only()
                 self.uiq.post(self._display_events, events)
             except Exception as e:
-                err_msg = str(e)
-                self.uiq.post(messagebox.showerror, "Errore", err_msg)
+                self.uiq.post(messagebox.showerror, "Errore", str(e))
         
         self.executor.submit("fetch_live_events", fetch)
     
@@ -152,12 +102,12 @@ class StreamingModule:
         """Single live refresh cycle."""
         if not self.live_mode:
             return
-        if self.current_market:
+        if getattr(self, 'current_market', None):
             self._refresh_prices()
         self.live_refresh_id = self.root.after(LIVE_REFRESH_INTERVAL, self._do_live_refresh)
     
     def _stop_live_refresh(self):
         """Stop auto-refresh for live odds."""
-        if self.live_refresh_id:
+        if hasattr(self, 'live_refresh_id') and self.live_refresh_id:
             self.root.after_cancel(self.live_refresh_id)
             self.live_refresh_id = None
