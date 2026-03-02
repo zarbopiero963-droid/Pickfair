@@ -400,59 +400,48 @@ class BettingModule:
         self._recalculate()
     
     def _quick_bet(self, selection_id, bet_type):
-        if not self.client and not self.simulation_mode:
-            messagebox.showwarning("Attenzione", "Devi prima connetterti")
+        if not self.client and not self.simulation_mode: 
+            return messagebox.showwarning("Attenzione", "Devi prima connetterti")
+        if not self.current_market: 
             return
-        if not self.current_market: return
+        
         runner = next((r for r in self.current_market['runners'] if str(r['selectionId']) == selection_id), None)
-        if not runner: return
+        if not runner: 
+            return
         
         values = list(self.runners_tree.item(selection_id)['values'])
         try:
-            if bet_type == 'BACK': price = float(str(values[2]).replace(',', '.')) if values[2] and values[2] != '-' else 0
-            else: price = float(str(values[4]).replace(',', '.')) if values[4] and values[4] != '-' else 0
-        except (ValueError, IndexError): price = 0
+            price = float(str(values[2]).replace(',', '.')) if bet_type == 'BACK' and values[2] != '-' else float(str(values[4]).replace(',', '.')) if values[4] != '-' else 0
+        except: 
+            price = 0
         
-        if price <= 0: return messagebox.showwarning("Attenzione", "Quota non disponibile")
+        if price <= 0: 
+            return messagebox.showwarning("Attenzione", "Quota non disponibile")
         
-        try: stake = float(self.stake_var.get().replace(',', '.'))
-        except ValueError: stake = 1.0
-        if stake < 1.0: stake = 1.0
+        try: 
+            stake = float(self.stake_var.get().replace(',', '.'))
+        except: 
+            stake = 1.0
+        
+        if stake < 1.0: 
+            stake = 1.0
         
         tipo_text = "Back (Punta)" if bet_type == 'BACK' else "Lay (Banca)"
         mode_text = "[SIMULAZIONE] " if self.simulation_mode else ""
         
-        if not messagebox.askyesno("Conferma Scommessa Rapida",
-            f"{mode_text}Vuoi piazzare questa scommessa?\n\nSelezione: {runner['runnerName']}\nTipo: {tipo_text}\nQuota: {price:.2f}\nStake: {stake:.2f} EUR"):
+        if not messagebox.askyesno("Conferma Scommessa Rapida", f"{mode_text}Vuoi piazzare questa scommessa?\n\n{runner['runnerName']}\nTipo: {tipo_text}\nQuota: {price:.2f}\nStake: {stake:.2f} EUR"): 
             return
         
-        if self.simulation_mode: self._place_quick_simulation_bet(runner, bet_type, price, stake)
-        else: self._place_quick_real_bet(runner, bet_type, price, stake)
-    
-    def _place_quick_real_bet(self, runner, bet_type, price, stake):
-        def place_thread():
-            try:
-                result = self.client.place_bet(
-                    market_id=self.current_market['marketId'], selection_id=runner['selectionId'], side=bet_type, price=price, size=stake, persistence_type='LAPSE'
-                )
-                self.uiq.post(self._on_quick_bet_result, result, runner, bet_type, price, stake)
-            except Exception as e:
-                self.uiq.post(messagebox.showerror, "Errore", str(e))
-        self.executor.submit("quick_bet", place_thread)
-    
-    def _on_quick_bet_result(self, result, runner, bet_type, price, stake):
-        if result.get('status') == 'SUCCESS':
-            matched = sum(r.get('sizeMatched', 0) for r in result.get('instructionReports', []))
-            self.db.save_bet(
-                event_name=self.current_market.get('eventName', ''), market_id=self.current_market['marketId'],
-                market_name=self.current_market.get('marketName', ''), bet_type=bet_type, selections=runner['runnerName'],
-                total_stake=stake, potential_profit=(stake * (price - 1)) * 0.955 if bet_type == 'BACK' else stake * 0.955,
-                status='MATCHED' if matched > 0 else 'UNMATCHED'
-            )
-            messagebox.showinfo("Successo", f"Scommessa piazzata!\n\n{runner['runnerName']} @ {price:.2f}\nImporto matchato: {format_currency(matched)}")
-            self._update_balance()
-        else: messagebox.showwarning("Attenzione", f"Stato: {result.get('status')}")
-    
+        # Spara il comando all'EventBus senza processarlo qui
+        self.bus.publish("CMD_QUICK_BET", {
+            "runner": runner, 
+            "bet_type": bet_type, 
+            "price": price, 
+            "stake": stake,
+            "simulation_mode": self.simulation_mode, 
+            "market": self.current_market
+        })
+
     def _set_bet_type(self, bet_type):
         self.bet_type_var.set(bet_type)
         if bet_type == 'BACK':
@@ -554,57 +543,40 @@ class BettingModule:
         if self.market_status in ('SUSPENDED', 'CLOSED'): return messagebox.showwarning("Attenzione", "Mercato sospeso o chiuso.")
         
         total_stake = sum(r['stake'] for r in self.calculated_results)
-        potential_profit = self.calculated_results[0].get('profitIfWins', 0)
-        bet_type = self.bet_type_var.get()
         
         if self.simulation_mode:
             sim_settings = self.db.get_simulation_settings()
             virtual_balance = sim_settings.get('virtual_balance', 0) if sim_settings else 0
             if total_stake > virtual_balance: return messagebox.showwarning("Saldo Insufficiente", f"Stake: {total_stake}\nSaldo: {virtual_balance}")
             if not messagebox.askyesno("Conferma Simulazione", f"Piazzare {len(self.calculated_results)} scommesse simulate?"): return
-            self.place_btn.configure(state=tk.DISABLED); self._placing_in_progress = True
-            self._place_simulation_bets(total_stake, potential_profit, bet_type)
-            self._placing_in_progress = False; return
+        else:
+            if not messagebox.askyesno("Conferma", f"Piazzare {len(self.calculated_results)} scommesse?\nStake Totale: {total_stake}"): return
             
-        if not messagebox.askyesno("Conferma", f"Piazzare {len(self.calculated_results)} scommesse?\nStake Totale: {total_stake}"): return
-        self.place_btn.configure(state=tk.DISABLED); self._placing_in_progress = True
+        self.place_btn.configure(state=tk.DISABLED)
+        self._placing_in_progress = True
         
-        use_best_price = self.best_price_var.get()
-        market_id = self.current_market['marketId']
-        def place():
-            try:
-                instructions = []
-                if use_best_price:
-                    book = self.client.get_market_book(market_id)
-                    current_prices = {}
-                    if book and book.get('runners'):
-                        for r in book['runners']:
-                            sel_id = r.get('selectionId'); ex = r.get('ex', {})
-                            if bet_type == 'BACK': current_prices[sel_id] = ex.get('availableToBack', [{'price':1.01}])[0].get('price', 1.01)
-                            else: current_prices[sel_id] = ex.get('availableToLay', [{'price':1000}])[0].get('price', 1000)
-                    for r in self.calculated_results:
-                        instructions.append({'selectionId': r['selectionId'], 'side': bet_type, 'price': current_prices.get(r['selectionId'], r['price']), 'size': r['stake']})
-                else:
-                    instructions = [{'selectionId': r['selectionId'], 'side': bet_type, 'price': r['price'], 'size': r['stake']} for r in self.calculated_results]
-                
-                result = self.client.place_bets(market_id, instructions)
-                reports = result.get('instructionReports', [])
-                all_matched = all(r.get('status') == 'SUCCESS' and r.get('sizeMatched', 0) > 0 for r in reports)
-                bet_status = 'MATCHED' if all_matched else 'PARTIALLY_MATCHED' if any(r.get('sizeMatched', 0) > 0 for r in reports) else 'PENDING' if result['status'] == 'SUCCESS' else 'FAILED'
-                
-                selections_with_names = [{'runnerName': r.get('runnerName', 'Unknown'), 'selectionId': r['selectionId'], 'price': r['price'], 'stake': r['stake'], 'sizeMatched': reports[i].get('sizeMatched', 0) if i < len(reports) else 0, 'betId': reports[i].get('betId') if i < len(reports) else None, 'instructionStatus': reports[i].get('status', 'UNKNOWN') if i < len(reports) else 'UNKNOWN'} for i, r in enumerate(self.calculated_results)]
-                self.db.save_bet(self.current_event['name'], self.current_market['marketId'], self.current_market['marketName'], bet_type, selections_with_names, total_stake, self.calculated_results[0]['profitIfWins'], bet_status)
-                self.uiq.post(self._on_bets_placed, result)
-            except Exception as e: self.uiq.post(self._on_bets_error, str(e))
-        self.executor.submit("place_bets_task", place)
-    
-    def _on_bets_placed(self, result):
-        self._placing_in_progress = False; self.place_btn.configure(state=tk.NORMAL)
-        if result['status'] == 'SUCCESS':
-            messagebox.showinfo("Successo", f"Scommesse piazzate!\nImporto matchato: {sum(r.get('sizeMatched', 0) for r in result.get('instructionReports', []))}")
-            self._update_balance(); self._clear_selections()
-        else: messagebox.showwarning("Attenzione", f"Stato: {result['status']}")
-    
-    def _on_bets_error(self, error):
-        self._placing_in_progress = False; self.place_btn.configure(state=tk.NORMAL)
-        messagebox.showerror("Errore", f"Errore piazzamento: {error}")
+        # Invia comando al TradingEngine
+        self.bus.publish("CMD_PLACE_DUTCHING", {
+            "market": self.current_market, "event": self.current_event, "results": self.calculated_results,
+            "bet_type": self.bet_type_var.get(), "total_stake": total_stake, 
+            "use_best_price": self.best_price_var.get(), "simulation_mode": self.simulation_mode
+        })
+        
+    # --- METODI DI REAZIONE AGLI EVENTI DEL MOTORE TRADING ---
+    def _on_engine_success(self, data):
+        self._placing_in_progress = False
+        if hasattr(self, 'place_btn') and self.place_btn.winfo_exists(): 
+            self.place_btn.configure(state=tk.NORMAL)
+            
+        msg = f"Scommessa simulata piazzata!\nNuovo Saldo: {format_currency(data.get('new_balance', 0))}" if data.get('sim') else f"Scommesse piazzate!\nImporto matchato: {format_currency(data.get('matched', 0))}"
+        messagebox.showinfo("Successo", msg)
+        self._update_balance()
+        self._clear_selections()
+        if hasattr(self, '_update_simulation_balance_display'): 
+            self._update_simulation_balance_display()
+        
+    def _on_engine_error(self, error_msg):
+        self._placing_in_progress = False
+        if hasattr(self, 'place_btn') and self.place_btn.winfo_exists(): 
+            self.place_btn.configure(state=tk.NORMAL)
+        messagebox.showerror("Errore Motore", f"Piazzamento fallito:\n{error_msg}")
