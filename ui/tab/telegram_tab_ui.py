@@ -4,6 +4,9 @@ Questa classe si occupa ESCLUSIVAMENTE di disegnare i widget.
 Nessuna logica applicativa qui dentro.
 Il wiring punta direttamente ai metodi e alle variabili di `app`.
 """
+
+__all__ = ["TelegramTabUI"]
+
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
@@ -151,7 +154,7 @@ class TelegramTabUI:
         avail_btn_frame = ctk.CTkFrame(available_frame, fg_color='transparent')
         avail_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
         
-        # 🟢 WIRING CONTROLLER E MAIN
+        # 🟢 WIRING AL CONTROLLER
         ctk.CTkButton(avail_btn_frame, text="Carica/Aggiorna Chat", command=self.app.telegram_controller.load_dialogs,
                       fg_color=COLORS['button_primary'], hover_color=COLORS['back_hover'],
                       corner_radius=6, width=140).pack(side=tk.LEFT, padx=2)
@@ -193,7 +196,7 @@ class TelegramTabUI:
         rules_btn_frame = ctk.CTkFrame(rules_frame, fg_color='transparent')
         rules_btn_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
         
-        # 🟢 WIRING AL MAIN (Tutto intatto)
+        # 🟢 WIRING AL MAIN (I metodi restano quelli originali del main)
         ctk.CTkButton(rules_btn_frame, text="Aggiungi", command=self.app._add_signal_pattern,
                       fg_color=COLORS['button_success'], hover_color='#4caf50',
                       corner_radius=6, width=80).pack(side=tk.LEFT, padx=2)
