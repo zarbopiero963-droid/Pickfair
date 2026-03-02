@@ -28,21 +28,21 @@ jobs:
     - name: Crea cartella plugins se mancante
       run: New-Item -ItemType Directory -Force -Path plugins
         
-    - name: Compila Eseguibile con PyInstaller (Enterprise Mode)
+    - name: Compila Eseguibile con PyInstaller (Enterprise Hardened)
       run: >
         pyinstaller --onefile --windowed --name Pickfair 
         --add-data "plugins;plugins" 
         --collect-all customtkinter 
+        --collect-all matplotlib 
+        --collect-all numpy 
         --collect-submodules app_modules 
         --collect-submodules controllers 
         --collect-submodules core 
         --collect-submodules ui 
-        --hidden-import=numpy 
+        --collect-submodules telethon 
+        --collect-submodules betfairlightweight 
         --hidden-import=pandas 
-        --hidden-import=matplotlib 
-        --hidden-import=betfairlightweight 
         --hidden-import=betfairlightweight.streaming 
-        --hidden-import=telethon 
         --hidden-import=plugin_manager 
         main.py
 
