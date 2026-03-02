@@ -8,8 +8,9 @@ import customtkinter as ctk
 import threading
 import time
 
-# Event Bus & Modules
+# Event Bus, Trading Engine & Modules
 from core.event_bus import EventBus
+from core.trading_engine import TradingEngine
 from app_modules.telegram_module import TelegramModule
 from app_modules.streaming_module import StreamingModule
 from app_modules.ui_module import UIModule
@@ -84,6 +85,9 @@ class PickfairApp(
             "TELEGRAM_STATUS",
             lambda data: self._update_telegram_status(data['status'], data['message']) if hasattr(self, '_update_telegram_status') else None
         )
+        
+        # Sottoscrizione al tick di mercato dello stream
+        self.bus.subscribe("MARKET_TICK", self._buffer_market_tick)
         # --------------------------------
 
         self.client = None
@@ -115,6 +119,17 @@ class PickfairApp(
         self.shutdown_mgr = ShutdownManager()
 
         self.telegram_controller = TelegramController(self)
+        
+        # --- WIRING TRADING ENGINE ---
+        self.trading_engine = TradingEngine(self.bus, self.db, lambda: self.client, self.executor)
+        
+        self.bus.subscribe("QUICK_BET_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, '_on_engine_success') else None)
+        self.bus.subscribe("QUICK_BET_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, '_on_engine_error') else None)
+        self.bus.subscribe("DUTCHING_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, '_on_engine_success') else None)
+        self.bus.subscribe("DUTCHING_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, '_on_engine_error') else None)
+        self.bus.subscribe("CASHOUT_SUCCESS", lambda d: self.uiq.post(self._on_cashout_success, d) if hasattr(self, '_on_cashout_success') else None)
+        self.bus.subscribe("CASHOUT_FAILED", lambda e: self.uiq.post(self._on_cashout_failed, e) if hasattr(self, '_on_cashout_failed') else None)
+        # -----------------------------
         
         if not hasattr(self, 'last_ui_tick'):
             self.last_ui_tick = time.time()
@@ -163,6 +178,84 @@ class PickfairApp(
     def _create_telegram_tab(self):
         """Delega costruzione UI Telegram a modulo esterno."""
         self.telegram_tab_ui = TelegramTabUI(self.telegram_tab, self)
+
+    # ==========================================
+    # METODI BUFFERING STREAMING (HARDENED)
+    # ==========================================
+    def _buffer_market_tick(self, payload):
+        """
+        Consuma i tick dal Bus in modo asincrono. 
+        Compatta i dati recenti (sovrascrive i vecchi) per garantire performance estrema.
+        """
+        market_id = payload["market_id"]
+        if not getattr(self, 'current_market', None) or market_id != self.current_market['marketId']: 
+            return
+        
+        with self._buffer_lock:
+            # MICRO-HARDENING 1: Limite Burst
+            if len(self._market_update_buffer) > 5:
+                self._market_update_buffer.clear()
+                
+            self._market_update_buffer[market_id] = payload["runners_data"]
+            if not getattr(self, '_pending_tree_update', False):
+                self._pending_tree_update = True
+                self.root.after(100, self._throttled_refresh)
+
+    def _throttled_refresh(self):
+        """
+        Prende i dati compattati dal buffer e li proietta sulla UI 
+        e sullo stato delle scommesse (selected_runners).
+        """
+        with self._buffer_lock:
+            snapshot = dict(self._market_update_buffer)
+            self._market_update_buffer.clear()
+            self._pending_tree_update = False
+            
+        if not getattr(self, 'current_market', None): 
+            return
+            
+        market_id = self.current_market['marketId']
+        runners_data = snapshot.get(market_id)
+        if not runners_data: 
+            return
+            
+        def update_ui():
+            recalc_needed = False  # MICRO-HARDENING 2: Flag per ottimizzazione Recalculate
+            for runner_update in runners_data:
+                selection_id = str(runner_update['selectionId'])
+                try:
+                    item = self.runners_tree.item(selection_id)
+                    if not item: 
+                        continue
+                        
+                    current_values = list(item['values'])
+                    back_prices = runner_update.get('backPrices', [])
+                    lay_prices = runner_update.get('layPrices', [])
+                    
+                    if back_prices:
+                        current_values[2] = f"{back_prices[0][0]:.2f}"
+                        current_values[3] = f"{back_prices[0][1]:.0f}" if len(back_prices[0]) > 1 else "-"
+                    if lay_prices:
+                        current_values[4] = f"{lay_prices[0][0]:.2f}"
+                        current_values[5] = f"{lay_prices[0][1]:.0f}" if len(lay_prices[0]) > 1 else "-"
+                    
+                    self.runners_tree.item(selection_id, values=current_values)
+                    
+                    if selection_id in self.selected_runners:
+                        recalc_needed = True
+                        if back_prices: self.selected_runners[selection_id]['backPrice'] = back_prices[0][0]
+                        if lay_prices: self.selected_runners[selection_id]['layPrice'] = lay_prices[0][0]
+                        bet_type = getattr(self, 'bet_type_var', None)
+                        if bet_type:
+                            if bet_type.get() == 'BACK' and back_prices: self.selected_runners[selection_id]['price'] = back_prices[0][0]
+                            elif bet_type.get() == 'LAY' and lay_prices: self.selected_runners[selection_id]['price'] = lay_prices[0][0]
+                except Exception: 
+                    pass
+            
+            if recalc_needed:
+                self._recalculate()
+                
+        self.uiq.post(update_ui)
 
 if __name__ == "__main__":
     app = PickfairApp()
