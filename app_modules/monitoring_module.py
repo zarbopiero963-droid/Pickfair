@@ -7,7 +7,7 @@ from theme import COLORS, FONTS
 class MonitoringModule:
     def _update_placed_bets(self):
         """Update placed bets list for current market."""
-        if not self.client or not self.current_market:
+        if not self.client or not getattr(self, 'current_market', None):
             return
         
         market_id = self.current_market.get('marketId')
@@ -60,11 +60,12 @@ class MonitoringModule:
 
     def _update_market_cashout_positions(self):
         """Update cashout positions for current market."""
-        if self.market_cashout_fetch_in_progress:
+        if getattr(self, 'market_cashout_fetch_in_progress', False):
             return
         
-        if not self.client or not self.current_market:
-            self.market_cashout_btn.configure(state=tk.DISABLED)
+        if not self.client or not getattr(self, 'current_market', None):
+            if hasattr(self, 'market_cashout_btn') and self.market_cashout_btn.winfo_exists():
+                self.market_cashout_btn.configure(state=tk.DISABLED)
             return
         
         market_id = self.current_market.get('marketId')
@@ -78,14 +79,14 @@ class MonitoringModule:
         
         def fetch_positions():
             try:
-                if self.market_cashout_fetch_cancelled:
+                if getattr(self, 'market_cashout_fetch_cancelled', False):
                     self.market_cashout_fetch_in_progress = False
                     return
                 
                 orders = self.client.get_current_orders()
                 matched = orders.get('matched', [])
                 
-                if self.market_cashout_fetch_cancelled:
+                if getattr(self, 'market_cashout_fetch_cancelled', False):
                     self.market_cashout_fetch_in_progress = False
                     return
                 
@@ -93,7 +94,7 @@ class MonitoringModule:
                 
                 positions = []
                 for order in market_orders:
-                    if self.market_cashout_fetch_cancelled:
+                    if getattr(self, 'market_cashout_fetch_cancelled', False):
                         self.market_cashout_fetch_in_progress = False
                         return
                     
@@ -132,8 +133,8 @@ class MonitoringModule:
                 
                 def update_ui():
                     self.market_cashout_fetch_in_progress = False
-                    if not self.market_cashout_fetch_cancelled:
-                        if self.current_market and self.current_market.get('marketId') == current_market_id:
+                    if not getattr(self, 'market_cashout_fetch_cancelled', False):
+                        if getattr(self, 'current_market', None) and self.current_market.get('marketId') == current_market_id:
                             self._display_market_cashout_positions(positions)
                 
                 self.uiq.post(update_ui)
@@ -168,10 +169,11 @@ class MonitoringModule:
             tags_getter=lambda c: c['tags']
         )
         
-        if positions:
-            self.market_cashout_btn.configure(state=tk.NORMAL)
-        else:
-            self.market_cashout_btn.configure(state=tk.DISABLED)
+        if hasattr(self, 'market_cashout_btn') and self.market_cashout_btn.winfo_exists():
+            if positions:
+                self.market_cashout_btn.configure(state=tk.NORMAL)
+            else:
+                self.market_cashout_btn.configure(state=tk.DISABLED)
     
     def _toggle_market_live_tracking(self):
         if self.market_live_tracking_var.get():
@@ -188,14 +190,16 @@ class MonitoringModule:
         
         self._update_market_cashout_positions()
         self.market_live_tracking_id = self.root.after(5000, update)
-        self.market_live_status.configure(text="LIVE", text_color=COLORS['success'])
+        if hasattr(self, 'market_live_status') and self.market_live_status.winfo_exists():
+            self.market_live_status.configure(text="LIVE", text_color=COLORS['success'])
     
     def _stop_market_live_tracking(self):
-        if self.market_live_tracking_id:
+        if getattr(self, 'market_live_tracking_id', None):
             self.root.after_cancel(self.market_live_tracking_id)
             self.market_live_tracking_id = None
         self.market_cashout_fetch_cancelled = True
-        self.market_live_status.configure(text="", text_color=COLORS['text_secondary'])
+        if hasattr(self, 'market_live_status') and self.market_live_status.winfo_exists():
+            self.market_live_status.configure(text="", text_color=COLORS['text_secondary'])
     
     def _do_single_cashout(self, event):
         item = self.market_cashout_tree.identify_row(event.y)
@@ -203,70 +207,15 @@ class MonitoringModule:
             self.market_cashout_tree.selection_set(item)
             self._do_market_cashout()
     
-    def _do_market_cashout(self):
-        selected = self.market_cashout_tree.selection()
-        if not selected:
-            messagebox.showwarning("Attenzione", "Seleziona una posizione")
-            return
-        
-        for bet_id in selected:
-            pos = self.market_cashout_positions.get(bet_id)
-            if not pos or not pos.get('cashout_info'):
-                continue
-            
-            info = pos['cashout_info']
-            
-            if self.auto_cashout_var.get():
-                confirm = True
-            else:
-                confirm = messagebox.askyesno(
-                    "Conferma Cashout",
-                    f"Eseguire cashout?\n\n"
-                    f"Selezione: {pos['runner_name']}\n"
-                    f"Tipo: {info['cashout_side']} @ {info['current_price']:.2f}\n"
-                    f"Stake: {info['cashout_stake']:.2f}\n"
-                    f"Profitto garantito: {info['green_up']:+.2f}"
-                )
-            
-            if confirm:
-                try:
-                    result = self.client.execute_cashout(
-                        self.current_market['marketId'],
-                        pos['selection_id'],
-                        info['cashout_side'],
-                        info['cashout_stake'],
-                        info['current_price']
-                    )
-                    
-                    if result.get('status') == 'SUCCESS':
-                        self.db.save_cashout_transaction(
-                            market_id=self.current_market['marketId'],
-                            selection_id=pos['selection_id'],
-                            original_bet_id=bet_id,
-                            cashout_bet_id=result.get('betId'),
-                            original_side=pos['side'],
-                            original_stake=pos['stake'],
-                            original_price=pos['price'],
-                            cashout_side=info['cashout_side'],
-                            cashout_stake=info['cashout_stake'],
-                            cashout_price=result.get('averagePriceMatched') or info['current_price'],
-                            profit_loss=info['green_up']
-                        )
-                        messagebox.showinfo("Successo", f"Cashout eseguito!\nProfitto: {info['green_up']:+.2f}")
-                        self._update_market_cashout_positions()
-                        self._update_balance()
-                    else:
-                        messagebox.showerror("Errore", f"Cashout fallito: {result.get('error', 'Errore')}")
-                except Exception as e:
-                    messagebox.showerror("Errore", f"Errore cashout: {e}")
-
     def _refresh_dashboard_tab(self):
         """Refresh dashboard tab data."""
         if not self.client:
-            self.dashboard_not_connected.configure(text="Connettiti a Betfair per vedere i dati")
+            if hasattr(self, 'dashboard_not_connected') and self.dashboard_not_connected.winfo_exists():
+                self.dashboard_not_connected.configure(text="Connettiti a Betfair per vedere i dati")
             return
         
-        self.dashboard_not_connected.configure(text="")
+        if hasattr(self, 'dashboard_not_connected') and self.dashboard_not_connected.winfo_exists():
+            self.dashboard_not_connected.configure(text="")
         
         def create_stat_card(parent, title, value, subtitle, col):
             import customtkinter as ctk
@@ -299,6 +248,7 @@ class MonitoringModule:
                 self.uiq.post(messagebox.showerror, "Errore", err_msg)
         
         def update_ui(funds, daily_pl, active_count, orders, settled_bets=None):
+            if not hasattr(self, 'dashboard_stats_frame') or not self.dashboard_stats_frame.winfo_exists(): return
             for widget in self.dashboard_stats_frame.winfo_children():
                 widget.destroy()
             
@@ -352,18 +302,52 @@ class MonitoringModule:
                 self._load_events()
                 self._update_balance()
                 now = datetime.now().strftime('%H:%M:%S')
-                self.auto_refresh_status.configure(text=f"Ultimo: {now}")
+                if hasattr(self, 'auto_refresh_status') and self.auto_refresh_status.winfo_exists():
+                    self.auto_refresh_status.configure(text=f"Ultimo: {now}")
                 self.auto_refresh_id = self.root.after(interval_ms, do_refresh)
         
         self.auto_refresh_id = self.root.after(interval_ms, do_refresh)
-        self.auto_refresh_status.configure(text="Attivo")
+        if hasattr(self, 'auto_refresh_status') and self.auto_refresh_status.winfo_exists():
+            self.auto_refresh_status.configure(text="Attivo")
     
     def _stop_auto_refresh(self):
-        if self.auto_refresh_id:
+        if getattr(self, 'auto_refresh_id', None):
             self.root.after_cancel(self.auto_refresh_id)
             self.auto_refresh_id = None
-        self.auto_refresh_status.configure(text="")
+        if hasattr(self, 'auto_refresh_status') and self.auto_refresh_status.winfo_exists():
+            self.auto_refresh_status.configure(text="")
     
     def _on_auto_refresh_interval_change(self, event=None):
         if self.auto_refresh_var.get():
             self._start_auto_refresh()
+
+    # --- ADAPTER LAYER (Invia comandi al TradingEngine tramite EventBus) ---
+    def _do_market_cashout(self):
+        selected = self.market_cashout_tree.selection()
+        if not selected: 
+            return messagebox.showwarning("Attenzione", "Seleziona una posizione")
+        
+        for bet_id in selected:
+            pos = self.market_cashout_positions.get(bet_id)
+            if not pos or not pos.get('cashout_info'): 
+                continue
+            
+            info = pos['cashout_info']
+            if not getattr(self, 'auto_cashout_var', None) or not self.auto_cashout_var.get():
+                if not messagebox.askyesno("Conferma Cashout", f"Eseguire cashout?\nTipo: {info['cashout_side']} @ {info['current_price']:.2f}\nStake: {info['cashout_stake']:.2f}\nProfitto: {info['green_up']:+.2f}"):
+                    continue
+            
+            # Invia comando al TradingEngine
+            self.bus.publish("CMD_EXECUTE_CASHOUT", {
+                "market_id": self.current_market['marketId'], "selection_id": pos['selection_id'],
+                "side": info['cashout_side'], "stake": info['cashout_stake'], "price": info['current_price'],
+                "bet_id": bet_id, "green_up": info['green_up'], "original_pos": pos
+            })
+
+    def _on_cashout_success(self, data):
+        messagebox.showinfo("Successo", f"Cashout eseguito!\nProfitto bloccato: {data['green_up']:+.2f}")
+        self._update_market_cashout_positions()
+        self._update_balance()
+        
+    def _on_cashout_failed(self, err):
+        messagebox.showerror("Errore Cashout", err)
