@@ -28,11 +28,15 @@ jobs:
     - name: Crea cartella plugins se mancante
       run: New-Item -ItemType Directory -Force -Path plugins
         
-    - name: Compila Eseguibile con PyInstaller
+    - name: Compila Eseguibile con PyInstaller (Enterprise Mode)
       run: >
         pyinstaller --onefile --windowed --name Pickfair 
         --add-data "plugins;plugins" 
-        --hidden-import=customtkinter 
+        --collect-all customtkinter 
+        --collect-submodules app_modules 
+        --collect-submodules controllers 
+        --collect-submodules core 
+        --collect-submodules ui 
         --hidden-import=numpy 
         --hidden-import=pandas 
         --hidden-import=matplotlib 
