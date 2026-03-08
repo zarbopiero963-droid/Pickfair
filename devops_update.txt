@@ -1,3 +1,51 @@
+REPLACE repo_update_engine.py def run_black(): def run_black():
+
+    targets = existing_engine_files()
+
+    if not targets:
+        log("No engine files for Black")
+        return
+
+    log(f"Running Black on {targets}")
+
+    subprocess.run(
+        ["black", *targets],
+        check=False,
+    )
+
+
+REPLACE repo_update_engine.py def run_isort(): def run_isort():
+
+    targets = existing_engine_files()
+
+    if not targets:
+        log("No engine files for isort")
+        return
+
+    log(f"Running isort on {targets}")
+
+    subprocess.run(
+        ["isort", *targets],
+        check=False,
+    )
+
+
+REPLACE repo_update_engine.py def run_ruff(): def run_ruff():
+
+    targets = existing_engine_files()
+
+    if not targets:
+        log("No engine files for ruff")
+        return
+
+    log(f"Running ruff on {targets}")
+
+    subprocess.run(
+        ["ruff", "check", *targets, "--fix"],
+        check=False,
+    )
+
+
 REPLACE repo_update_engine.py def run_pytest(): def run_pytest():
 
     log("Running pytest")
@@ -33,6 +81,7 @@ REPLACE repo_update_engine.py def run_pytest(): def run_pytest():
         return False
 
     log("Tests PASSED")
+
     return True
 
 
