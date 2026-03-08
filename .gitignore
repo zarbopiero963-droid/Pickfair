@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Build
+dist/
+build/
+*.egg-info/
+*.spec
+
+# PyInstaller
+*.manifest
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# DevOps engine runtime
+logs/
+backups/
+
+# Test cache
+.pytest_cache/
+.mypy_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+ENV/
+
+# Artifacts
+*.zip
