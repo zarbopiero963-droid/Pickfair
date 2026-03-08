@@ -223,7 +223,9 @@ def fix_whitespace():
             continue
 
         for file in files:
-            if not file.endswith((".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")):
+            if not file.endswith(
+                (".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")
+            ):
                 continue
 
             path = os.path.join(root, file)
@@ -278,7 +280,9 @@ def resolve_pytest_targets():
             log(f"Safe engine test mode active -> using {path}")
             return [path]
 
-    log("Safe engine test mode active -> no dedicated engine test found, running full suite")
+    log(
+        "Safe engine test mode active -> no dedicated engine test found, running full suite"
+    )
     return []
 
 

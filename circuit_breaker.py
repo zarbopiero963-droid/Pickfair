@@ -1,6 +1,6 @@
-import time
 import logging
-from typing import Callable, Any
+import time
+from typing import Any, Callable
 
 logger = logging.getLogger("CB")
 

@@ -8,12 +8,13 @@ from typing import List, Set
 
 class MarketValidationError(Exception):
     """Errore quando mercato non è dutching-ready."""
+
     pass
 
 
 class MarketValidator:
     """Validatore per mercati Betfair compatibili con dutching."""
-    
+
     DUTCHING_READY_MARKETS: Set[str] = {
         "MATCH_ODDS",
         "WINNER",
@@ -33,7 +34,7 @@ class MarketValidator:
         "SECOND_HALF_GOALS",
         "MATCH_RESULT_AND_BTTS",
     }
-    
+
     NON_DUTCHING_MARKETS: Set[str] = {
         "OVER_UNDER_05",
         "OVER_UNDER_15",
@@ -52,44 +53,48 @@ class MarketValidator:
         "TO_QUALIFY",
         "TO_WIN_NOT_TO_WIN",
     }
-    
+
     @classmethod
     def is_dutching_ready(cls, market_type: str) -> bool:
         """
         Verifica se il mercato è compatibile con dutching.
-        
+
         Args:
             market_type: Tipo mercato Betfair (es. MATCH_ODDS, OVER_UNDER_25)
-            
+
         Returns:
             True se mercato è winner-takes-all (dutching-ready)
         """
         if not market_type:
             return False
-        
+
         market_upper = market_type.upper().replace(" ", "_").replace("-", "_")
-        
+
         if market_upper in cls.DUTCHING_READY_MARKETS:
             return True
-        
+
         if market_upper in cls.NON_DUTCHING_MARKETS:
             return False
-        
+
         if "WINNER" in market_upper or "WIN" in market_upper:
             return True
-        if "ODDS" in market_upper and "CORNER" not in market_upper and "BOOKING" not in market_upper:
+        if (
+            "ODDS" in market_upper
+            and "CORNER" not in market_upper
+            and "BOOKING" not in market_upper
+        ):
             return True
-        
+
         return False
-    
+
     @classmethod
     def assert_dutching_ready(cls, market_type: str) -> None:
         """
         Verifica mercato e solleva eccezione se non dutching-ready.
-        
+
         Args:
             market_type: Tipo mercato Betfair
-            
+
         Raises:
             MarketValidationError: Se mercato non compatibile con dutching
         """
@@ -98,23 +103,23 @@ class MarketValidator:
                 f"Mercato '{market_type}' non compatibile con AI Dutching. "
                 f"Solo mercati winner-takes-all sono supportati."
             )
-    
+
     @classmethod
     def get_market_warning(cls, market_type: str) -> str:
         """
         Restituisce messaggio warning per mercato non compatibile.
-        
+
         Args:
             market_type: Tipo mercato
-            
+
         Returns:
             Messaggio warning o stringa vuota se compatibile
         """
         if cls.is_dutching_ready(market_type):
             return ""
-        
-        return f"Mercato NON DUTCHING-READY\nAI disabilitata automaticamente"
-    
+
+        return "Mercato NON DUTCHING-READY\nAI disabilitata automaticamente"
+
     @classmethod
     def get_compatible_markets(cls) -> List[str]:
         """Restituisce lista mercati compatibili."""

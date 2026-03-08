@@ -1,9 +1,9 @@
-import time
-import queue
-import threading
 import logging
+import queue
+import time
 
 logger = logging.getLogger("UIQ")
+
 
 class UIQueue:
     def __init__(self, root, fps=30, max_per_tick=50):
@@ -65,5 +65,5 @@ class UIQueue:
             "executed": self._executed,
             "dropped": self._dropped,
             "errors": self._errors,
-            "qsize": self.queue.qsize()
+            "qsize": self.queue.qsize(),
         }

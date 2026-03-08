@@ -1,8 +1,8 @@
 import concurrent.futures
 import logging
-import time
 
 logger = logging.getLogger("PLUGIN")
+
 
 class PluginRunner:
     def __init__(self, timeout=2):

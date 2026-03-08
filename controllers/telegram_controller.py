@@ -4,8 +4,8 @@ Isola SOLO autenticazione e gestione chat.
 Non tocca listener, pattern editor né trading logic.
 """
 
-import os
 import asyncio
+import os
 import tkinter as tk
 from tkinter import messagebox
 
@@ -21,7 +21,7 @@ class TelegramController:
 
     def save_settings(self):
         try:
-            stake = float(self.app.tg_auto_stake_var.get().replace(',', '.'))
+            stake = float(self.app.tg_auto_stake_var.get().replace(",", "."))
         except Exception:
             stake = 1.0
 
@@ -35,7 +35,7 @@ class TelegramController:
             enabled=True,
             auto_bet=self.app.tg_auto_bet_var.get(),
             require_confirmation=self.app.tg_confirm_var.get(),
-            auto_stake=stake
+            auto_stake=stake,
         )
 
         messagebox.showinfo("Salvato", "Impostazioni Telegram salvate.")
@@ -67,9 +67,7 @@ class TelegramController:
 
                 async def run():
                     client = TelegramClient(
-                        self._get_session_path(),
-                        int(api_id),
-                        api_hash
+                        self._get_session_path(), int(api_id), api_hash
                     )
                     await client.connect()
 
@@ -87,15 +85,14 @@ class TelegramController:
                 loop.close()
 
                 self.app.uiq.post(
-                    self.app.tg_status_label.configure,
-                    text=f"Stato: {msg}"
+                    self.app.tg_status_label.configure, text=f"Stato: {msg}"
                 )
 
             except Exception as e:
                 self.app.uiq.post(
                     messagebox.showerror,
                     "Errore",
-                    f"Impossibile inviare codice: {str(e)}"
+                    f"Impossibile inviare codice: {str(e)}",
                 )
 
         self.app.executor.submit("tg_send_code", task)
@@ -110,7 +107,7 @@ class TelegramController:
         if not code:
             messagebox.showwarning("Errore", "Inserisci il codice ricevuto.")
             return
-            
+
         self.app.tg_status_label.configure(text="Stato: Verifica in corso...")
 
         def task():
@@ -120,9 +117,7 @@ class TelegramController:
 
                 async def run():
                     client = TelegramClient(
-                        self._get_session_path(),
-                        int(api_id),
-                        api_hash
+                        self._get_session_path(), int(api_id), api_hash
                     )
                     await client.connect()
 
@@ -131,7 +126,10 @@ class TelegramController:
                     except SessionPasswordNeededError:
                         if not password:
                             await client.disconnect()
-                            return False, "Password 2FA richiesta. Inseriscila e riprova."
+                            return (
+                                False,
+                                "Password 2FA richiesta. Inseriscila e riprova.",
+                            )
                         await client.sign_in(password=password)
 
                     session_string = client.session.save()
@@ -149,38 +147,31 @@ class TelegramController:
                         api_hash=api_hash,
                         session_string=result,
                         phone_number=phone,
-                        enabled=True
+                        enabled=True,
                     )
 
                     self.app.uiq.post(
                         self.app.tg_status_label.configure,
-                        text="Stato: Autenticato con successo"
+                        text="Stato: Autenticato con successo",
                     )
                     self.app.uiq.post(
                         messagebox.showinfo,
                         "Successo",
-                        "Login Telegram completato. Ora puoi usare il listener."
+                        "Login Telegram completato. Ora puoi usare il listener.",
                     )
                 else:
                     self.app.uiq.post(
                         self.app.tg_status_label.configure,
-                        text="Stato: Errore Verifica"
+                        text="Stato: Errore Verifica",
                     )
-                    self.app.uiq.post(
-                        messagebox.showwarning,
-                        "Attenzione",
-                        result
-                    )
+                    self.app.uiq.post(messagebox.showwarning, "Attenzione", result)
 
             except Exception as e:
                 self.app.uiq.post(
-                    self.app.tg_status_label.configure,
-                    text="Stato: Errore Verifica"
+                    self.app.tg_status_label.configure, text="Stato: Errore Verifica"
                 )
                 self.app.uiq.post(
-                    messagebox.showerror,
-                    "Errore",
-                    f"Verifica fallita: {str(e)}"
+                    messagebox.showerror, "Errore", f"Verifica fallita: {str(e)}"
                 )
 
         self.app.executor.submit("tg_verify_code", task)
@@ -188,7 +179,7 @@ class TelegramController:
     def reset_session(self):
         if not messagebox.askyesno(
             "Conferma",
-            "Vuoi cancellare la sessione Telegram attuale? Dovrai ripetere l'autenticazione."
+            "Vuoi cancellare la sessione Telegram attuale? Dovrai ripetere l'autenticazione.",
         ):
             return
 
@@ -201,15 +192,17 @@ class TelegramController:
 
         settings = self.app.db.get_telegram_settings() or {}
         self.app.db.save_telegram_settings(
-            api_id=settings.get('api_id', ''),
-            api_hash=settings.get('api_hash', ''),
-            session_string='',
-            phone_number=settings.get('phone_number', ''),
-            enabled=False
+            api_id=settings.get("api_id", ""),
+            api_hash=settings.get("api_hash", ""),
+            session_string="",
+            phone_number=settings.get("phone_number", ""),
+            enabled=False,
         )
 
         self.app.tg_status_label.configure(text="Stato: Sessione resettata.")
-        messagebox.showinfo("OK", "Sessione rimossa. Reinserisci i dati e richiedi un nuovo codice.")
+        messagebox.showinfo(
+            "OK", "Sessione rimossa. Reinserisci i dati e richiedi un nuovo codice."
+        )
 
     # ==============================
     # CHAT MANAGEMENT
@@ -232,7 +225,7 @@ class TelegramController:
                     client = TelegramClient(
                         self._get_session_path(),
                         int(settings["api_id"]),
-                        settings["api_hash"]
+                        settings["api_hash"],
                     )
                     await client.connect()
 
@@ -250,8 +243,14 @@ class TelegramController:
                 loop.close()
 
                 if dialogs is None:
-                    self.app.uiq.post(self.app.tg_available_status.configure, text="Non autenticato")
-                    self.app.uiq.post(messagebox.showwarning, "Attenzione", "Non autenticato. Effettua il login.")
+                    self.app.uiq.post(
+                        self.app.tg_available_status.configure, text="Non autenticato"
+                    )
+                    self.app.uiq.post(
+                        messagebox.showwarning,
+                        "Attenzione",
+                        "Non autenticato. Effettua il login.",
+                    )
                     return
 
                 def update_ui():
@@ -259,7 +258,10 @@ class TelegramController:
                         *self.app.tg_available_tree.get_children()
                     )
 
-                    monitored_ids = {int(chat['chat_id']) for chat in self.app.db.get_telegram_chats()}
+                    monitored_ids = {
+                        int(chat["chat_id"])
+                        for chat in self.app.db.get_telegram_chats()
+                    }
 
                     for d in dialogs:
                         if d.id in monitored_ids:
@@ -267,19 +269,20 @@ class TelegramController:
                         # HARDENING: Fallback sicuro se d.name è None
                         safe_name = d.name or str(d.id)
                         self.app.tg_available_tree.insert(
-                            "",
-                            tk.END,
-                            iid=str(d.id),
-                            values=("", "Chat", safe_name)
+                            "", tk.END, iid=str(d.id), values=("", "Chat", safe_name)
                         )
-                    
+
                     count = len(self.app.tg_available_tree.get_children())
-                    self.app.tg_available_status.configure(text=f"{count} chat disponibili")
+                    self.app.tg_available_status.configure(
+                        text=f"{count} chat disponibili"
+                    )
 
                 self.app.uiq.post(update_ui)
 
             except Exception as e:
-                self.app.uiq.post(self.app.tg_available_status.configure, text="Errore caricamento")
+                self.app.uiq.post(
+                    self.app.tg_available_status.configure, text="Errore caricamento"
+                )
                 self.app.uiq.post(messagebox.showerror, "Errore", str(e))
 
         self.app.executor.submit("tg_load_dialogs", task)

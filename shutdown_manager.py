@@ -2,6 +2,7 @@ import logging
 
 logger = logging.getLogger("SHUTDOWN")
 
+
 class ShutdownManager:
     def __init__(self):
         self.handlers = []

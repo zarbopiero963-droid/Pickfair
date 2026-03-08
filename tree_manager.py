@@ -1,10 +1,12 @@
 import threading
 
+
 class TreeManager:
     """
     Gestisce l'aggiornamento dei Treeview in modo intelligente.
     Evita il flickering, mantiene le selezioni e i nodi aperti.
     """
+
     def __init__(self, tree):
         self.tree = tree
         self._lock = threading.Lock()
@@ -15,7 +17,7 @@ class TreeManager:
         for item in self.tree.get_children():
             if self.tree.item(item, "open"):
                 open_nodes.add(item)
-                
+
             # Cerca anche nei sotto-nodi (livello 2)
             for child in self.tree.get_children(item):
                 if self.tree.item(child, "open"):
@@ -34,7 +36,9 @@ class TreeManager:
             if self.tree.exists(sel):
                 self.tree.selection_add(sel)
 
-    def update_hierarchical(self, data, parent_getter, id_getter, text_getter, values_getter):
+    def update_hierarchical(
+        self, data, parent_getter, id_getter, text_getter, values_getter
+    ):
         """
         Aggiornamento incrementale per alberi gerarchici (es. Nazione -> Partita).
         - data: lista di dizionari con i dati
@@ -45,7 +49,7 @@ class TreeManager:
             open_nodes, selected = self._save_state()
 
             # Mappa degli elementi esistenti
-            existing_parents = set(self.tree.get_children(''))
+            existing_parents = set(self.tree.get_children(""))
             existing_children = set()
             for parent in existing_parents:
                 existing_children.update(self.tree.get_children(parent))
@@ -63,7 +67,9 @@ class TreeManager:
                 if parent_id not in new_parents:
                     new_parents.add(parent_id)
                     if parent_id not in existing_parents:
-                        self.tree.insert('', 'end', iid=parent_id, text=parent_id, open=False)
+                        self.tree.insert(
+                            "", "end", iid=parent_id, text=parent_id, open=False
+                        )
 
                 # Gestione del nodo figlio (es. Partita)
                 new_children.add(item_id)
@@ -73,7 +79,9 @@ class TreeManager:
                     if str(current_values) != str(tuple(str(v) for v in item_values)):
                         self.tree.item(item_id, values=item_values)
                 else:
-                    self.tree.insert(parent_id, 'end', iid=item_id, text='', values=item_values)
+                    self.tree.insert(
+                        parent_id, "end", iid=item_id, text="", values=item_values
+                    )
 
             # Rimozione elementi non più presenti
             for child_id in existing_children:
@@ -94,14 +102,14 @@ class TreeManager:
         """
         with self._lock:
             open_nodes, selected = self._save_state()
-            existing_items = set(self.tree.get_children(''))
+            existing_items = set(self.tree.get_children(""))
             new_items = set()
 
             for item_data in data:
                 item_id = str(id_getter(item_data))
                 item_values = values_getter(item_data)
                 item_tags = tags_getter(item_data) if tags_getter else ()
-                
+
                 new_items.add(item_id)
 
                 if item_id in existing_items:
@@ -109,11 +117,15 @@ class TreeManager:
                     current = self.tree.item(item_id)
                     current_values = current.get("values", [])
                     current_tags = current.get("tags", [])
-                    
-                    if str(current_values) != str(tuple(str(v) for v in item_values)) or list(current_tags) != list(item_tags):
+
+                    if str(current_values) != str(
+                        tuple(str(v) for v in item_values)
+                    ) or list(current_tags) != list(item_tags):
                         self.tree.item(item_id, values=item_values, tags=item_tags)
                 else:
-                    self.tree.insert('', 'end', iid=item_id, values=item_values, tags=item_tags)
+                    self.tree.insert(
+                        "", "end", iid=item_id, values=item_values, tags=item_tags
+                    )
 
             # Rimuovi elementi spariti
             for item_id in existing_items:

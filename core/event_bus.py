@@ -6,10 +6,11 @@ Permette ai moduli di comunicare senza conoscersi (Decoupling totale).
 
 __all__ = ["EventBus"]
 
-import threading
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
+
 
 class EventBus:
     def __init__(self):
@@ -41,4 +42,6 @@ class EventBus:
             try:
                 callback(data)
             except Exception as e:
-                logger.error(f"[EventBus] Errore nell'esecuzione del subscriber {callback.__name__} per l'evento '{event_type}': {e}")
+                logger.error(
+                    f"[EventBus] Errore nell'esecuzione del subscriber {callback.__name__} per l'evento '{event_type}': {e}"
+                )

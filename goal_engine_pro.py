@@ -1,10 +1,12 @@
-import time
-import threading
 import logging
-import requests
+import threading
+import time
 from collections import defaultdict
 
+import requests
+
 logger = logging.getLogger("GOAL_ENGINE_PRO")
+
 
 class IntelligentRateLimiter:
     def __init__(self):
@@ -24,6 +26,7 @@ class IntelligentRateLimiter:
             time.sleep(interval - elapsed)
         self.last_call = time.time()
 
+
 class APIFootballClient:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -42,7 +45,9 @@ class APIFootballClient:
         params = {"live": "all"}
 
         try:
-            resp = requests.get(self.base_url, headers=headers, params=params, timeout=10)
+            resp = requests.get(
+                self.base_url, headers=headers, params=params, timeout=10
+            )
             resp.raise_for_status()
             self.failures = 0
             return resp.json()
@@ -55,6 +60,7 @@ class APIFootballClient:
                 logger.error("API Football circuit OPEN 60s")
 
             raise
+
 
 class GoalEnginePro:
     def __init__(
@@ -75,7 +81,7 @@ class GoalEnginePro:
         self.running = False
 
         self.goal_cache = defaultdict(int)
-        self.confirm_cache = {}   # match_id -> timestamp first detect
+        self.confirm_cache = {}  # match_id -> timestamp first detect
         self.hedged_matches = set()
 
         self.confirm_mode = False
@@ -93,7 +99,7 @@ class GoalEnginePro:
 
     def set_confirm_mode(self, enabled: bool):
         self.confirm_mode = enabled
-        
+
     def set_low_request_mode(self, enabled: bool):
         self.rate_limiter.set_mode("LOW" if enabled else "NORMAL")
 
@@ -118,7 +124,7 @@ class GoalEnginePro:
                 self._process_api(data)
             except Exception as e:
                 logger.error("GoalEnginePro loop error: %s", e)
-                
+
             # Check async stream confirmations if confirm mode is on
             if self.confirm_mode:
                 self.check_stream_confirmation()
@@ -140,9 +146,7 @@ class GoalEnginePro:
                 self.goal_cache[match_id] = total_goals
                 self.hedged_matches.discard(match_id)
                 threading.Thread(
-                    target=self.reopen_callback,
-                    args=(match_id,),
-                    daemon=True
+                    target=self.reopen_callback, args=(match_id,), daemon=True
                 ).start()
                 return
 
@@ -172,15 +176,10 @@ class GoalEnginePro:
         self.hedged_matches.add(match_id)
 
         threading.Thread(
-            target=self.hedge_callback,
-            args=(match_id,),
-            daemon=True
+            target=self.hedge_callback, args=(match_id,), daemon=True
         ).start()
 
-        self.uiq.post(
-            logger.info,
-            f"[UI] Hedge triggered for {match_id}"
-        )
+        self.uiq.post(logger.info, f"[UI] Hedge triggered for {match_id}")
 
     def check_stream_confirmation(self):
         now = time.time()
@@ -193,9 +192,9 @@ class GoalEnginePro:
         """
         Verifica movimenti quota e sospensione.
         """
-        if not self.stream: 
-            return True # Fallback se stream assente
-            
+        if not self.stream:
+            return True  # Fallback se stream assente
+
         market = self.stream.get_market_cache(str(match_id))
         if not market:
             return False

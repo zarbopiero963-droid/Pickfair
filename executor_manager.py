@@ -3,6 +3,7 @@ import logging
 
 logger = logging.getLogger("EXEC")
 
+
 class SafeExecutor:
     def __init__(self, max_workers=4, default_timeout=30):
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
