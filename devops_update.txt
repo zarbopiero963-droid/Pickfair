@@ -1,7 +1,6 @@
 CREA_FILE repo_update_engine.py
 import datetime
 import os
-import shutil
 import subprocess
 import zipfile
 
@@ -17,6 +16,13 @@ KEEP_LAST_BACKUPS = 3
 
 SAFE_ENGINE_TEST_ONLY = True
 ENGINE_TEST_CANDIDATES = [
+    "tests/test_devops_engine_only.py",
+    "tests/test_devops_engine.py",
+]
+
+ENGINE_MANAGED_FILES = [
+    "repo_update_engine.py",
+    "devops_update.txt",
     "tests/test_devops_engine_only.py",
     "tests/test_devops_engine.py",
 ]
@@ -37,6 +43,7 @@ def ensure_dir(path):
 
 
 def log(msg):
+
     ensure_dir(LOG_DIR)
 
     with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -45,12 +52,18 @@ def log(msg):
     print(msg, flush=True)
 
 
+def existing_engine_files():
+
+    return [p for p in ENGINE_MANAGED_FILES if os.path.exists(p)]
+
+
 # ------------------------
 # BACKUP
 # ------------------------
 
 
 def list_backups():
+
     ensure_dir(BACKUP_DIR)
 
     files = [
@@ -60,10 +73,12 @@ def list_backups():
     ]
 
     files.sort()
+
     return files
 
 
 def cleanup_old_backups():
+
     backups = list_backups()
 
     if len(backups) <= KEEP_LAST_BACKUPS:
@@ -80,9 +95,11 @@ def cleanup_old_backups():
 
 
 def backup_repository():
+
     ensure_dir(BACKUP_DIR)
 
     ts = timestamp()
+
     zip_path = os.path.join(BACKUP_DIR, f"backup_{ts}.zip")
 
     log(f"Starting backup {zip_path}")
@@ -103,10 +120,13 @@ def backup_repository():
     }
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+
         for root, dirs, files in os.walk("."):
+
             dirs[:] = [d for d in dirs if d not in excluded_dirs]
 
             for file in files:
+
                 if file.endswith((".pyc", ".pyo", ".pyd")):
                     continue
 
@@ -123,6 +143,7 @@ def backup_repository():
 
 
 def latest_backup():
+
     backups = list_backups()
 
     if not backups:
@@ -132,6 +153,7 @@ def latest_backup():
 
 
 def restore_backup(zip_path):
+
     if not zip_path or not os.path.exists(zip_path):
         log("Backup zip not found")
         return False
@@ -142,10 +164,12 @@ def restore_backup(zip_path):
         z.extractall(".")
 
     log("RESTORE completed")
+
     return True
 
 
 def restore_last_backup():
+
     z = latest_backup()
 
     if not z:
@@ -161,18 +185,22 @@ def restore_last_backup():
 
 
 def create_folder(path):
+
     if os.path.exists(path):
         log(f"[SKIP] folder exists {path}")
         return
 
     os.makedirs(path, exist_ok=True)
+
     log(f"[CREATE] folder {path}")
 
 
 def create_file(path, content):
+
     ensure_dir(os.path.dirname(path))
 
     if os.path.exists(path):
+
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             existing = f.read()
 
@@ -187,9 +215,11 @@ def create_file(path, content):
 
 
 def append_file(path, content):
+
     ensure_dir(os.path.dirname(path))
 
     if os.path.exists(path):
+
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             existing = f.read()
 
@@ -200,43 +230,54 @@ def append_file(path, content):
             return
 
     with open(path, "a", encoding="utf-8") as f:
+
         if content and not content.startswith("\n"):
             f.write("\n")
+
         f.write(content)
 
     log(f"[MODIFY] append {path}")
 
 
 def delete_file(path):
+
     if not os.path.exists(path):
         log(f"[SKIP] file not found {path}")
         return
 
     os.remove(path)
+
     log(f"[DELETE] file {path}")
 
 
 def move_file(src, dst):
+
     if not os.path.exists(src):
         log(f"[SKIP] source file not found {src}")
         return
 
     ensure_dir(os.path.dirname(dst))
-    shutil.move(src, dst)
+
+    os.replace(src, dst)
+
     log(f"[MOVE] file {src} -> {dst}")
 
 
 def rename_file(src, dst):
+
     if not os.path.exists(src):
         log(f"[SKIP] source file not found {src}")
         return
 
     ensure_dir(os.path.dirname(dst))
+
     os.rename(src, dst)
+
     log(f"[RENAME] file {src} -> {dst}")
 
 
 def replace_text(path, old, new):
+
     if not os.path.exists(path):
         log(f"[SKIP] replace target missing {path}")
         return
@@ -257,6 +298,7 @@ def replace_text(path, old, new):
 
 
 def insert_line(path, line_number, text):
+
     if not os.path.exists(path):
         log(f"[SKIP] insert target missing {path}")
         return
@@ -265,6 +307,7 @@ def insert_line(path, line_number, text):
         lines = f.readlines()
 
     line_number = int(line_number)
+
     index = max(0, min(line_number - 1, len(lines)))
 
     if index < len(lines) and lines[index].rstrip("\n") == text:
@@ -280,44 +323,41 @@ def insert_line(path, line_number, text):
 
 
 # ------------------------
-# CLEAN WHITESPACE
+# WHITESPACE
 # ------------------------
 
 
-def fix_whitespace():
-    for root, dirs, files in os.walk("."):
-        if ".git" in root:
-            continue
+def normalize_file_whitespace(path):
 
-        if root.startswith(f".{os.sep}{BACKUP_DIR}") or root == BACKUP_DIR:
-            continue
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
 
-        if root.startswith(f".{os.sep}{LOG_DIR}") or root == LOG_DIR:
-            continue
+    new_lines = []
 
-        for file in files:
-            if not file.endswith((".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")):
-                continue
+    for line in lines:
 
-            path = os.path.join(root, file)
+        line = line.rstrip()
+        line = line.replace("\t", "    ")
 
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
+        new_lines.append(line + "\n")
 
-            new_lines = []
+    while new_lines and new_lines[-1].strip() == "":
+        new_lines.pop()
 
-            for line in lines:
-                line = line.rstrip()
-                line = line.replace("\t", "    ")
-                new_lines.append(line + "\n")
+    new_lines.append("\n")
 
-            while new_lines and new_lines[-1].strip() == "":
-                new_lines.pop()
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
 
-            new_lines.append("\n")
 
-            with open(path, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
+def fix_whitespace(paths=None):
+
+    if paths is None:
+        return
+
+    for p in paths:
+        if os.path.exists(p):
+            normalize_file_whitespace(p)
 
     log("Whitespace fixed")
 
@@ -328,39 +368,53 @@ def fix_whitespace():
 
 
 def run_black():
-    log("Running Black")
-    subprocess.run(["black", "."], check=False)
+
+    targets = existing_engine_files()
+
+    log(f"Running Black on {targets}")
+
+    subprocess.run(["black", *targets], check=False)
 
 
 def run_isort():
-    log("Running isort")
-    subprocess.run(["isort", "."], check=False)
+
+    targets = existing_engine_files()
+
+    log(f"Running isort on {targets}")
+
+    subprocess.run(["isort", *targets], check=False)
 
 
 def run_ruff():
-    log("Running ruff")
-    subprocess.run(["ruff", "check", ".", "--fix"], check=False)
+
+    targets = existing_engine_files()
+
+    log(f"Running ruff on {targets}")
+
+    subprocess.run(["ruff", "check", *targets, "--fix"], check=False)
 
 
 def resolve_pytest_targets():
-    if not SAFE_ENGINE_TEST_ONLY:
-        return []
 
     for path in ENGINE_TEST_CANDIDATES:
+
         if os.path.exists(path):
+
             log(f"Safe engine test mode active -> using {path}")
+
             return [path]
 
-    log("Safe engine test mode active -> no dedicated engine test found, running full suite")
     return []
 
 
 def run_pytest():
+
     log("Running pytest")
 
     targets = resolve_pytest_targets()
 
-    cmd = ["pytest", "-v"]
+    cmd = ["pytest", "-v", "-p", "no:pytestqt"]
+
     if targets:
         cmd.extend(targets)
 
@@ -374,27 +428,14 @@ def run_pytest():
     print(result.stderr, flush=True)
 
     if result.returncode != 0:
+
         log("Tests FAILED")
+
         return False
 
     log("Tests PASSED")
+
     return True
-
-
-# ------------------------
-# PARSER HELPERS
-# ------------------------
-
-
-def read_block(lines, start_index):
-    content = []
-    i = start_index
-
-    while i < len(lines) and lines[i].strip() != "EOF":
-        content.append(lines[i])
-        i += 1
-
-    return "".join(content), i
 
 
 # ------------------------
@@ -403,6 +444,7 @@ def read_block(lines, start_index):
 
 
 def process():
+
     if not os.path.exists(INSTRUCTIONS_FILE):
         log("No instruction file")
         return
@@ -410,111 +452,100 @@ def process():
     if AUTO_BACKUP_ALWAYS:
         backup_repository()
 
-    with open(INSTRUCTIONS_FILE, "r", encoding="utf-8", errors="ignore") as f:
+    with open(INSTRUCTIONS_FILE, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     i = 0
 
     while i < len(lines):
+
         line = lines[i].strip()
 
-        if not line or line.startswith("#"):
+        if not line:
             i += 1
             continue
 
         parts = line.split()
         cmd = parts[0]
 
-        if cmd == "AUTO_BACKUP_BEFORE_RUN":
-            backup_repository()
-            i += 1
-            continue
-
         if cmd in ["CREA_CARTELLA", "CREATE_FOLDER"]:
             create_folder(parts[1])
-            i += 1
-            continue
 
-        if cmd in ["CREA_FILE", "CREATE_FILE"]:
+        elif cmd in ["CREA_FILE", "CREATE_FILE"]:
+
             path = parts[1]
 
             i += 1
-            content, i = read_block(lines, i)
+            content = []
 
-            create_file(path, content)
-
-            if i < len(lines) and lines[i].strip() == "EOF":
+            while i < len(lines) and lines[i].strip() != "EOF":
+                content.append(lines[i])
                 i += 1
 
-            continue
+            create_file(path, "".join(content))
 
-        if cmd in ["APPEND", "AGGIUNGI"]:
+        elif cmd in ["APPEND", "AGGIUNGI"]:
+
             path = parts[1]
 
             i += 1
-            content, i = read_block(lines, i)
+            content = []
 
-            append_file(path, content)
-
-            if i < len(lines) and lines[i].strip() == "EOF":
+            while i < len(lines) and lines[i].strip() != "EOF":
+                content.append(lines[i])
                 i += 1
 
-            continue
+            append_file(path, "".join(content))
 
-        if cmd == "DELETE_FILE":
+        elif cmd == "DELETE_FILE":
             delete_file(parts[1])
-            i += 1
-            continue
 
-        if cmd == "MOVE_FILE":
+        elif cmd == "MOVE_FILE":
             move_file(parts[1], parts[2])
-            i += 1
-            continue
 
-        if cmd == "RENAME_FILE":
+        elif cmd == "RENAME_FILE":
             rename_file(parts[1], parts[2])
-            i += 1
-            continue
 
-        if cmd == "REPLACE":
+        elif cmd == "REPLACE":
+
             path = parts[1]
             old = parts[2]
             new = " ".join(parts[3:])
 
             replace_text(path, old, new)
-            i += 1
-            continue
 
-        if cmd == "INSERT_LINE":
+        elif cmd == "INSERT_LINE":
+
             path = parts[1]
             line_number = parts[2]
             text = " ".join(parts[3:])
 
             insert_line(path, line_number, text)
-            i += 1
-            continue
 
-        if cmd == "FIX_WHITESPACE":
-            fix_whitespace()
-            i += 1
-            continue
+        elif cmd == "FIX_WHITESPACE":
+            fix_whitespace(existing_engine_files())
 
-        log(f"[WARN] Unknown command: {line}")
         i += 1
 
     try:
-        fix_whitespace()
+
+        fix_whitespace(existing_engine_files())
+
         run_black()
         run_isort()
         run_ruff()
 
         ok = run_pytest()
+
         if not ok:
             raise RuntimeError("Tests failed")
 
     except Exception as e:
+
         log(f"CI FAILED: {e}")
+
         restore_last_backup()
+
         raise
 
 
