@@ -1,0 +1,17 @@
+requests
+pandas
+numpy
+scipy
+scikit-learn
+matplotlib
+PySide6
+openpyxl
+sqlalchemy
+
+pytest
+black
+isort
+ruff
+
+pyinstaller
+pytest-qt
