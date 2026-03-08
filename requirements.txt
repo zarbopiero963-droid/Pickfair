@@ -14,4 +14,3 @@ isort
 ruff
 
 pyinstaller
-pytest-qt
