@@ -1,0 +1,102 @@
+name: Repo Update Engine ULTRA
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - devops_update.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout repository with PAT
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.REPO_PUSH_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Show trigger commit
+        run: |
+          echo "=============================="
+          echo "TRIGGER COMMIT"
+          echo "=============================="
+          git log -1
+
+      - name: Show DevOps instructions
+        run: |
+          echo "=============================="
+          echo "DEVOPS UPDATE COMMANDS"
+          echo "=============================="
+          cat devops_update.txt
+          echo "=============================="
+
+      - name: Run DevOps Engine
+        run: |
+          python repo_update_engine.py
+
+      - name: Show changed files
+        run: |
+          echo "=============================="
+          echo "FILES CHANGED"
+          echo "=============================="
+          git status
+          echo "------------------------------"
+          git diff --stat || true
+          echo "=============================="
+
+      - name: Configure git remote with PAT
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.REPO_PUSH_TOKEN }}@github.com/${{ github.repository }}.git
+
+      - name: Commit and push safely
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "repo-bot"
+          git config user.email "bot@github.com"
+
+          git add .
+
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "[skip ci] Automated DevOps Engine Update"
+
+          # Primo tentativo push normale
+          if git push origin HEAD:main; then
+            echo "Push OK"
+            exit 0
+          fi
+
+          echo "Push rejected, retry with fetch/reset/cherry-pick"
+
+          LAST_COMMIT="$(git rev-parse HEAD)"
+
+          git fetch origin main
+          git reset --hard origin/main
+          git cherry-pick "$LAST_COMMIT"
+
+          git push --force-with-lease origin HEAD:main
