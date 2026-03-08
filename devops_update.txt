@@ -14,18 +14,18 @@ class RiskMiddleware:
         self.bus = bus
         self.guardrail = guardrail
         self.wom_engine = wom_engine
-        
+
         self.bus.subscribe("REQ_QUICK_BET", self._evaluate_quick_bet)
         self.bus.subscribe("REQ_PLACE_DUTCHING", self._evaluate_dutching)
         self.bus.subscribe("REQ_EXECUTE_CASHOUT", self._evaluate_cashout)
 
     def _evaluate_quick_bet(self, payload):
         selection_id = payload.get('selection_id')
-        
+
         live_volatility = 0.0
         if self.wom_engine and selection_id:
             live_volatility = self.wom_engine.calculate_volatility(selection_id)
-        
+
         if hasattr(self.guardrail, 'check_volatility'):
             ok, reason = self.guardrail.check_volatility(live_volatility)
             if not ok:
@@ -42,14 +42,14 @@ class RiskMiddleware:
                 first_sel = results[0].get('selectionId')
                 if first_sel:
                     live_volatility = self.wom_engine.calculate_volatility(first_sel)
-        
+
         safety_check = self.guardrail.full_check(
             market_type=payload.get('market_type', 'MATCH_ODDS'),
-            tick_count=10, 
+            tick_count=10,
             wom_confidence=0.5,
             volatility=live_volatility
         )
-        
+
         if not safety_check['can_proceed']:
             reasons = " | ".join(safety_check['reasons'])
             logger.warning(f"[RiskGate] Dutching bloccato: {reasons}")
@@ -162,7 +162,7 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
 
         from ai.wom_engine import get_wom_engine
         from ai.ai_guardrail import get_guardrail
-        
+
         self.wom_engine = get_wom_engine()
         self.guardrail = get_guardrail()
 
@@ -184,7 +184,7 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
                 lp_vol = lp[0][1] if lp and len(lp[0])>1 else 0
                 if sel_id and (bp_price>0 or lp_price>0):
                     self.wom_engine.record_tick(sel_id, bp_price, bp_vol, lp_price, lp_vol)
-                    
+
         self.bus.subscribe("MARKET_TICK", _feed_wom)
 
         self.bus.subscribe("QUICK_BET_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, "_on_engine_success") else None)
@@ -753,11 +753,11 @@ class TradingEngine:
         self.db = db
         self.client_getter = client_getter
         self.executor = executor
-        
-        self.is_killed = False 
+
+        self.is_killed = False
         self._active_submissions = set()
         self._lock_mutex = threading.Lock()
-        
+
         self.bus.subscribe("CMD_QUICK_BET", self._handle_quick_bet)
         self.bus.subscribe("CMD_PLACE_DUTCHING", self._handle_place_dutching)
         self.bus.subscribe("CMD_EXECUTE_CASHOUT", self._handle_cashout)
@@ -772,7 +772,7 @@ class TradingEngine:
             if customer_ref in self._active_submissions: return False
             self._active_submissions.add(customer_ref)
             return True
-            
+
     def _release_lock(self, customer_ref):
         with self._lock_mutex:
             self._active_submissions.discard(customer_ref)
@@ -783,24 +783,24 @@ class TradingEngine:
             if not pending: return
             client = self.client_getter()
             if not client: return
-            
+
             logger.warning(f"[Recovery] Trovate {len(pending)} saghe pendenti post-crash.")
-            
+
             for saga in pending:
                 customer_ref = saga['customer_ref']
                 market_id = saga['market_id']
                 raw_payload = saga.get('raw_payload', '{}')
-                
+
                 try:
                     payload = json.loads(raw_payload)
                 except:
                     payload = {}
-                
+
                 is_recovered, _ = self._reconcile_orders(client, market_id, customer_ref)
-                
+
                 if is_recovered:
                     self.db.mark_saga_reconciled(customer_ref)
-                    
+
                     if 'results' in payload:
                         self.db.save_bet(
                             event_name=payload.get('event_name', 'Recuperato'),
@@ -838,7 +838,7 @@ class TradingEngine:
                 else:
                     self.db.mark_saga_failed(customer_ref)
                     logger.warning(f"[Recovery] Saga {customer_ref} marcata fallita.")
-                    
+
         self.executor.submit("saga_recovery", task)
 
     def _reconcile_orders(self, client, market_id, customer_ref):
@@ -867,12 +867,12 @@ class TradingEngine:
                 price = float(payload['price'])
                 stake = float(payload['stake'])
                 sim_mode = payload['simulation_mode']
-                
+
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
                     v_balance = sim_settings.get("virtual_balance", 0.0)
                     liability = stake * (price - 1) if bet_type == "LAY" else stake
-                    
+
                     if v_balance >= liability:
                         new_bal = v_balance - liability
                         self.db.save_simulation_bet(
@@ -891,14 +891,14 @@ class TradingEngine:
                 client = self.client_getter()
                 if not client: raise Exception("Client non connesso")
                 self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
-                
+
                 try:
                     result = client.place_bet(market_id=market_id, selection_id=selection_id, side=bet_type, price=price, size=stake, persistence_type='LAPSE', customer_ref=customer_ref)
                     if result.get('status') == 'SUCCESS':
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = sum(r.get('sizeMatched', 0) for r in result.get('instructionReports', []))
                         status = "MATCHED" if matched >= stake else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
-                        
+
                         self.db.save_bet(
                             event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
                             bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
@@ -919,7 +919,7 @@ class TradingEngine:
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = sum(r.get('sizeMatched', 0) for r in recovered_reports)
                         status = "MATCHED" if matched >= stake else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
-                        
+
                         self.db.save_bet(
                             event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
                             bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
@@ -953,13 +953,13 @@ class TradingEngine:
                 total_stake = payload['total_stake']
                 use_best_price = payload.get('use_best_price', False)
                 requested_size = sum(r['stake'] for r in results)
-                
+
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
                     v_balance = sim_settings.get("virtual_balance", 0.0)
-                    
+
                     total_risk = sum(r['stake'] * (r.get('price', 1.0) - 1.0) for r in results) if bet_type == "LAY" else total_stake
-                    
+
                     if v_balance >= total_risk:
                         new_bal = v_balance - total_risk
                         self.db.save_simulation_bet(
@@ -976,7 +976,7 @@ class TradingEngine:
                 client = self.client_getter()
                 if not client: raise Exception("Client non connesso")
                 self.db.create_pending_saga(customer_ref, market_id, None, payload)
-                
+
                 try:
                     instructions = []
                     if use_best_price:
@@ -997,15 +997,15 @@ class TradingEngine:
                             instructions.append({'selectionId': r['selectionId'], 'side': bet_type, 'price': price, 'size': r['stake']})
                     else:
                         instructions = [{'selectionId': r['selectionId'], 'side': bet_type, 'price': r['price'], 'size': r['stake']} for r in results]
-                    
+
                     result = client.place_orders(market_id, instructions, customer_ref=customer_ref)
                     reports = result.get('instructionReports', [])
-                    
+
                     if result.get('status') == 'SUCCESS':
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = sum(r.get('sizeMatched', 0) for r in reports)
                         status = "MATCHED" if matched >= requested_size - 0.01 else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
-                        
+
                         self.db.save_bet(
                             event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
                             bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status=status
@@ -1024,7 +1024,7 @@ class TradingEngine:
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = sum(r.get('sizeMatched', 0) for r in recovered_reports)
                         status = "MATCHED" if matched >= requested_size - 0.01 else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
-                        
+
                         self.db.save_bet(
                             event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
                             bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status=status
@@ -1051,17 +1051,17 @@ class TradingEngine:
             try:
                 client = self.client_getter()
                 if not client: raise Exception("Client non connesso")
-                
+
                 market_id = payload['market_id']
                 selection_id = payload['selection_id']
                 side = payload['side']
                 stake = payload['stake']
                 price = payload['price']
                 green_up = payload['green_up']
-                
+
                 self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
                 instructions = [{'selectionId': selection_id, 'side': side, 'orderType': 'LIMIT', 'limitOrder': {'size': stake, 'price': price, 'persistenceType': 'LAPSE'}}]
-                
+
                 try:
                     result = client.place_orders(market_id, instructions, customer_ref=customer_ref)
                     if result.get('status') == 'SUCCESS':
@@ -1759,7 +1759,7 @@ class DutchingController:
         self.wom_engine = get_wom_engine()
         self.guardrail = get_guardrail()
         self.market_validator = MarketValidator()
-        self.automation = AutomationEngine() 
+        self.automation = AutomationEngine()
         self.safety_logger = get_safety_logger()
         self.safe_mode = get_safe_mode_manager()
 
@@ -1767,13 +1767,13 @@ class DutchingController:
         self.current_market_name = ""
 
     def submit_dutching(
-        self, market_id: str, market_type: str, selections: List[Dict], total_stake: float, 
-        mode: str = "BACK", ai_enabled: bool = False, ai_wom_enabled: bool = False, 
-        auto_green: bool = False, commission: float = 4.5, use_best_price: bool = False, 
-        stop_loss: Optional[float] = None, take_profit: Optional[float] = None, 
+        self, market_id: str, market_type: str, selections: List[Dict], total_stake: float,
+        mode: str = "BACK", ai_enabled: bool = False, ai_wom_enabled: bool = False,
+        auto_green: bool = False, commission: float = 4.5, use_best_price: bool = False,
+        stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
         trailing: Optional[float] = None, dry_run: bool = False
     ) -> Dict:
-        
+
         if self.safe_mode.is_safe_mode_active:
             raise RuntimeError("SAFE MODE attivo: dutching bloccato")
 
@@ -2203,7 +2203,7 @@ class AIPatternEngine:
     def decide(self, selections: List[Dict]) -> Dict[int, str]:
         decisions = {}
         wom_values = {}
-        MIN_REQUIRED_EDGE = 0.04 
+        MIN_REQUIRED_EDGE = 0.04
 
         for sel in selections:
             sel_id = sel.get("selectionId")
@@ -2274,3 +2274,4 @@ class AIPatternEngine:
 EOF
 
 FIX_WHITESPACE
+
