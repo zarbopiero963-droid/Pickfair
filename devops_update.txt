@@ -1,20 +1,29 @@
-CREA_CARTELLA devops_engine_test
-
-CREA_FILE devops_engine_test/test_engine.txt
-DevOps Engine Test
-Pickfair repository automation active
+APPEND requirements.txt
+scikit-learn
 EOF
 
-APPEND devops_engine_test/test_engine.txt
-Second run append test
-EOF
+CREA_FILE tests/test_imports.py
+import pytest
 
-CREA_FILE tests/test_devops_engine.py
-def test_devops_engine_file():
-    with open("devops_engine_test/test_engine.txt") as f:
-        content = f.read()
 
-    assert "DevOps Engine Test" in content
+def test_numpy_import():
+    import numpy
+
+
+def test_pandas_import():
+    import pandas
+
+
+def test_sklearn_import():
+    import sklearn
+
+
+def test_matplotlib_import():
+    import matplotlib
+
+
+def test_pyside6_import():
+    pytest.importorskip("PySide6")
 EOF
 
 FIX_WHITESPACE
