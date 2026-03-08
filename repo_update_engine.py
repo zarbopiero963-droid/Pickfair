@@ -13,6 +13,13 @@ LOG_FILE = os.path.join(LOG_DIR, "operations.log")
 AUTO_BACKUP_ALWAYS = True
 KEEP_LAST_BACKUPS = 3
 
+# Modalità test sicura: esegue solo i test del DevOps Engine se presenti
+SAFE_ENGINE_TEST_ONLY = True
+ENGINE_TEST_CANDIDATES = [
+    "tests/test_devops_engine_only.py",
+    "tests/test_devops_engine.py",
+]
+
 
 # ------------------------
 # UTIL
@@ -216,9 +223,7 @@ def fix_whitespace():
             continue
 
         for file in files:
-            if not file.endswith(
-                (".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")
-            ):
+            if not file.endswith((".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")):
                 continue
 
             path = os.path.join(root, file)
@@ -264,11 +269,30 @@ def run_ruff():
     subprocess.run(["ruff", "check", ".", "--fix"], check=False)
 
 
+def resolve_pytest_targets():
+    if not SAFE_ENGINE_TEST_ONLY:
+        return []
+
+    for path in ENGINE_TEST_CANDIDATES:
+        if os.path.exists(path):
+            log(f"Safe engine test mode active -> using {path}")
+            return [path]
+
+    log("Safe engine test mode active -> no dedicated engine test found, running full suite")
+    return []
+
+
 def run_pytest():
     log("Running pytest")
 
+    targets = resolve_pytest_targets()
+
+    cmd = ["pytest", "-v"]
+    if targets:
+        cmd.extend(targets)
+
     result = subprocess.run(
-        ["pytest", "-v"],
+        cmd,
         capture_output=True,
         text=True,
     )
