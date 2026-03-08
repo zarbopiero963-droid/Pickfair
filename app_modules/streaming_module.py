@@ -114,3 +114,4 @@ class StreamingModule:
         if hasattr(self, "live_refresh_id") and self.live_refresh_id:
             self.root.after_cancel(self.live_refresh_id)
             self.live_refresh_id = None
+

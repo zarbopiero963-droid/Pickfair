@@ -460,3 +460,4 @@ class MonitoringModule:
 
     def _on_cashout_failed(self, err):
         messagebox.showerror("Errore Cashout", err)
+

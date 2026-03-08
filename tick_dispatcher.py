@@ -192,3 +192,4 @@ def get_tick_dispatcher() -> TickDispatcher:
     if _dispatcher is None:
         _dispatcher = TickDispatcher()
     return _dispatcher
+

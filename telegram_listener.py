@@ -445,3 +445,4 @@ class SignalQueue:
         """Clear all signals."""
         with self.lock:
             self.queue.clear()
+

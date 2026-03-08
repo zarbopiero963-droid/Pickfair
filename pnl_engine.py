@@ -205,3 +205,4 @@ class PnLEngine:
             net_profit = stake * (1 - commission_pct) - liability * commission_pct
 
         return round(net_profit, 2)
+

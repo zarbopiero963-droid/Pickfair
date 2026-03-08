@@ -67,3 +67,4 @@ class UIQueue:
             "errors": self._errors,
             "qsize": self.queue.qsize(),
         }
+

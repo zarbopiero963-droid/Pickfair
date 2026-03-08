@@ -337,3 +337,4 @@ class DraggableRunnerList(ctk.CTkFrame):
     def get_order(self) -> list:
         """Ritorna lista runner nell'ordine corrente."""
         return self.runners
+

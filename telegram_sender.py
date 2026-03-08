@@ -250,3 +250,4 @@ def init_telegram_sender(client, base_delay: float = 0.5) -> TelegramSender:
     global _global_sender
     _global_sender = TelegramSender(client, base_delay=base_delay)
     return _global_sender
+

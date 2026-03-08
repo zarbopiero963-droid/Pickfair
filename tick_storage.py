@@ -178,3 +178,4 @@ class TickStorage:
             else:
                 self.ticks.clear()
                 self.ohlc_cache.clear()
+

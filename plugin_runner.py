@@ -23,3 +23,4 @@ class PluginRunner:
                 logger.error("[PLUGIN] %s auto-disabled", plugin_name)
 
             return None
+

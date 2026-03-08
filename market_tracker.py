@@ -378,3 +378,4 @@ def get_delta_detector() -> DeltaDetector:
     if _global_delta is None:
         _global_delta = DeltaDetector()
     return _global_delta
+

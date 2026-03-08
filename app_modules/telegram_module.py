@@ -60,3 +60,4 @@ class TelegramModule:
 
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile avviare listener: {str(e)}")
+

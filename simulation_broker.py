@@ -716,3 +716,4 @@ class TickReplayEngine:
             if not self.ticks:
                 return 0.0
             return self.index / len(self.ticks)
+

@@ -18,3 +18,4 @@ class ShutdownManager:
                 fn()
             except Exception as e:
                 logger.exception("Shutdown error: %s", e)
+

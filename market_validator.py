@@ -124,3 +124,4 @@ class MarketValidator:
     def get_compatible_markets(cls) -> List[str]:
         """Restituisce lista mercati compatibili."""
         return sorted(list(cls.DUTCHING_READY_MARKETS))
+

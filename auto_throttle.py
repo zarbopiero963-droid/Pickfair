@@ -503,3 +503,4 @@ def init_auto_throttle(configs: Dict[LoadLevel, ThrottleConfig] = None) -> AutoT
     global _global_throttle
     _global_throttle = AutoThrottle(configs=configs)
     return _global_throttle
+

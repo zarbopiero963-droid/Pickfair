@@ -79,3 +79,4 @@ def get_auto_green_remaining_delay(order: Dict) -> float:
     placed_at = order.get("placed_at", 0)
     elapsed = time.time() - placed_at
     return max(0.0, 10.0 - elapsed)
+

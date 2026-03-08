@@ -367,3 +367,4 @@ class TestIntegrationStress:
         assert (
             not manager.is_safe_mode_active
         ), "Safe Mode non deve attivarsi con successi"
+

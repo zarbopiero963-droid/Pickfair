@@ -19,3 +19,4 @@ def test_matplotlib_import():
 
 def test_pyside6_import():
     pytest.importorskip("PySide6")
+

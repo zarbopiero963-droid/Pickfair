@@ -286,3 +286,4 @@ class TelegramController:
                 self.app.uiq.post(messagebox.showerror, "Errore", str(e))
 
         self.app.executor.submit("tg_load_dialogs", task)
+

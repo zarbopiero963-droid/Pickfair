@@ -443,3 +443,4 @@ def show_update_dialog(parent, update_info):
     """Show update dialog and return user choice."""
     dialog = UpdateDialog(parent, update_info)
     return dialog.show()
+

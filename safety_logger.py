@@ -389,3 +389,4 @@ def evaluate_runner_liquidity(
         "tooltip": f"Liquidita: EUR{available_liquidity:.0f} / EUR{required_with_multiplier:.0f} richiesti",
         "will_block": will_block,
     }
+

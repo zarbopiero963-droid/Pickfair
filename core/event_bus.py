@@ -45,3 +45,4 @@ class EventBus:
                 logger.error(
                     f"[EventBus] Errore nell'esecuzione del subscriber {callback.__name__} per l'evento '{event_type}': {e}"
                 )
+

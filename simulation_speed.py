@@ -256,3 +256,4 @@ def set_simulation_mode(enabled: bool, speed: SimulationSpeed = SimulationSpeed.
     controller = get_speed_controller()
     controller.is_simulation = enabled
     controller.speed = speed
+

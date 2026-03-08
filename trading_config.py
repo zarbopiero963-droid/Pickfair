@@ -46,3 +46,4 @@ MIN_LIQUIDITY_ABSOLUTE = 50.0  # €
 
 # Se True → warning, se False → blocco
 LIQUIDITY_WARNING_ONLY = False
+

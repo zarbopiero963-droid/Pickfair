@@ -514,3 +514,4 @@ class TestIntegration:
 
         stats = ui_opt.get_stats()
         assert stats["skipped_updates"] >= 1
+

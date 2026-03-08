@@ -490,3 +490,4 @@ class TelegramTabUI:
         ).pack(pady=10)
 
         self.app._refresh_telegram_signals_tree()
+

@@ -257,3 +257,4 @@ class TestAIMixedStakes:
         ]
         with pytest.raises(ValueError):
             calculate_ai_mixed_stakes(selections, 100.0)
+

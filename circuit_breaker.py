@@ -76,3 +76,4 @@ class CircuitBreaker:
 
         self.failures = 0
         self.opened_at = None
+

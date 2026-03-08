@@ -772,3 +772,4 @@ class DutchingController:
     def get_guardrail_status(self) -> Dict:
         """Ritorna stato corrente guardrail."""
         return self.guardrail.get_status()
+

@@ -105,3 +105,4 @@ def configure_ttk_dark_theme(style):
     )
 
     style.map("Treeview.Heading", background=[("active", COLORS["bg_hover"])])
+

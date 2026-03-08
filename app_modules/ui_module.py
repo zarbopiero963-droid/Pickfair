@@ -989,3 +989,4 @@ class UIModule:
         ttk.Checkbutton(
             control_frame, text="Auto-refresh (30s)", variable=monitor_refresh_var
         ).pack(side=tk.LEFT, padx=10)
+

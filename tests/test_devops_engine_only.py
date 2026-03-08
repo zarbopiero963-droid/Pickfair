@@ -4,3 +4,4 @@ def test_devops_engine_file():
 
     assert "DevOps Engine Test" in content
     assert "Second run append test" in content
+

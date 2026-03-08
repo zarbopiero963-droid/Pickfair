@@ -670,3 +670,4 @@ class PluginAPI:
             with open(filepath, "r") as f:
                 return json.load(f)
         return default or {}
+

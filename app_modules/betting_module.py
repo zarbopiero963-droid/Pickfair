@@ -820,3 +820,4 @@ class BettingModule:
         if hasattr(self, "place_btn") and self.place_btn.winfo_exists():
             self.place_btn.configure(state=tk.NORMAL)
         messagebox.showerror("Errore Motore", f"Piazzamento fallito:\n{error_msg}")
+

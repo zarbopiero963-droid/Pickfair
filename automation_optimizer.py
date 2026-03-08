@@ -191,3 +191,4 @@ def get_automation_optimizer() -> AutomationOptimizer:
     if _automation_optimizer is None:
         _automation_optimizer = AutomationOptimizer()
     return _automation_optimizer
+

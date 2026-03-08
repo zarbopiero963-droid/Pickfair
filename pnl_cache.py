@@ -218,3 +218,4 @@ def get_pnl_cache() -> PnLCache:
     if _pnl_cache is None:
         _pnl_cache = PnLCache()
     return _pnl_cache
+

@@ -634,3 +634,4 @@ class LiveMiniLadder(ctk.CTkFrame):
         """Riavvia il refresh loop."""
         self._is_running = True
         self._start_refresh()
+

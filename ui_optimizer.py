@@ -197,3 +197,4 @@ def optimized_configure(widget: Any, **kwargs) -> bool:
 def optimized_set(var: Any, value: Any, var_id: Optional[str] = None) -> bool:
     """Shortcut per set ottimizzato."""
     return get_ui_optimizer().set_if_changed(var, value, var_id)
+

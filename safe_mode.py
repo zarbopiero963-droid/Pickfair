@@ -237,3 +237,4 @@ def is_safe_mode_active() -> bool:
 def reset_safe_mode() -> bool:
     """Shortcut per reset Safe Mode."""
     return get_safe_mode_manager().reset()
+

@@ -197,3 +197,4 @@ def cached_dutching_stakes(
     cache.put(selections, total_stake, bet_type, commission, stakes, profit, book_pct)
 
     return stakes, profit, book_pct
+

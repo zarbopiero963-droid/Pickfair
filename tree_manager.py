@@ -134,3 +134,4 @@ class TreeManager:
                         self.tree.delete(item_id)
 
             self._restore_state(open_nodes, selected)
+

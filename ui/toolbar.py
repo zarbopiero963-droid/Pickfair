@@ -246,3 +246,4 @@ class Toolbar(ctk.CTkFrame):
         self.ai_var.set(enabled)
         if self.controller and hasattr(self.controller, "ai_enabled"):
             self.controller.ai_enabled = enabled
+

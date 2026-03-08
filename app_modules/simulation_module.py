@@ -100,3 +100,4 @@ class SimulationModule:
         except Exception as e:
             self.place_btn.configure(state=tk.NORMAL)
             messagebox.showerror("Errore Simulazione", f"Errore: {e}")
+
