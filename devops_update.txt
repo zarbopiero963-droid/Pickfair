@@ -2,7 +2,7 @@ CREA_CARTELLA devops_engine_test
 
 CREA_FILE devops_engine_test/test_engine.txt
 DevOps Engine Test
-Repository automation active
+Pickfair repository automation active
 EOF
 
 APPEND devops_engine_test/test_engine.txt
