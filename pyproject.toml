@@ -10,14 +10,23 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 where = ["."]
-# Aggiungi qui tutte le cartelle del tuo progetto
-include = ["ai*", "controllers*", "plugins*"] 
+include = ["ai*", "controllers*", "plugins*"]
 
 [tool.pytest.ini_options]
-# Diciamo a Pytest di aggiungere automaticamente la root al PYTHONPATH
-pythonpath = [
-  "."
-]
-testpaths = [
-    "tests",
-]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
+fix = true
+target-version = "py311"
+
+select = ["E", "F", "I"]
