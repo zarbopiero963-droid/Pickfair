@@ -12,33 +12,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Scarica il codice
-      uses: actions/checkout@v4
+      - name: Scarica il codice
+        uses: actions/checkout@v4
 
-    - name: Configura Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      - name: Configura Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Installa Dipendenze e Progetto (Enterprise Mode)
-      run: |
-        python -m pip install --upgrade pip
-        pip install pytest pytest-cov numpy pandas betfairlightweight telethon customtkinter matplotlib requests
-        pip install -e .
+      - name: Installa Dipendenze e Progetto (Enterprise Mode)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov numpy pandas scipy scikit-learn matplotlib requests openpyxl sqlalchemy betfairlightweight telethon customtkinter
+          pip install -e .
 
-    - name: Lancia Test Compatibili (Hedge-Fund V2)
-      env:
-        PYTHONPATH: ${{ github.workspace }}
-      run: |
-        # Ignoriamo i file di test scritti per la vecchia architettura v1
-        python -m pytest tests/ \
-        --ignore=tests/test_dutching_safety.py \
-        --ignore=tests/test_performance.py \
-        --ignore=tests/test_dutching_advanced.py \
-        --ignore=tests/test_liquidity_guard.py \
-        --ignore=tests/test_new_components.py \
-        --ignore=tests/test_simulation_mode.py \
-        --ignore=tests/test_telemetry_indicator.py \
-        --ignore=tests/test_toolbar_live.py \
-        --ignore=tests/test_ui_components.py \
-        -v
+      - name: Lancia Test Compatibili (Hedge-Fund V2)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m pytest tests/ \
+          --ignore=tests/test_dutching_safety.py \
+          --ignore=tests/test_performance.py \
+          --ignore=tests/test_dutching_advanced.py \
+          --ignore=tests/test_liquidity_guard.py \
+          --ignore=tests/test_new_components.py \
+          --ignore=tests/test_simulation_mode.py \
+          --ignore=tests/test_telemetry_indicator.py \
+          --ignore=tests/test_toolbar_live.py \
+          --ignore=tests/test_ui_components.py \
+          -v
