@@ -1,22 +1,2276 @@
-CREA_CARTELLA devops_engine_test
+CREA_CARTELLA core
 
-CREA_FILE devops_engine_test/test_engine.txt
-DevOps Engine Test
-Pickfair repository automation active
+CREA_FILE core/risk_middleware.py
+"""
+Risk Middleware (RiskGate)
+Architettura Tier-1: Separa l'OMS (TradingEngine) dalle logiche di rischio.
+"""
+import logging
+
+logger = logging.getLogger(__name__)
+
+class RiskMiddleware:
+    def __init__(self, bus, guardrail, wom_engine):
+        self.bus = bus
+        self.guardrail = guardrail
+        self.wom_engine = wom_engine
+        
+        self.bus.subscribe("REQ_QUICK_BET", self._evaluate_quick_bet)
+        self.bus.subscribe("REQ_PLACE_DUTCHING", self._evaluate_dutching)
+        self.bus.subscribe("REQ_EXECUTE_CASHOUT", self._evaluate_cashout)
+
+    def _evaluate_quick_bet(self, payload):
+        selection_id = payload.get('selection_id')
+        
+        live_volatility = 0.0
+        if self.wom_engine and selection_id:
+            live_volatility = self.wom_engine.calculate_volatility(selection_id)
+        
+        if hasattr(self.guardrail, 'check_volatility'):
+            ok, reason = self.guardrail.check_volatility(live_volatility)
+            if not ok:
+                logger.warning(f"[RiskGate] Quick Bet bloccata: {reason}")
+                self.bus.publish("QUICK_BET_FAILED", f"RISK GATE BLOCKED: {reason}")
+                return
+        self.bus.publish("CMD_QUICK_BET", payload)
+
+    def _evaluate_dutching(self, payload):
+        live_volatility = 0.0
+        if self.wom_engine:
+            results = payload.get('results', [])
+            if results:
+                first_sel = results[0].get('selectionId')
+                if first_sel:
+                    live_volatility = self.wom_engine.calculate_volatility(first_sel)
+        
+        safety_check = self.guardrail.full_check(
+            market_type=payload.get('market_type', 'MATCH_ODDS'),
+            tick_count=10, 
+            wom_confidence=0.5,
+            volatility=live_volatility
+        )
+        
+        if not safety_check['can_proceed']:
+            reasons = " | ".join(safety_check['reasons'])
+            logger.warning(f"[RiskGate] Dutching bloccato: {reasons}")
+            self.bus.publish("DUTCHING_FAILED", f"RISK GATE BLOCKED: {reasons}")
+            return
+        self.bus.publish("CMD_PLACE_DUTCHING", payload)
+
+    def _evaluate_cashout(self, payload):
+        logger.info("[RiskGate] Cashout request approvata automaticamente.")
+        self.bus.publish("CMD_EXECUTE_CASHOUT", payload)
 EOF
 
-APPEND devops_engine_test/test_engine.txt
-Second run append test
+CREA_FILE main.py
+"""
+Betfair Dutching - Tutti i Mercati
+Main application orchestrator.
+"""
+import threading
+import time
+import customtkinter as ctk
+from ui.tabs.telegram_tab_ui import TelegramTabUI
+from app_modules.betting_module import BettingModule
+from app_modules.monitoring_module import MonitoringModule
+from app_modules.simulation_module import SimulationModule
+from app_modules.streaming_module import StreamingModule
+from app_modules.telegram_module import TelegramModule
+from app_modules.ui_module import UIModule
+from controllers.telegram_controller import TelegramController
+from core.event_bus import EventBus
+from core.trading_engine import TradingEngine
+from database import Database
+from executor_manager import SafeExecutor
+from goal_engine_pro import APIFootballClient, GoalEnginePro
+from shutdown_manager import ShutdownManager
+from telegram_listener import SignalQueue
+from theme import COLORS
+from tree_manager import TreeManager
+from ui_queue import UIQueue
+
+APP_NAME = "Pickfair"
+APP_VERSION = "3.19.1"
+WINDOW_WIDTH = 1400
+WINDOW_HEIGHT = 900
+
+class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, SimulationModule, MonitoringModule):
+    def __init__(self):
+        from theme import configure_customtkinter
+        configure_customtkinter()
+        self.root = ctk.CTk()
+        self.root.title(f"{APP_NAME} v{APP_VERSION}")
+        self.root.configure(fg_color=COLORS["bg_dark"])
+
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        available_height = screen_height - 50
+        window_width = min(WINDOW_WIDTH, int(screen_width * 0.9))
+        window_height = min(WINDOW_HEIGHT, int(available_height * 0.9))
+        x = (screen_width - window_width) // 2
+        y = max(0, (available_height - window_height) // 2)
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        self.root.minsize(min_width=900, min_height=500)
+        self.root.resizable(True, True)
+
+        if screen_width <= 1366 or screen_height <= 768:
+            self.root.after(100, lambda: self._try_maximize())
+
+        try:
+            self.root.iconbitmap("icon.ico")
+        except:
+            pass
+
+        self.db = Database()
+        print(f"[DEBUG] Database path: {self.db.db_path}")
+
+        self.bus = EventBus()
+        if hasattr(self, "_handle_telegram_signal"):
+            self.bus.subscribe("TELEGRAM_SIGNAL", self._handle_telegram_signal)
+
+        self.bus.subscribe("TELEGRAM_STATUS", lambda data: self._update_telegram_status(data["status"], data["message"]) if hasattr(self, "_update_telegram_status") else None)
+        self.bus.subscribe("MARKET_TICK", self._buffer_market_tick)
+
+        self.client = None
+        self.current_event = None
+        self.current_market = None
+        self.available_markets = []
+        self.selected_runners = {}
+        self.streaming_active = False
+        self.live_mode = False
+        self.live_refresh_id = None
+        self.booking_monitor_id = None
+        self.auto_cashout_monitor_id = None
+        self.pending_bookings = []
+        self.account_data = {"available": 0, "exposure": 0, "total": 0}
+        self.telegram_listener = None
+        self.telegram_signal_queue = SignalQueue()
+        self.telegram_status = "STOPPED"
+        self.market_status = "OPEN"
+        self.simulation_mode = False
+
+        self._buffer_lock = threading.Lock()
+        self._market_update_buffer = {}
+        self._pending_tree_update = False
+
+        self.uiq = UIQueue(self.root, fps=30)
+        self.uiq.start()
+
+        self.executor = SafeExecutor(max_workers=4)
+        self.shutdown_mgr = ShutdownManager()
+        self.telegram_controller = TelegramController(self)
+
+        from ai.wom_engine import get_wom_engine
+        from ai.ai_guardrail import get_guardrail
+        
+        self.wom_engine = get_wom_engine()
+        self.guardrail = get_guardrail()
+
+        from core.risk_middleware import RiskMiddleware
+        from core.trading_engine import TradingEngine
+
+        self.risk_middleware = RiskMiddleware(self.bus, self.guardrail, self.wom_engine)
+        self.trading_engine = TradingEngine(self.bus, self.db, lambda: self.client, self.executor)
+
+        def _feed_wom(payload):
+            if not hasattr(self, 'wom_engine') or not self.wom_engine: return
+            for r in payload.get("runners_data", []):
+                sel_id = r.get("selectionId")
+                bp = r.get("backPrices", [])
+                lp = r.get("layPrices", [])
+                bp_price = bp[0][0] if bp else 0
+                bp_vol = bp[0][1] if bp and len(bp[0])>1 else 0
+                lp_price = lp[0][0] if lp else 0
+                lp_vol = lp[0][1] if lp and len(lp[0])>1 else 0
+                if sel_id and (bp_price>0 or lp_price>0):
+                    self.wom_engine.record_tick(sel_id, bp_price, bp_vol, lp_price, lp_vol)
+                    
+        self.bus.subscribe("MARKET_TICK", _feed_wom)
+
+        self.bus.subscribe("QUICK_BET_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, "_on_engine_success") else None)
+        self.bus.subscribe("QUICK_BET_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, "_on_engine_error") else None)
+        self.bus.subscribe("DUTCHING_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, "_on_engine_success") else None)
+        self.bus.subscribe("DUTCHING_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, "_on_engine_error") else None)
+        self.bus.subscribe("CASHOUT_SUCCESS", lambda d: self.uiq.post(self._on_cashout_success, d) if hasattr(self, "_on_cashout_success") else None)
+        self.bus.subscribe("CASHOUT_FAILED", lambda e: self.uiq.post(self._on_cashout_failed, e) if hasattr(self, "_on_cashout_failed") else None)
+
+        if not hasattr(self, "last_ui_tick"):
+            self.last_ui_tick = time.time()
+
+        self.api_football = APIFootballClient(api_key="INSERISCI_TUA_API_KEY_QUI")
+        self.goal_engine = GoalEnginePro(
+            api_client=self.api_football,
+            betfair_stream=getattr(self, "stream", None),
+            hedge_callback=self._on_goal_hedge,
+            reopen_callback=self._on_goal_reopen,
+            ui_queue=self.uiq,
+        )
+        self.goal_engine.set_delay("500ms")
+        self.goal_engine.set_confirm_mode(True)
+        self.goal_engine.set_low_request_mode(True)
+        self.goal_engine.start()
+
+        self.shutdown_mgr.register("uiq", self.uiq.stop, priority=3)
+        self.shutdown_mgr.register("goal_engine", self.goal_engine.stop, priority=5)
+        if hasattr(self, "db") and self.db:
+            self.shutdown_mgr.register("database", self.db.close, priority=4)
+
+        from plugin_manager import PluginManager
+        self.plugin_manager = PluginManager(self)
+        self.plugin_tabs = {}
+
+        self._create_menu()
+        self._create_main_layout()
+
+        self.tm_events = TreeManager(self.events_tree)
+        self.tm_runners = TreeManager(self.runners_tree)
+        self.tm_placed_bets = TreeManager(self.placed_bets_tree)
+        self.tm_cashout = TreeManager(self.market_cashout_tree)
+
+        self.root.after(3600000, self._schedule_order_cleanup)
+        self._load_settings()
+        self._configure_styles()
+
+        if hasattr(self, "_start_booking_monitor"): self._start_booking_monitor()
+        if hasattr(self, "_start_auto_cashout_monitor"): self._start_auto_cashout_monitor()
+        self._check_for_updates_on_startup()
+
+    def _create_telegram_tab(self):
+        self.telegram_tab_ui = TelegramTabUI(self.telegram_tab, self)
+
+    def _buffer_market_tick(self, payload):
+        market_id = payload["market_id"]
+        if not getattr(self, "current_market", None) or market_id != self.current_market["marketId"]:
+            return
+
+        with self._buffer_lock:
+            if len(self._market_update_buffer) > 5:
+                self._market_update_buffer.clear()
+            self._market_update_buffer[market_id] = payload["runners_data"]
+            if not getattr(self, "_pending_tree_update", False):
+                self._pending_tree_update = True
+                self.root.after(100, self._throttled_refresh)
+
+    def _throttled_refresh(self):
+        with self._buffer_lock:
+            snapshot = dict(self._market_update_buffer)
+            self._market_update_buffer.clear()
+            self._pending_tree_update = False
+
+        if not getattr(self, "current_market", None): return
+        market_id = self.current_market["marketId"]
+        runners_data = snapshot.get(market_id)
+        if not runners_data: return
+
+        def update_ui():
+            recalc_needed = False
+            for runner_update in runners_data:
+                selection_id = str(runner_update["selectionId"])
+                try:
+                    item = self.runners_tree.item(selection_id)
+                    if not item: continue
+                    current_values = list(item["values"])
+                    back_prices = runner_update.get("backPrices", [])
+                    lay_prices = runner_update.get("layPrices", [])
+
+                    if back_prices:
+                        current_values[2] = f"{back_prices[0][0]:.2f}"
+                        current_values[3] = f"{back_prices[0][1]:.0f}" if len(back_prices[0]) > 1 else "-"
+                    if lay_prices:
+                        current_values[4] = f"{lay_prices[0][0]:.2f}"
+                        current_values[5] = f"{lay_prices[0][1]:.0f}" if len(lay_prices[0]) > 1 else "-"
+
+                    self.runners_tree.item(selection_id, values=current_values)
+
+                    if selection_id in self.selected_runners:
+                        recalc_needed = True
+                        if back_prices: self.selected_runners[selection_id]["backPrice"] = back_prices[0][0]
+                        if lay_prices: self.selected_runners[selection_id]["layPrice"] = lay_prices[0][0]
+                        bet_type = getattr(self, "bet_type_var", None)
+                        if bet_type:
+                            if bet_type.get() == "BACK" and back_prices: self.selected_runners[selection_id]["price"] = back_prices[0][0]
+                            elif bet_type.get() == "LAY" and lay_prices: self.selected_runners[selection_id]["price"] = lay_prices[0][0]
+                except Exception: pass
+            if recalc_needed: self._recalculate()
+
+        self.uiq.post(update_ui)
+
+if __name__ == "__main__":
+    app = PickfairApp()
+    app.root.mainloop()
 EOF
 
-CREA_FILE tests/test_devops_engine_only.py
-def test_devops_engine_file():
-    with open("devops_engine_test/test_engine.txt", encoding="utf-8") as f:
-        content = f.read()
+CREA_FILE database.py
+"""
+Database layer using SQLite for local storage.
+Hedge-Fund Grade: supporta concorrenza massiva (WAL),
+nested transactions e Saga Pattern.
+"""
 
-    assert "DevOps Engine Test" in content
-    assert "Second run append test" in content
+import sqlite3
+import os
+import json
+import hashlib
+import threading
+from datetime import datetime
+import logging
+
+logger = logging.getLogger("DB")
+
+def get_db_path():
+    if os.name == "nt":
+        app_data = os.environ.get("APPDATA", os.path.expanduser("~"))
+        db_dir = os.path.join(app_data, "Pickfair")
+    else:
+        db_dir = os.path.join(os.path.expanduser("~"), ".pickfair")
+
+    os.makedirs(db_dir, exist_ok=True)
+    return os.path.join(db_dir, "betfair.db")
+
+class Database:
+    def __init__(self):
+        self.db_path = get_db_path()
+        self._local = threading.local()
+        self._init_db()
+
+    def _get_connection(self):
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._local.conn = sqlite3.connect(self.db_path, timeout=20.0)
+            self._local.conn.row_factory = sqlite3.Row
+            self._local.conn.execute("PRAGMA journal_mode=WAL")
+            self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.transaction_depth = 0
+        return self._local.conn
+
+    def _execute(self, query: str, params: tuple = (), commit: bool = True):
+        conn = self._get_connection()
+        try:
+            self._local.transaction_depth += 1
+            sp_name = f"sp_{self._local.transaction_depth}"
+            conn.execute(f"SAVEPOINT {sp_name}")
+
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+
+            if commit:
+                conn.execute(f"RELEASE {sp_name}")
+                if self._local.transaction_depth == 1:
+                    conn.commit()
+            return cursor
+
+        except Exception as e:
+            if hasattr(self._local, "transaction_depth"):
+                sp_name = f"sp_{self._local.transaction_depth}"
+                conn.execute(f"ROLLBACK TO {sp_name}")
+            logger.error(f"[DB] DB Error: {e} | Query: {query}")
+            raise
+
+        finally:
+            if hasattr(self._local, "transaction_depth"):
+                self._local.transaction_depth -= 1
+
+    def _init_db(self):
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
+
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS bet_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                placed_at TIMESTAMP,
+                event_name TEXT,
+                market_id TEXT,
+                market_name TEXT,
+                bet_type TEXT,
+                selections TEXT,
+                total_stake REAL,
+                potential_profit REAL,
+                status TEXT
+            )
+            """
+        )
+
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS simulation_bet_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                placed_at TIMESTAMP,
+                event_name TEXT,
+                market_id TEXT,
+                market_name TEXT,
+                side TEXT,
+                selection_id TEXT,
+                selection_name TEXT,
+                price REAL,
+                stake REAL,
+                status TEXT,
+                selections TEXT,
+                total_stake REAL,
+                potential_profit REAL
+            )
+            """
+        )
+
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS cashout_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP,
+                market_id TEXT,
+                selection_id TEXT,
+                original_bet_id TEXT,
+                cashout_bet_id TEXT,
+                original_side TEXT,
+                original_stake REAL,
+                original_price REAL,
+                cashout_side TEXT,
+                cashout_stake REAL,
+                cashout_price REAL,
+                profit_loss REAL
+            )
+            """
+        )
+
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_saga (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_ref TEXT UNIQUE NOT NULL,
+                market_id TEXT NOT NULL,
+                selection_id TEXT,
+                payload_hash TEXT NOT NULL,
+                raw_payload TEXT NOT NULL,
+                status TEXT NOT NULL,   -- PENDING | RECONCILED | FAILED
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    def create_pending_saga(self, customer_ref, market_id, selection_id, payload_dict):
+        payload_str = json.dumps(payload_dict, sort_keys=True)
+        payload_hash = hashlib.sha256(payload_str.encode()).hexdigest()
+        self._execute(
+            """
+            INSERT INTO order_saga (
+                customer_ref, market_id, selection_id, payload_hash, raw_payload, status
+            )
+            VALUES (?, ?, ?, ?, ?, 'PENDING')
+            """,
+            (
+                customer_ref,
+                market_id,
+                str(selection_id) if selection_id is not None else None,
+                payload_hash,
+                payload_str,
+            ),
+        )
+
+    def mark_saga_reconciled(self, customer_ref):
+        self._execute(
+            "UPDATE order_saga SET status='RECONCILED' WHERE customer_ref=?",
+            (customer_ref,),
+        )
+
+    def mark_saga_failed(self, customer_ref):
+        self._execute(
+            "UPDATE order_saga SET status='FAILED' WHERE customer_ref=?",
+            (customer_ref,),
+        )
+
+    def get_pending_sagas(self):
+        cursor = self._execute(
+            "SELECT customer_ref, market_id, raw_payload FROM order_saga WHERE status='PENDING'"
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def save_credentials(self, username, app_key, certificate, private_key):
+        data = {
+            "username": username,
+            "app_key": app_key,
+            "certificate": certificate,
+            "private_key": private_key,
+        }
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("credentials", json.dumps(data)),
+        )
+
+    def get_settings(self):
+        settings = {}
+        cursor = self._execute("SELECT value FROM settings WHERE key='credentials'")
+        row = cursor.fetchone()
+        if row:
+            try: settings.update(json.loads(row[0]))
+            except Exception: pass
+        cursor = self._execute("SELECT value FROM settings WHERE key='password'")
+        row = cursor.fetchone()
+        if row: settings["password"] = row[0]
+        cursor = self._execute("SELECT value FROM settings WHERE key='session'")
+        row = cursor.fetchone()
+        if row:
+            try:
+                session_data = json.loads(row[0])
+                settings["session_token"] = session_data.get("token")
+                settings["session_expiry"] = session_data.get("expiry")
+            except Exception: pass
+        cursor = self._execute("SELECT value FROM settings WHERE key='update_url'")
+        row = cursor.fetchone()
+        if row: settings["update_url"] = row[0]
+        cursor = self._execute("SELECT value FROM settings WHERE key='skipped_version'")
+        row = cursor.fetchone()
+        if row: settings["skipped_version"] = row[0]
+        return settings
+
+    def save_password(self, password):
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("password", password if password else ""),
+        )
+
+    def save_session(self, token, expiry):
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("session", json.dumps({"token": token, "expiry": expiry})),
+        )
+
+    def clear_session(self):
+        self._execute("DELETE FROM settings WHERE key='session'")
+
+    def save_update_url(self, url):
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("update_url", url or ""),
+        )
+
+    def save_skipped_version(self, version):
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("skipped_version", version or ""),
+        )
+
+    def save_bet(self, event_name, market_id, market_name, bet_type, selections, total_stake, potential_profit, status):
+        self._execute(
+            """
+            INSERT INTO bet_history (
+                placed_at, event_name, market_id, market_name,
+                bet_type, selections, total_stake, potential_profit, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now().isoformat(),
+                event_name,
+                market_id,
+                market_name,
+                bet_type,
+                json.dumps(selections),
+                total_stake,
+                potential_profit,
+                status,
+            ),
+        )
+
+    def get_recent_bets(self, limit=50):
+        cursor = self._execute(
+            "SELECT * FROM bet_history ORDER BY placed_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_today_profit_loss(self):
+        today = datetime.now().date().isoformat()
+        cursor = self._execute(
+            """
+            SELECT COALESCE(SUM(potential_profit), 0) AS pl
+            FROM bet_history
+            WHERE substr(placed_at, 1, 10) = ?
+              AND status IN ('MATCHED', 'PARTIALLY_MATCHED')
+            """,
+            (today,),
+        )
+        row = cursor.fetchone()
+        return float(row["pl"]) if row and row["pl"] is not None else 0.0
+
+    def get_active_bets_count(self):
+        cursor = self._execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM bet_history
+            WHERE status IN ('MATCHED', 'PARTIALLY_MATCHED', 'PENDING', 'UNMATCHED')
+            """
+        )
+        row = cursor.fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def get_simulation_settings(self):
+        cursor = self._execute(
+            "SELECT value FROM settings WHERE key='simulation_settings'"
+        )
+        row = cursor.fetchone()
+        if row:
+            try: return json.loads(row[0])
+            except Exception: pass
+        return {
+            "starting_balance": 10000.0,
+            "virtual_balance": 10000.0,
+            "bet_count": 0,
+        }
+
+    def save_simulation_settings(self, settings):
+        self._execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("simulation_settings", json.dumps(settings)),
+        )
+
+    def increment_simulation_bet_count(self, new_balance):
+        s = self.get_simulation_settings()
+        s["virtual_balance"] = float(new_balance)
+        s["bet_count"] = int(s.get("bet_count", 0)) + 1
+        self.save_simulation_settings(s)
+
+    def save_simulation_bet(
+        self,
+        event_name,
+        market_id,
+        market_name,
+        side,
+        selection_id=None,
+        selection_name=None,
+        price=None,
+        stake=None,
+        status="MATCHED",
+        selections=None,
+        total_stake=None,
+        potential_profit=None,
+    ):
+        self._execute(
+            """
+            INSERT INTO simulation_bet_history (
+                placed_at, event_name, market_id, market_name,
+                side, selection_id, selection_name, price, stake,
+                status, selections, total_stake, potential_profit
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now().isoformat(),
+                event_name,
+                market_id,
+                market_name,
+                side,
+                str(selection_id) if selection_id is not None else None,
+                selection_name,
+                price,
+                stake,
+                status,
+                json.dumps(selections) if selections is not None else None,
+                total_stake,
+                potential_profit,
+            ),
+        )
+
+    def get_simulation_bets(self, limit=50):
+        cursor = self._execute(
+            "SELECT * FROM simulation_bet_history ORDER BY placed_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def save_cashout_transaction(
+        self,
+        market_id,
+        selection_id,
+        original_bet_id,
+        cashout_bet_id,
+        original_side,
+        original_stake,
+        original_price,
+        cashout_side,
+        cashout_stake,
+        cashout_price,
+        profit_loss,
+    ):
+        self._execute(
+            """
+            INSERT INTO cashout_history (
+                created_at, market_id, selection_id, original_bet_id,
+                cashout_bet_id, original_side, original_stake, original_price,
+                cashout_side, cashout_stake, cashout_price, profit_loss
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now().isoformat(),
+                market_id,
+                str(selection_id),
+                original_bet_id,
+                cashout_bet_id,
+                original_side,
+                original_stake,
+                original_price,
+                cashout_side,
+                cashout_stake,
+                cashout_price,
+                profit_loss,
+            ),
+        )
+
+    def close(self):
+        if hasattr(self._local, "conn") and self._local.conn:
+            try:
+                self._local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._local.conn.close()
+                self._local.conn = None
+            except Exception:
+                pass
+EOF
+
+CREA_FILE core/trading_engine.py
+"""
+Trading Engine (UI-Agnostic)
+Livello Istituzionale: Pattern Saga, Recovery, Persistence Completa, Simulazione, Best Price.
+"""
+__all__ = ["TradingEngine"]
+
+import time
+import uuid
+import json
+import logging
+import threading
+from circuit_breaker import TransientError, PermanentError
+
+logger = logging.getLogger(__name__)
+
+class TradingEngine:
+    def __init__(self, bus, db, client_getter, executor):
+        self.bus = bus
+        self.db = db
+        self.client_getter = client_getter
+        self.executor = executor
+        
+        self.is_killed = False 
+        self._active_submissions = set()
+        self._lock_mutex = threading.Lock()
+        
+        self.bus.subscribe("CMD_QUICK_BET", self._handle_quick_bet)
+        self.bus.subscribe("CMD_PLACE_DUTCHING", self._handle_place_dutching)
+        self.bus.subscribe("CMD_EXECUTE_CASHOUT", self._handle_cashout)
+        self.bus.subscribe("STATE_UPDATE_SAFE_MODE", self._toggle_kill_switch)
+        self.bus.subscribe("CLIENT_CONNECTED", lambda _: self._recover_pending_sagas())
+
+    def _toggle_kill_switch(self, is_safe):
+        self.is_killed = bool(is_safe)
+
+    def _acquire_lock(self, customer_ref):
+        with self._lock_mutex:
+            if customer_ref in self._active_submissions: return False
+            self._active_submissions.add(customer_ref)
+            return True
+            
+    def _release_lock(self, customer_ref):
+        with self._lock_mutex:
+            self._active_submissions.discard(customer_ref)
+
+    def _recover_pending_sagas(self):
+        def task():
+            pending = self.db.get_pending_sagas()
+            if not pending: return
+            client = self.client_getter()
+            if not client: return
+            
+            logger.warning(f"[Recovery] Trovate {len(pending)} saghe pendenti post-crash.")
+            
+            for saga in pending:
+                customer_ref = saga['customer_ref']
+                market_id = saga['market_id']
+                raw_payload = saga.get('raw_payload', '{}')
+                
+                try:
+                    payload = json.loads(raw_payload)
+                except:
+                    payload = {}
+                
+                is_recovered, _ = self._reconcile_orders(client, market_id, customer_ref)
+                
+                if is_recovered:
+                    self.db.mark_saga_reconciled(customer_ref)
+                    
+                    if 'results' in payload:
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', 'Recuperato'),
+                            market_id=market_id,
+                            market_name=payload.get('market_name', ''),
+                            bet_type=payload.get('bet_type', ''),
+                            selections=payload.get('results', []),
+                            total_stake=payload.get('total_stake', 0.0),
+                            potential_profit=0.0,
+                            status='RECOVERED'
+                        )
+                    elif 'green_up' in payload:
+                        self.db.save_cashout_transaction(
+                            market_id=market_id,
+                            selection_id=payload.get('selection_id', ''),
+                            original_bet_id='', cashout_bet_id=customer_ref,
+                            original_side='', original_stake=0, original_price=0,
+                            cashout_side=payload.get('side', ''),
+                            cashout_stake=payload.get('stake', 0),
+                            cashout_price=payload.get('price', 0),
+                            profit_loss=0.0
+                        )
+                    elif 'stake' in payload:
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', 'Recuperato'),
+                            market_id=market_id,
+                            market_name=payload.get('market_name', ''),
+                            bet_type=payload.get('bet_type', ''),
+                            selections=[{"selectionId": payload.get('selection_id'), "runnerName": payload.get('runner_name'), "price": payload.get('price'), "stake": payload.get('stake')}],
+                            total_stake=payload.get('stake', 0.0),
+                            potential_profit=0.0,
+                            status='RECOVERED'
+                        )
+                    logger.info(f"[Recovery] Saga {customer_ref} riconciliata.")
+                else:
+                    self.db.mark_saga_failed(customer_ref)
+                    logger.warning(f"[Recovery] Saga {customer_ref} marcata fallita.")
+                    
+        self.executor.submit("saga_recovery", task)
+
+    def _reconcile_orders(self, client, market_id, customer_ref):
+        for delay in [0.5, 1.0, 2.0]:
+            time.sleep(delay)
+            try:
+                try: orders = client.get_current_orders(market_ids=[market_id], customer_order_refs=[customer_ref])
+                except TypeError: orders = client.get_current_orders()
+                all_orders = orders.get('matched', []) + orders.get('unmatched', [])
+                recovered = [o for o in all_orders if (o.get('customerOrderRef') == customer_ref or o.get('customerRef') == customer_ref) and str(o.get('marketId')) == str(market_id)]
+                if recovered: return True, recovered
+            except Exception: continue
+        return False, []
+
+    def _handle_quick_bet(self, payload):
+        def task():
+            if self.is_killed:
+                self.bus.publish("QUICK_BET_FAILED", "SAFE MODE ATTIVO")
+                return
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref): return
+            try:
+                market_id = payload['market_id']
+                selection_id = payload['selection_id']
+                bet_type = payload['bet_type']
+                price = float(payload['price'])
+                stake = float(payload['stake'])
+                sim_mode = payload['simulation_mode']
+                
+                if sim_mode:
+                    sim_settings = self.db.get_simulation_settings()
+                    v_balance = sim_settings.get("virtual_balance", 0.0)
+                    liability = stake * (price - 1) if bet_type == "LAY" else stake
+                    
+                    if v_balance >= liability:
+                        new_bal = v_balance - liability
+                        self.db.save_simulation_bet(
+                            event_name=payload.get('event_name', ''),
+                            market_id=market_id, market_name=payload.get('market_name', ''),
+                            side=bet_type, selection_id=selection_id,
+                            selection_name=payload.get('runner_name', ''),
+                            price=price, stake=stake, status="MATCHED"
+                        )
+                        self.db.increment_simulation_bet_count(new_bal)
+                        self.bus.publish("QUICK_BET_SUCCESS", {"runner_name": payload['runner_name'], "price": price, "stake": stake, "new_balance": new_bal, "sim": True})
+                    else:
+                        self.bus.publish("QUICK_BET_FAILED", "Saldo virtuale insufficiente")
+                    return
+
+                client = self.client_getter()
+                if not client: raise Exception("Client non connesso")
+                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                
+                try:
+                    result = client.place_bet(market_id=market_id, selection_id=selection_id, side=bet_type, price=price, size=stake, persistence_type='LAPSE', customer_ref=customer_ref)
+                    if result.get('status') == 'SUCCESS':
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = sum(r.get('sizeMatched', 0) for r in result.get('instructionReports', []))
+                        status = "MATCHED" if matched >= stake else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
+                        
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
+                            total_stake=stake, potential_profit=0.0, status=status
+                        )
+                        self.bus.publish("QUICK_BET_SUCCESS", {"runner_name": payload['runner_name'], "price": price, "matched": matched, "sim": False})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
+                            total_stake=stake, potential_profit=0.0, status="FAILED"
+                        )
+                        self.bus.publish("QUICK_BET_FAILED", f"Stato API: {result.get('status')}")
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = sum(r.get('sizeMatched', 0) for r in recovered_reports)
+                        status = "MATCHED" if matched >= stake else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
+                        
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
+                            total_stake=stake, potential_profit=0.0, status=status
+                        )
+                        self.bus.publish("QUICK_BET_SUCCESS", {"runner_name": payload['runner_name'], "price": price, "matched": matched, "sim": False, "recovered": True})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=[{"selectionId": selection_id, "runnerName": payload.get('runner_name', ''), "price": price, "stake": stake}],
+                            total_stake=stake, potential_profit=0.0, status="FAILED"
+                        )
+                        if isinstance(e, PermanentError): self.bus.publish("SAFE_MODE_TRIGGER", {"reason": "Circuit Breaker", "details": str(e)})
+                        self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+            finally: self._release_lock(customer_ref)
+        self.executor.submit("engine_quick_bet", task)
+
+    def _handle_place_dutching(self, payload):
+        def task():
+            if self.is_killed:
+                self.bus.publish("DUTCHING_FAILED", "SAFE MODE ATTIVO")
+                return
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref): return
+            try:
+                market_id = payload['market_id']
+                bet_type = payload['bet_type']
+                results = payload['results']
+                sim_mode = payload['simulation_mode']
+                total_stake = payload['total_stake']
+                use_best_price = payload.get('use_best_price', False)
+                requested_size = sum(r['stake'] for r in results)
+                
+                if sim_mode:
+                    sim_settings = self.db.get_simulation_settings()
+                    v_balance = sim_settings.get("virtual_balance", 0.0)
+                    
+                    total_risk = sum(r['stake'] * (r.get('price', 1.0) - 1.0) for r in results) if bet_type == "LAY" else total_stake
+                    
+                    if v_balance >= total_risk:
+                        new_bal = v_balance - total_risk
+                        self.db.save_simulation_bet(
+                            event_name=payload.get('event_name', ''),
+                            market_id=market_id, market_name=payload.get('market_name', ''),
+                            side=bet_type, status="MATCHED", selections=results, total_stake=total_stake
+                        )
+                        self.db.increment_simulation_bet_count(new_bal)
+                        self.bus.publish("DUTCHING_SUCCESS", {"sim": True, "total_stake": total_stake, "new_balance": new_bal})
+                    else:
+                        self.bus.publish("DUTCHING_FAILED", "Saldo virtuale insufficiente")
+                    return
+
+                client = self.client_getter()
+                if not client: raise Exception("Client non connesso")
+                self.db.create_pending_saga(customer_ref, market_id, None, payload)
+                
+                try:
+                    instructions = []
+                    if use_best_price:
+                        book = client.get_market_book(market_id)
+                        current_prices = {}
+                        if book and book.get('runners'):
+                            for r in book['runners']:
+                                sel_id = r.get('selectionId')
+                                ex = r.get('ex', {})
+                                if bet_type == 'BACK':
+                                    avail = ex.get('availableToBack', [])
+                                    current_prices[sel_id] = avail[0].get('price', 1.01) if avail else 1.01
+                                else:
+                                    avail = ex.get('availableToLay', [])
+                                    current_prices[sel_id] = avail[0].get('price', 1000.0) if avail else 1000.0
+                        for r in results:
+                            price = current_prices.get(r['selectionId'], r['price'])
+                            instructions.append({'selectionId': r['selectionId'], 'side': bet_type, 'price': price, 'size': r['stake']})
+                    else:
+                        instructions = [{'selectionId': r['selectionId'], 'side': bet_type, 'price': r['price'], 'size': r['stake']} for r in results]
+                    
+                    result = client.place_orders(market_id, instructions, customer_ref=customer_ref)
+                    reports = result.get('instructionReports', [])
+                    
+                    if result.get('status') == 'SUCCESS':
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = sum(r.get('sizeMatched', 0) for r in reports)
+                        status = "MATCHED" if matched >= requested_size - 0.01 else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
+                        
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status=status
+                        )
+                        self.bus.publish("DUTCHING_SUCCESS", {"sim": False, "matched": matched})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status="FAILED"
+                        )
+                        self.bus.publish("DUTCHING_FAILED", f"Stato API: {result.get('status')}")
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = sum(r.get('sizeMatched', 0) for r in recovered_reports)
+                        status = "MATCHED" if matched >= requested_size - 0.01 else ("PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED")
+                        
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status=status
+                        )
+                        self.bus.publish("DUTCHING_SUCCESS", {"sim": False, "matched": matched, "recovered": True})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get('event_name', ''), market_id=market_id, market_name=payload.get('market_name', ''),
+                            bet_type=bet_type, selections=results, total_stake=total_stake, potential_profit=0.0, status="FAILED"
+                        )
+                        if isinstance(e, PermanentError): self.bus.publish("SAFE_MODE_TRIGGER", {"reason": "Circuit Breaker", "details": str(e)})
+                        self.bus.publish("DUTCHING_FAILED", f"Errore Rete: {str(e)}")
+            finally: self._release_lock(customer_ref)
+        self.executor.submit("engine_dutching", task)
+
+    def _handle_cashout(self, payload):
+        def task():
+            if self.is_killed:
+                self.bus.publish("CASHOUT_FAILED", "SAFE MODE ATTIVO")
+                return
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref): return
+            try:
+                client = self.client_getter()
+                if not client: raise Exception("Client non connesso")
+                
+                market_id = payload['market_id']
+                selection_id = payload['selection_id']
+                side = payload['side']
+                stake = payload['stake']
+                price = payload['price']
+                green_up = payload['green_up']
+                
+                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                instructions = [{'selectionId': selection_id, 'side': side, 'orderType': 'LIMIT', 'limitOrder': {'size': stake, 'price': price, 'persistenceType': 'LAPSE'}}]
+                
+                try:
+                    result = client.place_orders(market_id, instructions, customer_ref=customer_ref)
+                    if result.get('status') == 'SUCCESS':
+                        self.db.mark_saga_reconciled(customer_ref)
+                        self.db.save_cashout_transaction(
+                            market_id=market_id, selection_id=selection_id, original_bet_id='', cashout_bet_id=customer_ref,
+                            original_side='', original_stake=0, original_price=0, cashout_side=side, cashout_stake=stake, cashout_price=price, profit_loss=green_up
+                        )
+                        self.bus.publish("CASHOUT_SUCCESS", {"green_up": green_up})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.bus.publish("CASHOUT_FAILED", f"Stato API: {result.get('status')}")
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        self.db.save_cashout_transaction(
+                            market_id=market_id, selection_id=selection_id, original_bet_id='', cashout_bet_id=customer_ref,
+                            original_side='', original_stake=0, original_price=0, cashout_side=side, cashout_stake=stake, cashout_price=price, profit_loss=green_up
+                        )
+                        self.bus.publish("CASHOUT_SUCCESS", {"green_up": green_up, "recovered": True})
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        if isinstance(e, PermanentError): self.bus.publish("SAFE_MODE_TRIGGER", {"reason": "Circuit Breaker Cashout", "details": str(e)})
+                        self.bus.publish("CASHOUT_FAILED", f"Errore Rete: {str(e)}")
+            finally: self._release_lock(customer_ref)
+        self.executor.submit("engine_cashout", task)
+EOF
+
+CREA_FILE app_modules/betting_module.py
+import tkinter as tk
+from datetime import datetime
+from tkinter import messagebox
+
+from betfair_client import BetfairClient
+from dutching import calculate_dutching_stakes, format_currency, validate_selections
+from dutching_ui import open_dutching_window
+from theme import COLORS
+
+class BettingModule:
+    def _schedule_order_cleanup(self):
+        try:
+            if hasattr(self, "order_manager") and self.order_manager:
+                self.order_manager.cleanup_old(max_age_seconds=3600)
+        except:
+            pass
+        self.root.after(3600000, self._schedule_order_cleanup)
+
+    def _on_goal_hedge(self, match_id):
+        import logging
+        logging.getLogger("PickfairApp").info(f"HEDGE START match={match_id}")
+
+    def _on_goal_reopen(self, match_id):
+        import logging
+        logging.getLogger("PickfairApp").info(f"REOPEN positions match={match_id}")
+
+    def _toggle_connection(self):
+        if self.client:
+            self._disconnect()
+        else:
+            self._connect()
+
+    def _connect(self):
+        settings = self.db.get_settings()
+        if not all([settings.get("username"), settings.get("app_key"), settings.get("certificate"), settings.get("private_key")]):
+            messagebox.showerror("Errore", "Configura prima le credenziali dal menu File")
+            return
+
+        from tkinter import ttk
+        pwd_dialog = tk.Toplevel(self.root)
+        pwd_dialog.title("Password Betfair")
+        pwd_dialog.geometry("350x180")
+        pwd_dialog.transient(self.root)
+        pwd_dialog.grab_set()
+
+        pwd_dialog.update_idletasks()
+        x = (pwd_dialog.winfo_screenwidth() // 2) - (175)
+        y = (pwd_dialog.winfo_screenheight() // 2) - (90)
+        pwd_dialog.geometry(f"350x180+{x}+{y}")
+
+        frame = ttk.Frame(pwd_dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Password Betfair:").pack(anchor=tk.W)
+
+        saved_password = settings.get("password", "")
+        pwd_var = tk.StringVar(value=saved_password or "")
+        pwd_entry = ttk.Entry(frame, textvariable=pwd_var, show="*")
+        pwd_entry.pack(fill=tk.X, pady=5)
+        pwd_entry.focus()
+
+        save_pwd_var = tk.BooleanVar(value=bool(saved_password))
+        ttk.Checkbutton(frame, text="Salva Password", variable=save_pwd_var).pack(anchor=tk.W, pady=5)
+
+        def do_login():
+            password = pwd_var.get()
+            if save_pwd_var.get():
+                self.db.save_password(password)
+            else:
+                self.db.save_password(None)
+
+            pwd_dialog.destroy()
+            self.status_label.configure(text="Connessione in corso...", text_color=COLORS["text_secondary"])
+            self.connect_btn.configure(state=tk.DISABLED)
+
+            def login_thread():
+                try:
+                    self.client = BetfairClient(
+                        settings["username"],
+                        settings["app_key"],
+                        settings["certificate"],
+                        settings["private_key"],
+                    )
+                    result = self.client.login(password)
+                    self.db.save_session(result["session_token"], result["expiry"])
+                    self.uiq.post(self._on_connected)
+                except Exception as e:
+                    self.uiq.post(self._on_connection_error, str(e))
+
+            self.executor.submit("login_task", login_thread)
+
+        pwd_entry.bind("<Return>", lambda e: do_login())
+        ttk.Button(frame, text="Connetti", command=do_login).pack(pady=10)
+
+    def _on_connected(self):
+        self.status_label.configure(text="Connesso a Betfair Italia", text_color=COLORS["success"])
+        self.connect_btn.configure(text="Disconnetti", state=tk.NORMAL)
+        self.refresh_btn.configure(state=tk.NORMAL)
+
+        self._update_balance()
+        self._load_events()
+
+        self.auto_refresh_var.set(True)
+        self._start_auto_refresh()
+
+        self._start_session_keepalive()
+        self._refresh_dashboard_tab()
+
+        self.bus.publish("CLIENT_CONNECTED", None)
+
+    def _start_session_keepalive(self):
+        self.keepalive_id = None
+        def keepalive():
+            if self.client:
+                try:
+                    self.client.get_account_balance()
+                except Exception:
+                    self._try_silent_relogin()
+            if self.client:
+                self.keepalive_id = self.root.after(600000, keepalive)
+        self.keepalive_id = self.root.after(600000, keepalive)
+
+    def _stop_session_keepalive(self):
+        if hasattr(self, "keepalive_id") and self.keepalive_id:
+            self.root.after_cancel(self.keepalive_id)
+            self.keepalive_id = None
+
+    def _try_silent_relogin(self):
+        settings = self.db.get_settings()
+        password = settings.get("password")
+        if password and self.client:
+            try:
+                result = self.client.login(password)
+                self.db.save_session(result["session_token"], result["expiry"])
+            except Exception:
+                self.uiq.post(messagebox.showwarning, "Sessione Scaduta", "La sessione è scaduta. Riconnettiti manualmente.")
+
+    def _on_connection_error(self, error):
+        self.status_label.configure(text=f"Errore: {error}", text_color=COLORS["error"])
+        self.connect_btn.configure(text="Connetti", state=tk.NORMAL)
+        self.client = None
+        messagebox.showerror("Errore Connessione", error)
+
+    def _disconnect(self):
+        self._stop_auto_refresh()
+        self._stop_session_keepalive()
+        self.auto_refresh_var.set(False)
+
+        if self.client:
+            self.client.logout()
+            self.client = None
+
+        self.db.clear_session()
+        self.status_label.configure(text="Non connesso", text_color=COLORS["error"])
+        self.stream_label.configure(text="")
+        self.connect_btn.configure(text="Connetti")
+        self.refresh_btn.configure(state=tk.DISABLED)
+        self.balance_label.configure(text="")
+        self.streaming_active = False
+        self.stream_var.set(False)
+
+        self.events_tree.delete(*self.events_tree.get_children())
+        self.runners_tree.delete(*self.runners_tree.get_children())
+        self.market_combo["values"] = []
+        self._clear_selections()
+
+    def _update_balance(self):
+        def fetch():
+            try:
+                funds = self.client.get_account_funds()
+                self.uiq.post(self.balance_label.configure, text=f"Saldo: {format_currency(funds['available'])}")
+            except Exception:
+                pass
+        self.executor.submit("fetch_balance", fetch)
+
+    def _load_events(self):
+        def fetch():
+            try:
+                events = self.client.get_football_events()
+                self.uiq.post(self._display_events, events)
+            except Exception as e:
+                self.uiq.post(messagebox.showerror, "Errore", f"Errore caricamento partite: {str(e)}")
+        self.executor.submit("fetch_events", fetch)
+
+    def _display_events(self, events):
+        self.all_events = events
+        self._populate_events_tree()
+
+    def _populate_events_tree(self):
+        search = self.search_var.get().lower()
+        filtered_events = []
+        if search:
+            for event in self.all_events:
+                if search in event["name"].lower():
+                    filtered_events.append(event)
+        else:
+            filtered_events = self.all_events
+
+        self.tm_events.update_hierarchical(
+            data=filtered_events,
+            parent_getter=lambda e: f"country_{e.get('countryCode', 'XX') or 'XX'}",
+            id_getter=lambda e: e["id"],
+            text_getter=lambda e: e.get("countryCode", "XX") or "XX",
+            values_getter=lambda e: (e["name"], self._format_event_date(e)),
+        )
+
+    def _format_event_date(self, event):
+        if event.get("inPlay"):
+            return "LIVE"
+        if event.get("openDate"):
+            try:
+                dt = datetime.fromisoformat(event["openDate"].replace("Z", "+00:00"))
+                return dt.strftime("%d/%m %H:%M")
+            except:
+                return event["openDate"][:16]
+        return ""
+
+    def _filter_events(self, *args):
+        self._populate_events_tree()
+
+    def _refresh_data(self):
+        self._update_balance()
+        self._load_events()
+        if self.current_event:
+            self._load_available_markets(self.current_event["id"])
+
+    def _on_event_selected(self, event):
+        selection = self.events_tree.selection()
+        if not selection:
+            return
+        event_id = selection[0]
+        if event_id.startswith("country_"):
+            return
+
+        for evt in self.all_events:
+            if evt["id"] == event_id:
+                self.current_event = evt
+                self.event_name_label.configure(text=evt["name"])
+                break
+        else:
+            return
+
+        self._stop_streaming()
+        self._clear_selections()
+        self._load_available_markets(event_id)
+
+    def _load_available_markets(self, event_id):
+        self.runners_tree.delete(*self.runners_tree.get_children())
+        self.market_combo["values"] = []
+
+        def fetch():
+            try:
+                markets = self.client.get_available_markets(event_id)
+                self.uiq.post(self._display_available_markets, markets)
+            except Exception as e:
+                self.uiq.post(messagebox.showerror, "Errore", f"Errore caricamento mercati: {str(e)}")
+        self.executor.submit("fetch_markets", fetch)
+
+    def _display_available_markets(self, markets):
+        self.available_markets = markets
+        if not markets:
+            self.market_combo["values"] = ["Nessun mercato disponibile"]
+            return
+
+        display_names = []
+        for m in markets:
+            name = m.get("displayName") or m.get("marketName", "Sconosciuto")
+            if m.get("inPlay"):
+                name = f"[LIVE] {name}"
+            display_names.append(name)
+
+        self.market_combo["values"] = display_names
+        if display_names:
+            self.market_combo.current(0)
+            self._on_market_type_selected(None)
+
+    def _on_market_type_selected(self, event):
+        selection = self.market_combo.current()
+        if selection < 0 or selection >= len(self.available_markets):
+            return
+        market = self.available_markets[selection]
+        self._stop_streaming()
+        self._clear_selections()
+        self._load_market(market["marketId"])
+
+    def _load_market(self, market_id):
+        self.runners_tree.delete(*self.runners_tree.get_children())
+        def fetch():
+            try:
+                market = self.client.get_market_with_prices(market_id)
+                self.uiq.post(self._display_market, market)
+            except Exception as e:
+                self.uiq.post(messagebox.showerror, "Errore", f"Mercato non disponibile: {str(e)}")
+        self.executor.submit("fetch_market_prices", fetch)
+
+    def _display_market(self, market):
+        self.current_market = market
+        self.market_status = market.get("status", "OPEN")
+        is_inplay = market.get("inPlay", False)
+
+        if self.market_status == "SUSPENDED":
+            self.market_status_label.configure(text="SOSPESO", text_color=COLORS["loss"])
+            self.dutch_modal_btn.configure(state=tk.DISABLED)
+            self.place_btn.configure(state=tk.DISABLED)
+        elif self.market_status == "CLOSED":
+            self.market_status_label.configure(text="CHIUSO", text_color=COLORS["text_secondary"])
+            self.dutch_modal_btn.configure(state=tk.DISABLED)
+            self.place_btn.configure(state=tk.DISABLED)
+        else:
+            if is_inplay:
+                self.market_status_label.configure(text="LIVE - APERTO", text_color=COLORS["success"])
+            else:
+                self.market_status_label.configure(text="APERTO", text_color=COLORS["success"])
+            self.dutch_modal_btn.configure(state=tk.NORMAL)
+
+        runners_data = []
+        for runner in market["runners"]:
+            back_price = f"{runner['backPrice']:.2f}" if runner.get("backPrice") else "-"
+            lay_price = f"{runner['layPrice']:.2f}" if runner.get("layPrice") else "-"
+            back_size = f"{runner['backSize']:.0f}" if runner.get("backSize") else "-"
+            lay_size = f"{runner['laySize']:.0f}" if runner.get("laySize") else "-"
+            sel_indicator = "X" if str(runner["selectionId"]) in self.selected_runners else ""
+
+            runners_data.append({
+                "id": runner["selectionId"],
+                "values": (sel_indicator, runner["runnerName"], back_price, back_size, lay_price, lay_size),
+                "tags": ("runner_row",)
+            })
+
+        self.tm_runners.update_flat(
+            data=runners_data,
+            id_getter=lambda r: str(r["id"]),
+            values_getter=lambda r: r["values"],
+            tags_getter=lambda r: r["tags"],
+        )
+
+        if self.market_status not in ("SUSPENDED", "CLOSED"):
+            self.stream_var.set(True)
+            self._start_streaming()
+
+        self._update_placed_bets()
+        self._update_market_cashout_positions()
+
+        if self.market_live_tracking_var.get() and not getattr(self, "market_live_tracking_id", None):
+            self._start_market_live_tracking()
+
+    def _show_runner_context_menu(self, event):
+        item = self.runners_tree.identify_row(event.y)
+        if item:
+            self.runners_tree.selection_set(item)
+            self._context_menu_selection = item
+            self.runner_context_menu.post(event.x_root, event.y_root)
+
+    def _book_selected_runner(self):
+        if not hasattr(self, "_context_menu_selection") or not self._context_menu_selection:
+            return
+        selection_id = self._context_menu_selection
+        if not self.current_market:
+            return
+        for runner in self.current_market["runners"]:
+            if str(runner["selectionId"]) == selection_id:
+                current_price = runner.get("backPrice") or runner.get("layPrice") or 0
+                if current_price > 0:
+                    if hasattr(self, "_show_booking_dialog"):
+                        self._show_booking_dialog(selection_id, runner["runnerName"], current_price, self.current_market["marketId"])
+                break
+
+    def _on_runner_clicked(self, event):
+        item = self.runners_tree.identify_row(event.y)
+        if not item: return
+        column = self.runners_tree.identify_column(event.x)
+        selection_id = item
+
+        if column == "#3": return self._quick_bet(selection_id, "BACK")
+        if column == "#5": return self._quick_bet(selection_id, "LAY")
+
+        if selection_id in self.selected_runners:
+            del self.selected_runners[selection_id]
+            values = list(self.runners_tree.item(item)["values"])
+            values[0] = ""
+            self.runners_tree.item(item, values=values)
+        else:
+            if self.current_market:
+                for runner in self.current_market["runners"]:
+                    if str(runner["selectionId"]) == selection_id:
+                        runner_data = runner.copy()
+                        values = list(self.runners_tree.item(item)["values"])
+                        try:
+                            back_price = float(str(values[2]).replace(",", ".")) if values[2] and values[2] != "-" else 0
+                            lay_price = float(str(values[4]).replace(",", ".")) if values[4] and values[4] != "-" else 0
+                        except (ValueError, IndexError):
+                            back_price = 0
+                            lay_price = 0
+
+                        runner_data["backPrice"] = back_price
+                        runner_data["layPrice"] = lay_price
+                        bet_type = self.bet_type_var.get()
+                        runner_data["price"] = back_price if bet_type == "BACK" else lay_price
+
+                        self.selected_runners[selection_id] = runner_data
+                        values[0] = "X"
+                        self.runners_tree.item(item, values=values)
+                        break
+        self._recalculate()
+
+    def _quick_bet(self, selection_id, bet_type):
+        if not self.client and not self.simulation_mode:
+            return messagebox.showwarning("Attenzione", "Devi prima connetterti")
+        if not self.current_market:
+            return
+
+        runner = next((r for r in self.current_market["runners"] if str(r["selectionId"]) == selection_id), None)
+        if not runner: return
+
+        values = list(self.runners_tree.item(selection_id)["values"])
+        try:
+            price = float(str(values[2]).replace(",", ".")) if bet_type == "BACK" and values[2] != "-" else float(str(values[4]).replace(",", ".")) if values[4] != "-" else 0
+        except:
+            price = 0
+
+        if price <= 0: return messagebox.showwarning("Attenzione", "Quota non disponibile")
+
+        try: stake = float(self.stake_var.get().replace(",", "."))
+        except: stake = 1.0
+        if stake < 1.0: stake = 1.0
+
+        tipo_text = "Back (Punta)" if bet_type == "BACK" else "Lay (Banca)"
+        mode_text = "[SIMULAZIONE] " if self.simulation_mode else ""
+
+        if not messagebox.askyesno("Conferma Scommessa Rapida", f"{mode_text}Vuoi piazzare questa scommessa?\n\n{runner['runnerName']}\nTipo: {tipo_text}\nQuota: {price:.2f}\nStake: {stake:.2f} EUR"):
+            return
+
+        self.bus.publish("REQ_QUICK_BET", {
+            "market_id": self.current_market["marketId"],
+            "market_type": self.current_market.get("marketType", "MATCH_ODDS"),
+            "event_name": getattr(self, "current_event", {}).get("name", ""),
+            "market_name": self.current_market.get("marketName", ""),
+            "selection_id": runner['selectionId'],
+            "runner_name": runner['runnerName'],
+            "bet_type": bet_type,
+            "price": price,
+            "stake": stake,
+            "simulation_mode": self.simulation_mode,
+        })
+
+    def _set_bet_type(self, bet_type):
+        self.bet_type_var.set(bet_type)
+        if bet_type == "BACK":
+            self.back_btn.configure(fg_color=COLORS["back"])
+            self.lay_btn.configure(fg_color=COLORS["button_secondary"])
+        else:
+            self.back_btn.configure(fg_color=COLORS["button_secondary"])
+            self.lay_btn.configure(fg_color=COLORS["lay"])
+        self._recalculate()
+
+    def _clear_selections(self):
+        self.selected_runners = {}
+        for item in self.runners_tree.get_children():
+            values = list(self.runners_tree.item(item)["values"])
+            values[0] = ""
+            self.runners_tree.item(item, values=values)
+        self.selections_text.configure(state=tk.NORMAL)
+        self.selections_text.delete("1.0", tk.END)
+        self.selections_text.configure(state=tk.DISABLED)
+        self.profit_label.configure(text="Profitto: -")
+        self.prob_label.configure(text="Probabilita Implicita: -")
+        self.place_btn.configure(state=tk.DISABLED)
+        self.calculated_results = None
+
+    def _recalculate(self):
+        if not self.selected_runners:
+            self.selections_text.configure(state=tk.NORMAL)
+            self.selections_text.delete("1.0", tk.END)
+            self.selections_text.configure(state=tk.DISABLED)
+            self.profit_label.configure(text="Profitto: -")
+            self.prob_label.configure(text="Probabilita Implicita: -")
+            self.place_btn.configure(state=tk.DISABLED)
+            return
+
+        self.selections_text.configure(state=tk.NORMAL)
+        self.selections_text.delete("1.0", tk.END)
+        try: total_stake = float(self.stake_var.get().replace(",", "."))
+        except ValueError: total_stake = 10.0
+
+        bet_type = self.bet_type_var.get()
+        for sel_id, sel in self.selected_runners.items():
+            sel["price"] = sel.get("backPrice", 0) if bet_type == "BACK" else sel.get("layPrice", 0)
+
+        try:
+            results, profit, implied_prob = calculate_dutching_stakes(list(self.selected_runners.values()), total_stake, bet_type)
+            text_lines = []
+            for r in results:
+                text_lines.append(f"{r['runnerName']}")
+                text_lines.append(f"  Quota: {r['price']:.2f}")
+                text_lines.append(f"  Stake: {format_currency(r['stake'])}")
+                if bet_type == "LAY":
+                    text_lines.append(f"  Liability: {format_currency(r.get('liability', 0))}")
+                    text_lines.append(f"  Se vince: {format_currency(r['profitIfWins'])}")
+                else:
+                    text_lines.append(f"  Profitto se vince: {format_currency(r['profitIfWins'])}")
+                text_lines.append("")
+            self.selections_text.insert("1.0", "\n".join(text_lines))
+            if bet_type == "LAY" and results:
+                self.profit_label.configure(text=f"Profitto Max: {format_currency(results[0].get('bestCase', profit))} | Rischio: {format_currency(results[0].get('worstCase', 0))}")
+            else:
+                self.profit_label.configure(text=f"Profitto Atteso: {format_currency(profit)}")
+            self.prob_label.configure(text=f"Probabilita Implicita: {implied_prob:.1f}%")
+
+            errors = validate_selections(results, bet_type)
+            if not errors:
+                self.place_btn.configure(state=tk.NORMAL)
+            else:
+                self.place_btn.configure(state=tk.DISABLED)
+                self.selections_text.insert(tk.END, "\nErrori:\n" + "\n".join(errors))
+            self.calculated_results = results
+        except Exception as e:
+            self.selections_text.insert("1.0", f"Errore calcolo: {e}")
+            self.profit_label.configure(text="Profitto: -")
+            self.place_btn.configure(state=tk.DISABLED)
+        self.selections_text.configure(state=tk.DISABLED)
+
+    def _open_dutching_window(self):
+        if not self.current_market: return messagebox.showwarning("Attenzione", "Seleziona prima un mercato.")
+        if not self.client: return messagebox.showwarning("Attenzione", "Connettiti prima a Betfair.")
+        runners = []
+        for item in self.runners_tree.get_children():
+            values = self.runners_tree.item(item, "values")
+            sel_id = self.runners_tree.item(item, "tags")[0] if self.runners_tree.item(item, "tags") else None
+            if sel_id:
+                try: back_price = float(values[2]) if values[2] else 0
+                except: back_price = 0
+                runners.append({"selectionId": int(sel_id), "runnerName": values[1] if len(values) > 1 else "", "price": back_price})
+        if not runners: return messagebox.showwarning("Attenzione", "Nessun runner disponibile.")
+
+        market_data = {
+            "marketId": self.current_market["marketId"],
+            "marketName": self.current_market.get("marketName", ""),
+            "eventName": self.current_event.get("name", "") if self.current_event else "",
+            "startTime": self.current_event.get("openDate", "")[:16] if self.current_event else "",
+            "status": self.market_status,
+        }
+        open_dutching_window(
+            parent=self.root, market_data=market_data, runners=runners,
+            on_submit=self._place_dutching_orders, on_refresh=getattr(self, "_refresh_prices", None),
+        )
+
+    def _place_dutching_orders(self, orders):
+        if not orders: return
+        if not self.current_market or not self.client: return messagebox.showerror("Errore", "Connessione o mercato non disponibile.")
+        market_id = self.current_market["marketId"]
+        if self.simulation_mode:
+            for o in orders:
+                self.db.add_simulated_bet(market_id=market_id, selection_id=o["selectionId"], runner_name=o["runnerName"], side=o["side"], price=o["price"], stake=o["size"])
+            return messagebox.showinfo("Simulazione", f"Piazzati {len(orders)} ordini simulati.")
+        try:
+            instructions = [{"selectionId": o["selectionId"], "side": o["side"], "orderType": "LIMIT", "limitOrder": {"size": round(o["size"], 2), "price": o["price"], "persistenceType": "LAPSE"}} for o in orders]
+            result = self.client.place_orders(market_id, instructions)
+            if result and result.get("status") == "SUCCESS":
+                messagebox.showinfo("Successo", f"Piazzati {len(orders)} ordini Dutching.")
+                self._refresh_data()
+            else:
+                messagebox.showerror("Errore", f"Errore piazzamento: {result.get('errorCode', 'Errore sconosciuto') if result else 'Nessuna risposta'}")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore: {str(e)}")
+
+    def _place_bets(self):
+        if getattr(self, "_placing_in_progress", False) or not getattr(self, "calculated_results", None) or not self.current_market: return
+        if self.market_status in ("SUSPENDED", "CLOSED"): return messagebox.showwarning("Attenzione", "Mercato sospeso o chiuso.")
+
+        total_stake = sum(r["stake"] for r in self.calculated_results)
+        if self.simulation_mode:
+            sim_settings = self.db.get_simulation_settings()
+            virtual_balance = sim_settings.get("virtual_balance", 0) if sim_settings else 0
+            if total_stake > virtual_balance:
+                return messagebox.showwarning("Saldo Insufficiente", f"Stake: {total_stake}\nSaldo: {virtual_balance}")
+            if not messagebox.askyesno("Conferma Simulazione", f"Piazzare {len(self.calculated_results)} scommesse simulate?"): return
+        else:
+            if not messagebox.askyesno("Conferma", f"Piazzare {len(self.calculated_results)} scommesse?\nStake Totale: {total_stake}"): return
+
+        self.place_btn.configure(state=tk.DISABLED)
+        self._placing_in_progress = True
+
+        self.bus.publish("REQ_PLACE_DUTCHING", {
+            "market_id": self.current_market["marketId"],
+            "market_type": self.current_market.get("marketType", "MATCH_ODDS"),
+            "event_name": getattr(self, "current_event", {}).get("name", ""),
+            "market_name": self.current_market.get("marketName", ""),
+            "results": self.calculated_results,
+            "bet_type": self.bet_type_var.get(),
+            "total_stake": total_stake,
+            "use_best_price": self.best_price_var.get(),
+            "simulation_mode": self.simulation_mode,
+        })
+
+    def _on_engine_success(self, data):
+        self._placing_in_progress = False
+        if hasattr(self, "place_btn") and self.place_btn.winfo_exists():
+            self.place_btn.configure(state=tk.NORMAL)
+
+        msg = f"Scommessa simulata piazzata!\nNuovo Saldo: {format_currency(data.get('new_balance', 0))}" if data.get("sim") else f"Scommesse piazzate!\nImporto matchato: {format_currency(data.get('matched', 0))}"
+        messagebox.showinfo("Successo", msg)
+        self._update_balance()
+        self._clear_selections()
+        if hasattr(self, "_update_simulation_balance_display"):
+            self._update_simulation_balance_display()
+
+    def _on_engine_error(self, error_msg):
+        self._placing_in_progress = False
+        if hasattr(self, "place_btn") and self.place_btn.winfo_exists():
+            self.place_btn.configure(state=tk.NORMAL)
+        messagebox.showerror("Errore Motore", f"Piazzamento fallito:\n{error_msg}")
+EOF
+
+CREA_FILE controllers/dutching_controller.py
+"""
+DutchingController - Orchestratore unificato per dutching
+Coordina UI → validazioni → AI → dutching → EventBus (RiskGate)
+Entry point unico per tutto il flusso di dutching.
+"""
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+from ai.ai_guardrail import get_guardrail
+from ai.ai_pattern_engine import AIPatternEngine
+from ai.wom_engine import get_wom_engine
+from automation_engine import AutomationEngine
+from dutching import calculate_dutching_stakes, calculate_mixed_dutching
+from market_validator import MarketValidator
+from safe_mode import get_safe_mode_manager
+from safety_logger import get_safety_logger
+from trading_config import (
+    BOOK_BLOCK, BOOK_WARNING, LIQUIDITY_GUARD_ENABLED, LIQUIDITY_MULTIPLIER,
+    LIQUIDITY_WARNING_ONLY, MAX_SPREAD_TICKS, MAX_STAKE_PCT, MIN_LIQUIDITY,
+    MIN_LIQUIDITY_ABSOLUTE, MIN_PRICE, MIN_STAKE,
+)
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class PreflightResult:
+    is_valid: bool = True
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    liquidity_ok: bool = True
+    liquidity_guard_ok: bool = True
+    spread_ok: bool = True
+    stake_ok: bool = True
+    price_ok: bool = True
+    book_ok: bool = True
+    details: Dict = field(default_factory=dict)
+
+class DutchingController:
+    def __init__(self, broker, pnl_engine, bus, simulation: bool = False):
+        self.broker = broker
+        self.pnl_engine = pnl_engine
+        self.bus = bus
+        self.simulation = simulation
+        self.auto_green_enabled = True
+        self.ai_enabled = True
+        self.preset_stake_pct = 1.0
+
+        self.ai_engine = AIPatternEngine()
+        self.wom_engine = get_wom_engine()
+        self.guardrail = get_guardrail()
+        self.market_validator = MarketValidator()
+        self.automation = AutomationEngine() 
+        self.safety_logger = get_safety_logger()
+        self.safe_mode = get_safe_mode_manager()
+
+        self.current_event_name = ""
+        self.current_market_name = ""
+
+    def submit_dutching(
+        self, market_id: str, market_type: str, selections: List[Dict], total_stake: float, 
+        mode: str = "BACK", ai_enabled: bool = False, ai_wom_enabled: bool = False, 
+        auto_green: bool = False, commission: float = 4.5, use_best_price: bool = False, 
+        stop_loss: Optional[float] = None, take_profit: Optional[float] = None, 
+        trailing: Optional[float] = None, dry_run: bool = False
+    ) -> Dict:
+        
+        if self.safe_mode.is_safe_mode_active:
+            raise RuntimeError("SAFE MODE attivo: dutching bloccato")
+
+        if ai_enabled or ai_wom_enabled:
+            tick_count = 10
+            wom_confidence = 0.5
+            volatility = 0.0
+
+            if selections and hasattr(self, 'wom_engine') and self.wom_engine:
+                first_sel_id = selections[0].get("selectionId")
+                if first_sel_id:
+                    wom_result = self.wom_engine.calculate_enhanced_wom(first_sel_id)
+                    if wom_result:
+                        tick_count = wom_result.tick_count
+                        wom_confidence = wom_result.confidence
+                        volatility = wom_result.volatility
+
+            guardrail_result = self.check_guardrail(
+                market_type=market_type,
+                tick_count=tick_count,
+                wom_confidence=wom_confidence,
+                volatility=volatility
+            )
+            if not guardrail_result["can_proceed"]:
+                return {
+                    "status": "GUARDRAIL_BLOCKED", "orders": [], "simulation": self.simulation,
+                    "mode": mode, "guardrail": guardrail_result, "dry_run": dry_run
+                }
+
+        if ai_enabled:
+            if not self.market_validator.is_dutching_ready(market_type): raise ValueError(f"Mercato {market_type} non compatibile")
+            ai_sides = self.ai_engine.decide(selections)
+            for sel in selections:
+                sel["side"] = ai_sides.get(sel["selectionId"], "BACK")
+                sel["effectiveType"] = ai_sides.get(sel["selectionId"], "BACK")
+            mode = "MIXED"
+
+        try:
+            if mode == "MIXED": results, profit, implied_prob = calculate_mixed_dutching(selections, total_stake, commission=commission)
+            else: results, profit, implied_prob = calculate_dutching_stakes(selections, total_stake, bet_type=mode, commission=commission)
+        except Exception as e:
+            self.safe_mode.report_error("DutchingCalcError", str(e), market_id)
+            raise
+
+        self.safe_mode.report_success()
+        preflight = self.preflight_check(selections, total_stake, mode)
+
+        for r in results:
+            stake = r.get("stake", 0)
+            side = r.get("side", r.get("effectiveType", mode))
+            if side == "BACK" and stake < MIN_STAKE: preflight.is_valid, preflight.stake_ok = False, False
+            if side == "LAY" and stake * (r.get("price", 1) - 1) < MIN_STAKE: preflight.is_valid, preflight.stake_ok = False, False
+
+        results_with_ladders = self._merge_ladders_to_results(results, selections)
+        liq_ok, liq_msgs = self._check_liquidity_guard(results_with_ladders, mode, market_id)
+        if not liq_ok:
+            preflight.liquidity_guard_ok, preflight.is_valid = False, False
+            preflight.errors.extend(liq_msgs)
+
+        if not preflight.is_valid and not dry_run:
+            return {"status": "PREFLIGHT_FAILED", "orders": [], "preflight": {"is_valid": False, "errors": preflight.errors}}
+
+        payload = {
+            "market_id": market_id, "market_type": market_type, "event_name": getattr(self, "current_event_name", "Event"),
+            "market_name": getattr(self, "current_market_name", "Market"), "results": results, "bet_type": mode,
+            "total_stake": total_stake, "use_best_price": use_best_price, "simulation_mode": self.simulation,
+            "auto_green": auto_green, "stop_loss": stop_loss, "take_profit": take_profit, "trailing": trailing
+        }
+
+        if dry_run:
+            placed = [{"betId": f"DRY_{r['selectionId']}", "selectionId": r["selectionId"], "side": r.get("side", mode), "price": r["price"], "size": r["stake"], "status": "DRY_RUN", "dry_run": True} for r in results]
+            return {"status": "DRY_RUN", "orders": placed}
+
+        self.bus.publish("REQ_PLACE_DUTCHING", payload)
+        return {"status": "SUBMITTED", "async": True}
+
+    def validate_selections(self, selections: List[Dict]) -> List[str]:
+        errors = []
+        if not selections: return ["Nessuna selezione"]
+        for sel in selections:
+            if not sel.get("price") or sel["price"] <= 1: errors.append(f"{sel.get('runnerName', 'Runner')}: prezzo non valido")
+            if not sel.get("selectionId"): errors.append(f"{sel.get('runnerName', 'Runner')}: selectionId mancante")
+        return errors
+
+    def set_simulation(self, enabled: bool):
+        self.simulation = enabled
+
+    def get_ai_analysis(self, selections: List[Dict]) -> List[Dict]:
+        return self.ai_engine.get_wom_analysis(selections)
+
+    def preflight_check(self, selections: List[Dict], total_stake: float, mode: str = "BACK") -> PreflightResult:
+        result = PreflightResult()
+        num_selections = len(selections)
+
+        if num_selections == 0:
+            result.is_valid = False
+            result.errors.append("Nessuna selezione")
+            return result
+
+        min_total = MIN_STAKE * num_selections
+        if total_stake < min_total:
+            result.is_valid = False
+            result.stake_ok = False
+            result.errors.append(f"Stake totale €{total_stake:.2f} insufficiente (min €{min_total:.2f})")
+
+        total_liquidity = 0.0
+        total_implied_prob = 0.0
+
+        for sel in selections:
+            runner_name = sel.get("runnerName", f"ID {sel.get('selectionId', '?')}")
+            price = sel.get("price", 0)
+            back_ladder = sel.get("back_ladder", [])
+            lay_ladder = sel.get("lay_ladder", [])
+
+            if price > 0 and price < MIN_PRICE:
+                result.price_ok = False
+                result.warnings.append(f"{runner_name}: quota {price:.2f} troppo bassa (min {MIN_PRICE:.2f})")
+
+            if price > 1:
+                total_implied_prob += 1.0 / price
+
+            back_liq = sum(p.get("size", 0) for p in back_ladder)
+            lay_liq = sum(p.get("size", 0) for p in lay_ladder)
+            side = sel.get("side", sel.get("effectiveType", mode))
+            relevant_liq = back_liq if side == "BACK" else lay_liq
+            total_liquidity += relevant_liq
+
+            if relevant_liq < MIN_LIQUIDITY:
+                result.liquidity_ok = False
+                result.warnings.append(f"{runner_name}: liquidità {side} bassa (€{relevant_liq:.0f})")
+
+            if back_ladder and lay_ladder:
+                best_back = back_ladder[0].get("price", 0)
+                best_lay = lay_ladder[0].get("price", 0)
+                if best_back > 0 and best_lay > 0:
+                    spread = best_lay - best_back
+                    tick_size = 0.02 if best_back < 2 else 0.05 if best_back < 4 else 0.1
+                    spread_ticks = spread / tick_size if tick_size > 0 else 0
+                    if spread_ticks > MAX_SPREAD_TICKS:
+                        result.spread_ok = False
+                        result.warnings.append(f"{runner_name}: spread largo ({spread_ticks:.0f} tick)")
+                    result.details[sel.get("selectionId")] = {"back_liq": back_liq, "lay_liq": lay_liq, "best_back": best_back, "best_lay": best_lay, "spread_ticks": spread_ticks}
+
+        if total_liquidity > 0:
+            stake_pct = total_stake / total_liquidity
+            if stake_pct > MAX_STAKE_PCT:
+                result.warnings.append(f"Stake alto rispetto a liquidità ({stake_pct * 100:.0f}% > {MAX_STAKE_PCT * 100:.0f}%)")
+
+        book_pct = total_implied_prob * 100
+        if book_pct > BOOK_BLOCK:
+            result.book_ok, result.is_valid = False, False
+            result.errors.append(f"Book {book_pct:.1f}% troppo alto (blocco a {BOOK_BLOCK:.0f}%)")
+        elif book_pct > BOOK_WARNING:
+            result.book_ok = False
+            result.warnings.append(f"Book {book_pct:.1f}% elevato (warning a {BOOK_WARNING:.0f}%)")
+
+        result.details["book_pct"] = book_pct
+        if result.errors: result.is_valid = False
+        return result
+
+    def _check_liquidity_guard(self, selections: List[Dict], mode: str = "BACK", market_id: str = "") -> Tuple[bool, List[str]]:
+        if not LIQUIDITY_GUARD_ENABLED: return True, []
+        messages = []
+        for sel in selections:
+            selection_id = sel.get("selectionId", 0)
+            runner_name = sel.get("runnerName", f"ID {selection_id}")
+            stake = sel.get("stake", 0)
+            price = sel.get("price", 1)
+            side = sel.get("side", sel.get("effectiveType", mode))
+            back_liq = sum(p.get("size", 0) for p in sel.get("back_ladder", []))
+            lay_liq = sum(p.get("size", 0) for p in sel.get("lay_ladder", []))
+
+            if side == "BACK":
+                available, required = back_liq, stake * LIQUIDITY_MULTIPLIER
+            else:
+                liability = stake * (price - 1) if price > 1 else stake
+                available, required = lay_liq, liability * LIQUIDITY_MULTIPLIER
+
+            if available < MIN_LIQUIDITY_ABSOLUTE:
+                return False, [f"{runner_name}: liquidità troppo bassa (€{available:.0f} < €{MIN_LIQUIDITY_ABSOLUTE:.0f})"]
+            if available < required:
+                messages.append(f"{runner_name}: liquidità insufficiente (€{available:.0f} < €{required:.0f} richiesti)")
+                if not LIQUIDITY_WARNING_ONLY: return False, messages
+        return len(messages) == 0, messages
+
+    def _merge_ladders_to_results(self, results: List[Dict], selections: List[Dict]) -> List[Dict]:
+        sel_by_id = {s.get("selectionId"): s for s in selections}
+        merged = []
+        for r in results:
+            original = sel_by_id.get(r.get("selectionId"), {})
+            merged_item = dict(r)
+            merged_item["back_ladder"] = original.get("back_ladder", [])
+            merged_item["lay_ladder"] = original.get("lay_ladder", [])
+            merged.append(merged_item)
+        return merged
+
+    def record_market_tick(self, selection_id: int, back_price: float, back_volume: float, lay_price: float, lay_volume: float):
+        self.wom_engine.record_tick(selection_id, back_price, back_volume, lay_price, lay_volume)
+
+    def get_wom_analysis(self, selections: List[Dict], use_historical: bool = True) -> List[Dict]:
+        if use_historical: return self.ai_engine.get_enhanced_analysis(selections, self.wom_engine)
+        return self.ai_engine.get_wom_analysis(selections)
+
+    def get_wom_stats(self) -> Dict:
+        return self.wom_engine.get_stats()
+
+    def check_guardrail(self, market_type: str, tick_count: int = 10, wom_confidence: float = 0.5, volatility: float = 0.0) -> Dict:
+        return self.guardrail.full_check(market_type=market_type, tick_count=tick_count, wom_confidence=wom_confidence, volatility=volatility)
+
+    def check_auto_green_ready(self, bet_id: str):
+        return self.guardrail.check_auto_green_grace(bet_id)
+
+    def register_for_auto_green(self, bet_id: str):
+        self.guardrail.register_order_for_auto_green(bet_id)
+
+    def get_time_window_signal(self, selection_id: int) -> Dict:
+        return self.wom_engine.get_time_window_signal(selection_id)
+
+    def get_guardrail_status(self) -> Dict:
+        return self.guardrail.get_status()
+EOF
+
+CREA_FILE ai/ai_guardrail.py
+"""
+AI Guardrail - Protezione automatica per trading AI
+"""
+import time
+import logging
+import threading
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+class GuardrailLevel(Enum):
+    NORMAL = "normal"
+    WARNING = "warning"
+    BLOCKED = "blocked"
+
+class BlockReason(Enum):
+    MARKET_NOT_READY = "market_not_ready"
+    HIGH_VOLATILITY = "high_volatility"
+    OVERTRADE_PROTECTION = "overtrade_protection"
+    CONSECUTIVE_ERRORS = "consecutive_errors"
+    INSUFFICIENT_DATA = "insufficient_data"
+    GRACE_PERIOD = "grace_period"
+    MANUAL_BLOCK = "manual_block"
+
+@dataclass
+class GuardrailConfig:
+    auto_green_grace_sec: float = 3.0
+    min_tick_count: int = 10
+    max_volatility: float = 0.8
+    max_orders_per_minute: int = 10
+    consecutive_error_limit: int = 3
+    cooldown_after_error_sec: float = 30.0
+    min_wom_confidence: float = 0.3
+    dutching_ready_market_types: Set[str] = field(default_factory=lambda: {
+        "MATCH_ODDS", "WINNER", "OVER_UNDER_25", "OVER_UNDER_35",
+        "CORRECT_SCORE", "HALF_TIME", "BOTH_TEAMS_TO_SCORE"
+    })
+
+@dataclass
+class OrderRecord:
+    timestamp: float
+    market_id: str
+    selection_id: int
+    side: str
+    stake: float
+    success: bool = True
+
+@dataclass
+class GuardrailState:
+    level: GuardrailLevel = GuardrailLevel.NORMAL
+    block_reasons: List[BlockReason] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    last_order_time: float = 0.0
+    consecutive_errors: int = 0
+    blocked_until: float = 0.0
+    order_history: List[OrderRecord] = field(default_factory=list)
+
+class AIGuardrail:
+    def __init__(self, config: Optional[GuardrailConfig] = None):
+        self.config = config or GuardrailConfig()
+        self.state = GuardrailState()
+        self._lock = threading.RLock()
+        self._pending_auto_green: Dict[str, float] = {}
+
+    def check_market_ready(self, market_type: str) -> tuple[bool, Optional[BlockReason]]:
+        if market_type in self.config.dutching_ready_market_types: return True, None
+        return False, BlockReason.MARKET_NOT_READY
+
+    def check_wom_data(self, tick_count: int, confidence: float) -> tuple[bool, Optional[BlockReason]]:
+        if tick_count < self.config.min_tick_count: return False, BlockReason.INSUFFICIENT_DATA
+        if confidence < self.config.min_wom_confidence: return False, BlockReason.INSUFFICIENT_DATA
+        return True, None
+
+    def check_volatility(self, volatility: float) -> tuple[bool, Optional[BlockReason]]:
+        if volatility > self.config.max_volatility: return False, BlockReason.HIGH_VOLATILITY
+        return True, None
+
+    def check_auto_green_grace(self, bet_id: str) -> tuple[bool, float]:
+        with self._lock:
+            if bet_id not in self._pending_auto_green: return True, 0.0
+            elapsed = time.time() - self._pending_auto_green[bet_id]
+            remaining = self.config.auto_green_grace_sec - elapsed
+            if remaining <= 0:
+                del self._pending_auto_green[bet_id]
+                return True, 0.0
+            return False, remaining
+
+    def register_order_for_auto_green(self, bet_id: str, placed_at: Optional[float] = None):
+        with self._lock: self._pending_auto_green[bet_id] = placed_at or time.time()
+
+    def check_order_rate(self) -> tuple[bool, Optional[BlockReason]]:
+        with self._lock:
+            recent_orders = [o for o in self.state.order_history if o.timestamp > time.time() - 60.0]
+            if len(recent_orders) >= self.config.max_orders_per_minute: return False, BlockReason.OVERTRADE_PROTECTION
+            return True, None
+
+    def check_error_state(self) -> tuple[bool, Optional[BlockReason]]:
+        with self._lock:
+            if self.state.consecutive_errors >= self.config.consecutive_error_limit:
+                if time.time() < self.state.blocked_until: return False, BlockReason.CONSECUTIVE_ERRORS
+                else:
+                    self.state.consecutive_errors = 0
+                    self.state.blocked_until = 0.0
+            return True, None
+
+    def record_order(self, market_id: str, selection_id: int, side: str, stake: float, success: bool = True):
+        with self._lock:
+            self.state.order_history.append(OrderRecord(time.time(), market_id, selection_id, side, stake, success))
+            if len(self.state.order_history) > 100: self.state.order_history = self.state.order_history[-100:]
+            if success: self.state.consecutive_errors = 0
+            else:
+                self.state.consecutive_errors += 1
+                if self.state.consecutive_errors >= self.config.consecutive_error_limit:
+                    self.state.blocked_until = time.time() + self.config.cooldown_after_error_sec
+
+    def full_check(self, market_type: str, tick_count: int = 0, wom_confidence: float = 0.5, volatility: float = 0.0) -> Dict:
+        with self._lock:
+            reasons = []
+            warnings = []
+
+            ok, reason = self.check_market_ready(market_type)
+            if not ok: reasons.append(reason)
+            ok, reason = self.check_wom_data(tick_count, wom_confidence)
+            if not ok: reasons.append(reason)
+
+            # FIX: VOLATILITA DIVENTA HARD BLOCK
+            ok, reason = self.check_volatility(volatility)
+            if not ok: reasons.append(reason)
+
+            ok, reason = self.check_order_rate()
+            if not ok: reasons.append(reason)
+            ok, reason = self.check_error_state()
+            if not ok: reasons.append(reason)
+
+            if reasons:
+                level, can_proceed = GuardrailLevel.BLOCKED, False
+            elif warnings:
+                level, can_proceed = GuardrailLevel.WARNING, True
+            else:
+                level, can_proceed = GuardrailLevel.NORMAL, True
+
+            self.state.level = level
+            self.state.block_reasons = reasons
+            self.state.warnings = warnings
+
+            return {
+                "can_proceed": can_proceed, "level": level.value,
+                "reasons": [r.value for r in reasons], "warnings": warnings,
+                "blocked_until": self.state.blocked_until if self.state.blocked_until > time.time() else 0
+            }
+
+    def get_auto_green_delay(self, bet_id: str) -> float:
+        can_green, remaining = self.check_auto_green_grace(bet_id)
+        return remaining if not can_green else 0.0
+
+    def reset(self):
+        with self._lock:
+            self.state = GuardrailState()
+            self._pending_auto_green.clear()
+
+    def get_status(self) -> Dict:
+        with self._lock:
+            now = time.time()
+            recent_orders = [o for o in self.state.order_history if o.timestamp > now - 60.0]
+            return {
+                "level": self.state.level.value, "consecutive_errors": self.state.consecutive_errors,
+                "orders_last_minute": len(recent_orders), "pending_auto_green": len(self._pending_auto_green),
+                "blocked_until": self.state.blocked_until if self.state.blocked_until > now else 0,
+                "warnings": self.state.warnings, "block_reasons": [r.value for r in self.state.block_reasons]
+            }
+
+_global_guardrail: Optional[AIGuardrail] = None
+def get_guardrail() -> AIGuardrail:
+    global _global_guardrail
+    if _global_guardrail is None: _global_guardrail = AIGuardrail()
+    return _global_guardrail
+EOF
+
+CREA_FILE ai/ai_pattern_engine.py
+"""
+AIPatternEngine - Analisi Weight of Money per auto-entry BACK/LAY
+"""
+import logging
+from typing import Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai.wom_engine import WoMEngine
+
+logger = logging.getLogger(__name__)
+
+class AIPatternEngine:
+    def __init__(self, wom_back_threshold: float = 0.55, wom_lay_threshold: float = 0.45):
+        self.wom_back_threshold = wom_back_threshold
+        self.wom_lay_threshold = wom_lay_threshold
+
+    def calculate_wom(self, selection: Dict) -> float:
+        back_vol = sum(p.get("size", 0) for p in selection.get("back_ladder", []))
+        lay_vol = sum(p.get("size", 0) for p in selection.get("lay_ladder", []))
+        total = back_vol + lay_vol
+        return back_vol / total if total > 0 else 0.5
+
+    def decide(self, selections: List[Dict]) -> Dict[int, str]:
+        decisions = {}
+        wom_values = {}
+        MIN_REQUIRED_EDGE = 0.04 
+
+        for sel in selections:
+            sel_id = sel.get("selectionId")
+            if not sel_id: continue
+            wom = self.calculate_wom(sel)
+            wom_values[sel_id] = wom
+            if wom > self.wom_back_threshold: decisions[sel_id] = "BACK"
+            elif wom < self.wom_lay_threshold: decisions[sel_id] = "LAY"
+            else: decisions[sel_id] = "BACK"
+
+        sides = set(decisions.values())
+        if len(sides) == 1 and len(selections) > 1:
+            avg_wom = sum(wom_values.values()) / len(wom_values) if wom_values else 0.5
+            best_candidate = None
+            best_distance = -1
+
+            for sel_id, wom in wom_values.items():
+                distance = abs(wom - avg_wom)
+                if distance > best_distance:
+                    best_distance = distance
+                    best_candidate = sel_id
+
+            if best_candidate is None and wom_values: best_candidate = list(wom_values.keys())[0]
+            if best_candidate:
+                weakest_wom = wom_values[best_candidate]
+                if abs(weakest_wom - 0.5) <= MIN_REQUIRED_EDGE:
+                    decisions[best_candidate] = "LAY" if decisions[best_candidate] == "BACK" else "BACK"
+
+        return decisions
+
+    def get_wom_analysis(self, selections: List[Dict]) -> List[Dict]:
+        analysis = []
+        for sel in selections:
+            sel_id = sel.get("selectionId")
+            if not sel_id: continue
+            wom = self.calculate_wom(sel)
+            side = "BACK" if wom > self.wom_back_threshold else "LAY" if wom < self.wom_lay_threshold else "NEUTRAL"
+            analysis.append({"selectionId": sel_id, "runnerName": sel.get("runnerName", ""), "wom": round(wom, 3), "suggested_side": side, "confidence": round(abs(wom - 0.5) * 2, 2)})
+        return analysis
+
+    def get_enhanced_analysis(self, selections: List[Dict], wom_engine: Optional["WoMEngine"] = None) -> List[Dict]:
+        instant_analysis = self.get_wom_analysis(selections)
+        if wom_engine is None:
+            for item in instant_analysis: item["edge_score"], item["has_history"] = (item["wom"] - 0.5) * 2, False
+            return instant_analysis
+
+        enhanced = []
+        for idx, sel in enumerate(selections):
+            sel_id = sel.get("selectionId")
+            instant = instant_analysis[idx] if idx < len(instant_analysis) else {}
+            hist_result = wom_engine.calculate_wom(sel_id) if sel_id else None
+
+            if hist_result:
+                combined_wom = instant.get("wom", 0.5) * 0.4 + hist_result.wom * 0.6
+                side = "BACK" if combined_wom > self.wom_back_threshold else "LAY" if combined_wom < self.wom_lay_threshold else ("BACK" if hist_result.wom_trend > 0 else "LAY")
+                enhanced.append({
+                    "selectionId": sel_id, "runnerName": sel.get("runnerName", ""),
+                    "wom_instant": round(instant.get("wom", 0.5), 3), "wom_historical": round(hist_result.wom, 3),
+                    "wom_combined": round(combined_wom, 3), "wom_trend": round(hist_result.wom_trend, 3),
+                    "edge_score": round(hist_result.edge_score * 0.7 + (instant.get("wom", 0.5) - 0.5) * 2 * 0.3, 3),
+                    "suggested_side": side, "confidence": round(max(instant.get("confidence", 0), hist_result.confidence), 2),
+                    "has_history": True, "tick_count": hist_result.tick_count
+                })
+            else:
+                instant["edge_score"], instant["has_history"] = round((instant.get("wom", 0.5) - 0.5) * 2, 3), False
+                enhanced.append(instant)
+        return enhanced
 EOF
 
 FIX_WHITESPACE
-
