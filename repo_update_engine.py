@@ -1,5 +1,6 @@
 import datetime
 import os
+import shutil
 import subprocess
 import zipfile
 
@@ -13,7 +14,6 @@ LOG_FILE = os.path.join(LOG_DIR, "operations.log")
 AUTO_BACKUP_ALWAYS = True
 KEEP_LAST_BACKUPS = 3
 
-# Modalità test sicura: esegue solo i test del DevOps Engine se presenti
 SAFE_ENGINE_TEST_ONLY = True
 ENGINE_TEST_CANDIDATES = [
     "tests/test_devops_engine_only.py",
@@ -206,9 +206,101 @@ def append_file(path, content):
     log(f"[MODIFY] append {path}")
 
 
+def delete_file(path):
+    if not os.path.exists(path):
+        log(f"[SKIP] file not found {path}")
+        return
+
+    os.remove(path)
+    log(f"[DELETE] file {path}")
+
+
+def move_file(src, dst):
+    if not os.path.exists(src):
+        log(f"[SKIP] source file not found {src}")
+        return
+
+    ensure_dir(os.path.dirname(dst))
+    shutil.move(src, dst)
+    log(f"[MOVE] file {src} -> {dst}")
+
+
+def rename_file(src, dst):
+    if not os.path.exists(src):
+        log(f"[SKIP] source file not found {src}")
+        return
+
+    ensure_dir(os.path.dirname(dst))
+    os.rename(src, dst)
+    log(f"[RENAME] file {src} -> {dst}")
+
+
+def replace_text(path, old, new):
+    if not os.path.exists(path):
+        log(f"[SKIP] replace target missing {path}")
+        return
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if old not in content:
+        log(f"[SKIP] text not found in {path}")
+        return
+
+    content = content.replace(old, new)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    log(f"[REPLACE] text in {path}")
+
+
+def insert_line(path, line_number, text):
+    if not os.path.exists(path):
+        log(f"[SKIP] insert target missing {path}")
+        return
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    line_number = int(line_number)
+    index = max(0, min(line_number - 1, len(lines)))
+
+    if index < len(lines) and lines[index].rstrip("\n") == text:
+        log(f"[SKIP] identical line already present in {path}:{line_number}")
+        return
+
+    lines.insert(index, text + "\n")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    log(f"[INSERT] line {line_number} in {path}")
+
+
 # ------------------------
 # CLEAN WHITESPACE
 # ------------------------
+
+
+def normalize_file_whitespace(path):
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    new_lines = []
+
+    for line in lines:
+        line = line.rstrip()
+        line = line.replace("\t", "    ")
+        new_lines.append(line + "\n")
+
+    while new_lines and new_lines[-1].strip() == "":
+        new_lines.pop()
+
+    new_lines.append("\n")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
 
 
 def fix_whitespace():
@@ -223,30 +315,11 @@ def fix_whitespace():
             continue
 
         for file in files:
-            if not file.endswith(
-                (".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")
-            ):
+            if not file.endswith((".py", ".txt", ".md", ".yml", ".yaml", ".json", ".ini")):
                 continue
 
             path = os.path.join(root, file)
-
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-
-            new_lines = []
-
-            for line in lines:
-                line = line.rstrip()
-                line = line.replace("\t", "    ")
-                new_lines.append(line + "\n")
-
-            while new_lines and new_lines[-1].strip() == "":
-                new_lines.pop()
-
-            new_lines.append("\n")
-
-            with open(path, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
+            normalize_file_whitespace(path)
 
     log("Whitespace fixed")
 
@@ -257,16 +330,28 @@ def fix_whitespace():
 
 
 def run_black():
+    if SAFE_ENGINE_TEST_ONLY:
+        log("Skipping Black (safe engine mode)")
+        return
+
     log("Running Black")
     subprocess.run(["black", "."], check=False)
 
 
 def run_isort():
+    if SAFE_ENGINE_TEST_ONLY:
+        log("Skipping isort (safe engine mode)")
+        return
+
     log("Running isort")
     subprocess.run(["isort", "."], check=False)
 
 
 def run_ruff():
+    if SAFE_ENGINE_TEST_ONLY:
+        log("Skipping ruff (safe engine mode)")
+        return
+
     log("Running ruff")
     subprocess.run(["ruff", "check", ".", "--fix"], check=False)
 
@@ -280,9 +365,7 @@ def resolve_pytest_targets():
             log(f"Safe engine test mode active -> using {path}")
             return [path]
 
-    log(
-        "Safe engine test mode active -> no dedicated engine test found, running full suite"
-    )
+    log("Safe engine test mode active -> no dedicated engine test found, running full suite")
     return []
 
 
@@ -292,13 +375,18 @@ def run_pytest():
     targets = resolve_pytest_targets()
 
     cmd = ["pytest", "-v"]
+
     if targets:
         cmd.extend(targets)
+
+    env = os.environ.copy()
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
 
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
+        env=env,
     )
 
     print(result.stdout, flush=True)
@@ -390,6 +478,37 @@ def process():
             if i < len(lines) and lines[i].strip() == "EOF":
                 i += 1
 
+            continue
+
+        if cmd == "DELETE_FILE":
+            delete_file(parts[1])
+            i += 1
+            continue
+
+        if cmd == "MOVE_FILE":
+            move_file(parts[1], parts[2])
+            i += 1
+            continue
+
+        if cmd == "RENAME_FILE":
+            rename_file(parts[1], parts[2])
+            i += 1
+            continue
+
+        if cmd == "REPLACE":
+            path = parts[1]
+            old = parts[2]
+            new = " ".join(parts[3:])
+            replace_text(path, old, new)
+            i += 1
+            continue
+
+        if cmd == "INSERT_LINE":
+            path = parts[1]
+            line_number = parts[2]
+            text = " ".join(parts[3:])
+            insert_line(path, line_number, text)
+            i += 1
             continue
 
         if cmd == "FIX_WHITESPACE":
