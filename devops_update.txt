@@ -1,1 +1,20 @@
+CREA_CARTELLA devops_engine_test
 
+CREA_FILE devops_engine_test/test_engine.txt
+DevOps Engine Test
+Repository automation active
+EOF
+
+APPEND devops_engine_test/test_engine.txt
+Second run append test
+EOF
+
+CREA_FILE tests/test_devops_engine.py
+def test_devops_engine_file():
+    with open("devops_engine_test/test_engine.txt") as f:
+        content = f.read()
+
+    assert "DevOps Engine Test" in content
+EOF
+
+FIX_WHITESPACE
