@@ -436,9 +436,9 @@ class MonitoringModule:
                 ):
                     continue
 
-            # Invia comando al TradingEngine
+            # Invia richiesta validata al RiskMiddleware (FIX TIER-1: REQ_EXECUTE_CASHOUT)
             self.bus.publish(
-                "CMD_EXECUTE_CASHOUT",
+                "REQ_EXECUTE_CASHOUT",
                 {
                     "market_id": self.current_market["marketId"],
                     "selection_id": pos["selection_id"],

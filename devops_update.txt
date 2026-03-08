@@ -1299,3 +1299,4 @@ class BettingModule:
 EOF
 
 FIX_WHITESPACE
+
