@@ -176,3 +176,4 @@ def get_guardrail() -> AIGuardrail:
     global _global_guardrail
     if _global_guardrail is None: _global_guardrail = AIGuardrail()
     return _global_guardrail
+

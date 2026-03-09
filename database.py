@@ -697,3 +697,4 @@ class Database:
                 self._local.conn = None
             except Exception:
                 pass
+

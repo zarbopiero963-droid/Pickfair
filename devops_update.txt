@@ -400,3 +400,4 @@ def _refresh_telegram_signals_tree(self):
             )
 
 EOF
+
