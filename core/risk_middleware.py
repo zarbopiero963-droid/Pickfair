@@ -19,7 +19,7 @@ logger = logging.getLogger("RiskMiddleware")
 class RiskMiddleware:
     def __init__(self, event_bus, guardrail=None, wom_engine=None):
         self.bus = event_bus
-        
+
         # In Modalità A (OMS Puro), non usiamo attivamente l'AI per bloccare.
         # Li teniamo nell'init solo per non rompere la signature di chiamata in main.py
         self.guardrail = guardrail
@@ -41,17 +41,17 @@ class RiskMiddleware:
             safe_payload = {k: v for k, v in payload.items() if isinstance(v, (str, int, float, bool, list, dict))}
             payload_str = json.dumps(safe_payload, sort_keys=True)
             req_hash = hashlib.sha256(payload_str.encode()).hexdigest()
-            
+
             now = time.time()
             if req_hash in self.recent_requests:
                 if now - self.recent_requests[req_hash] < self.DUPLICATE_WINDOW:
                     return True
-            
+
             self.recent_requests[req_hash] = now
             # Cleanup hash vecchi per non saturare la memoria
             self.recent_requests = {k: v for k, v in self.recent_requests.items() if now - v < 10.0}
             return False
-            
+
         except Exception as e:
             logger.error(f"[RiskGate] Errore calcolo hash: {e}")
             return False # Se fallisce l'hash, facciamo passare per non bloccare il sistema
@@ -109,3 +109,4 @@ class RiskMiddleware:
         # Il payload del cashout è costruito dal monitoring module, lo passiamo in modo trasparente
         logger.info(f"[RiskGate] Forwarding REQ_EXECUTE_CASHOUT -> CMD_EXECUTE_CASHOUT")
         self.bus.publish("CMD_EXECUTE_CASHOUT", payload)
+

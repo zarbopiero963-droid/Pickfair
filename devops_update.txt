@@ -386,3 +386,4 @@ class MonitoringModule:
             f"L'OMS ha riscontrato un errore:\n{error}"
         )
 EOF
+
