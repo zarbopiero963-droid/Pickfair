@@ -2,9 +2,12 @@
 Betfair Dutching - Tutti i Mercati
 Main application orchestrator.
 """
+import logging
 import threading
 import time
+
 import customtkinter as ctk
+
 from ui.tabs.telegram_tab_ui import TelegramTabUI
 from app_modules.betting_module import BettingModule
 from app_modules.monitoring_module import MonitoringModule
@@ -29,9 +32,18 @@ APP_VERSION = "3.19.1"
 WINDOW_WIDTH = 1400
 WINDOW_HEIGHT = 900
 
-class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, SimulationModule, MonitoringModule):
+
+class PickfairApp(
+    UIModule,
+    TelegramModule,
+    StreamingModule,
+    BettingModule,
+    SimulationModule,
+    MonitoringModule,
+):
     def __init__(self):
         from theme import configure_customtkinter
+
         configure_customtkinter()
         self.root = ctk.CTk()
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
@@ -56,14 +68,26 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
         except:
             pass
 
+        self.logger = logging.getLogger("PickfairApp")
+
         self.db = Database()
         print(f"[DEBUG] Database path: {self.db.db_path}")
 
         self.bus = EventBus()
+
+        # --- SAFE MODE GLOBAL KILL SWITCH BRIDGE ---
+        self.safe_mode_active = False
+        self.bus.subscribe("SAFE_MODE_TRIGGER", self._on_safe_mode_trigger)
+
         if hasattr(self, "_handle_telegram_signal"):
             self.bus.subscribe("TELEGRAM_SIGNAL", self._handle_telegram_signal)
 
-        self.bus.subscribe("TELEGRAM_STATUS", lambda data: self._update_telegram_status(data["status"], data["message"]) if hasattr(self, "_update_telegram_status") else None)
+        self.bus.subscribe(
+            "TELEGRAM_STATUS",
+            lambda data: self._update_telegram_status(data["status"], data["message"])
+            if hasattr(self, "_update_telegram_status")
+            else None,
+        )
         self.bus.subscribe("MARKET_TICK", self._buffer_market_tick)
 
         self.client = None
@@ -105,29 +129,64 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
         from core.trading_engine import TradingEngine
 
         self.risk_middleware = RiskMiddleware(self.bus, self.guardrail, self.wom_engine)
-        self.trading_engine = TradingEngine(self.bus, self.db, lambda: self.client, self.executor)
+        self.trading_engine = TradingEngine(
+            self.bus, self.db, lambda: self.client, self.executor
+        )
 
         def _feed_wom(payload):
-            if not hasattr(self, 'wom_engine') or not self.wom_engine: return
+            if not hasattr(self, "wom_engine") or not self.wom_engine:
+                return
             for r in payload.get("runners_data", []):
                 sel_id = r.get("selectionId")
                 bp = r.get("backPrices", [])
                 lp = r.get("layPrices", [])
                 bp_price = bp[0][0] if bp else 0
-                bp_vol = bp[0][1] if bp and len(bp[0])>1 else 0
+                bp_vol = bp[0][1] if bp and len(bp[0]) > 1 else 0
                 lp_price = lp[0][0] if lp else 0
-                lp_vol = lp[0][1] if lp and len(lp[0])>1 else 0
-                if sel_id and (bp_price>0 or lp_price>0):
-                    self.wom_engine.record_tick(sel_id, bp_price, bp_vol, lp_price, lp_vol)
+                lp_vol = lp[0][1] if lp and len(lp[0]) > 1 else 0
+                if sel_id and (bp_price > 0 or lp_price > 0):
+                    self.wom_engine.record_tick(
+                        sel_id, bp_price, bp_vol, lp_price, lp_vol
+                    )
 
         self.bus.subscribe("MARKET_TICK", _feed_wom)
 
-        self.bus.subscribe("QUICK_BET_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, "_on_engine_success") else None)
-        self.bus.subscribe("QUICK_BET_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, "_on_engine_error") else None)
-        self.bus.subscribe("DUTCHING_SUCCESS", lambda d: self.uiq.post(self._on_engine_success, d) if hasattr(self, "_on_engine_success") else None)
-        self.bus.subscribe("DUTCHING_FAILED", lambda e: self.uiq.post(self._on_engine_error, e) if hasattr(self, "_on_engine_error") else None)
-        self.bus.subscribe("CASHOUT_SUCCESS", lambda d: self.uiq.post(self._on_cashout_success, d) if hasattr(self, "_on_cashout_success") else None)
-        self.bus.subscribe("CASHOUT_FAILED", lambda e: self.uiq.post(self._on_cashout_failed, e) if hasattr(self, "_on_cashout_failed") else None)
+        self.bus.subscribe(
+            "QUICK_BET_SUCCESS",
+            lambda d: self.uiq.post(self._on_engine_success, d)
+            if hasattr(self, "_on_engine_success")
+            else None,
+        )
+        self.bus.subscribe(
+            "QUICK_BET_FAILED",
+            lambda e: self.uiq.post(self._on_engine_error, e)
+            if hasattr(self, "_on_engine_error")
+            else None,
+        )
+        self.bus.subscribe(
+            "DUTCHING_SUCCESS",
+            lambda d: self.uiq.post(self._on_engine_success, d)
+            if hasattr(self, "_on_engine_success")
+            else None,
+        )
+        self.bus.subscribe(
+            "DUTCHING_FAILED",
+            lambda e: self.uiq.post(self._on_engine_error, e)
+            if hasattr(self, "_on_engine_error")
+            else None,
+        )
+        self.bus.subscribe(
+            "CASHOUT_SUCCESS",
+            lambda d: self.uiq.post(self._on_cashout_success, d)
+            if hasattr(self, "_on_cashout_success")
+            else None,
+        )
+        self.bus.subscribe(
+            "CASHOUT_FAILED",
+            lambda e: self.uiq.post(self._on_cashout_failed, e)
+            if hasattr(self, "_on_cashout_failed")
+            else None,
+        )
 
         if not hasattr(self, "last_ui_tick"):
             self.last_ui_tick = time.time()
@@ -151,6 +210,7 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
             self.shutdown_mgr.register("database", self.db.close, priority=4)
 
         from plugin_manager import PluginManager
+
         self.plugin_manager = PluginManager(self)
         self.plugin_tabs = {}
 
@@ -166,16 +226,90 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
         self._load_settings()
         self._configure_styles()
 
-        if hasattr(self, "_start_booking_monitor"): self._start_booking_monitor()
-        if hasattr(self, "_start_auto_cashout_monitor"): self._start_auto_cashout_monitor()
+        if hasattr(self, "_start_booking_monitor"):
+            self._start_booking_monitor()
+        if hasattr(self, "_start_auto_cashout_monitor"):
+            self._start_auto_cashout_monitor()
         self._check_for_updates_on_startup()
 
     def _create_telegram_tab(self):
         self.telegram_tab_ui = TelegramTabUI(self.telegram_tab, self)
 
+    def _set_safe_mode(self, enabled, reason=None, source="SYSTEM"):
+        enabled = bool(enabled)
+        previous = getattr(self, "safe_mode_active", False)
+        self.safe_mode_active = enabled
+
+        payload = {
+            "enabled": enabled,
+            "reason": reason or "",
+            "source": source,
+            "ts": time.time(),
+        }
+
+        self.logger.warning(
+            "SAFE MODE %s source=%s reason=%s",
+            "ON" if enabled else "OFF",
+            source,
+            reason or "",
+        )
+
+        self.bus.publish("STATE_UPDATE_SAFE_MODE", payload)
+
+        if previous != enabled:
+            self.uiq.post(self._apply_safe_mode_ui, payload)
+
+    def _on_safe_mode_trigger(self, data):
+        data = data or {}
+        reason = data.get("reason") or data.get("message") or "Trigger ricevuto"
+        source = data.get("source") or "TRADING_ENGINE"
+        self._set_safe_mode(True, reason=reason, source=source)
+
+    def _apply_safe_mode_ui(self, payload):
+        enabled = payload.get("enabled", False)
+        reason = payload.get("reason", "")
+
+        try:
+            status_text = "SAFE MODE ATTIVO"
+            if reason:
+                status_text = f"{status_text} - {reason}"
+
+            if hasattr(self, "status_label") and self.status_label.winfo_exists():
+                self.status_label.configure(
+                    text=status_text if enabled else "Safe Mode disattivato",
+                    text_color=COLORS["warning"] if enabled else COLORS["success"],
+                )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "place_btn") and self.place_btn.winfo_exists():
+                self.place_btn.configure(state=ctk.DISABLED if enabled else ctk.NORMAL)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "dutch_modal_btn") and self.dutch_modal_btn.winfo_exists():
+                self.dutch_modal_btn.configure(
+                    state=ctk.DISABLED if enabled else ctk.NORMAL
+                )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "connect_btn") and self.connect_btn.winfo_exists():
+                self.connect_btn.configure(
+                    fg_color=COLORS["warning"] if enabled else COLORS["button_primary"]
+                )
+        except Exception:
+            pass
+
     def _buffer_market_tick(self, payload):
         market_id = payload["market_id"]
-        if not getattr(self, "current_market", None) or market_id != self.current_market["marketId"]:
+        if (
+            not getattr(self, "current_market", None)
+            or market_id != self.current_market["marketId"]
+        ):
             return
 
         with self._buffer_lock:
@@ -192,10 +326,12 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
             self._market_update_buffer.clear()
             self._pending_tree_update = False
 
-        if not getattr(self, "current_market", None): return
+        if not getattr(self, "current_market", None):
+            return
         market_id = self.current_market["marketId"]
         runners_data = snapshot.get(market_id)
-        if not runners_data: return
+        if not runners_data:
+            return
 
         def update_ui():
             recalc_needed = False
@@ -203,32 +339,48 @@ class PickfairApp(UIModule, TelegramModule, StreamingModule, BettingModule, Simu
                 selection_id = str(runner_update["selectionId"])
                 try:
                     item = self.runners_tree.item(selection_id)
-                    if not item: continue
+                    if not item:
+                        continue
                     current_values = list(item["values"])
                     back_prices = runner_update.get("backPrices", [])
                     lay_prices = runner_update.get("layPrices", [])
 
                     if back_prices:
                         current_values[2] = f"{back_prices[0][0]:.2f}"
-                        current_values[3] = f"{back_prices[0][1]:.0f}" if len(back_prices[0]) > 1 else "-"
+                        current_values[3] = (
+                            f"{back_prices[0][1]:.0f}"
+                            if len(back_prices[0]) > 1
+                            else "-"
+                        )
                     if lay_prices:
                         current_values[4] = f"{lay_prices[0][0]:.2f}"
-                        current_values[5] = f"{lay_prices[0][1]:.0f}" if len(lay_prices[0]) > 1 else "-"
+                        current_values[5] = (
+                            f"{lay_prices[0][1]:.0f}"
+                            if len(lay_prices[0]) > 1
+                            else "-"
+                        )
 
                     self.runners_tree.item(selection_id, values=current_values)
 
                     if selection_id in self.selected_runners:
                         recalc_needed = True
-                        if back_prices: self.selected_runners[selection_id]["backPrice"] = back_prices[0][0]
-                        if lay_prices: self.selected_runners[selection_id]["layPrice"] = lay_prices[0][0]
+                        if back_prices:
+                            self.selected_runners[selection_id]["backPrice"] = back_prices[0][0]
+                        if lay_prices:
+                            self.selected_runners[selection_id]["layPrice"] = lay_prices[0][0]
                         bet_type = getattr(self, "bet_type_var", None)
                         if bet_type:
-                            if bet_type.get() == "BACK" and back_prices: self.selected_runners[selection_id]["price"] = back_prices[0][0]
-                            elif bet_type.get() == "LAY" and lay_prices: self.selected_runners[selection_id]["price"] = lay_prices[0][0]
-                except Exception: pass
-            if recalc_needed: self._recalculate()
+                            if bet_type.get() == "BACK" and back_prices:
+                                self.selected_runners[selection_id]["price"] = back_prices[0][0]
+                            elif bet_type.get() == "LAY" and lay_prices:
+                                self.selected_runners[selection_id]["price"] = lay_prices[0][0]
+                except Exception:
+                    pass
+            if recalc_needed:
+                self._recalculate()
 
         self.uiq.post(update_ui)
+
 
 if __name__ == "__main__":
     app = PickfairApp()
