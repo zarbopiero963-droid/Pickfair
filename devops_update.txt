@@ -1,403 +1,388 @@
-CREA_FILE app_modules/telegram_module.py import logging import tkinter as tk from tkinter import messagebox, simpledialog
+CREA_FILE app_modules/monitoring_module.py
+import tkinter as tk
+from tkinter import messagebox
+import logging
 
 from theme import COLORS
 
-logger = logging.getLogger(name)
+logger = logging.getLogger("MonitoringModule")
 
-class TelegramModule: def _start_telegram_listener(self): """Start the Telegram listener background thread (Decoupled with EventBus).""" settings = self.db.get_telegram_settings() if not settings or not settings.get("api_id") or not settings.get("api_hash"): messagebox.showwarning( "Attenzione", "Configura e salva le credenziali Telegram prima di avviare il listener.", ) return
 
-if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
-        messagebox.showinfo("Info", "Listener già in esecuzione")
-        return
+class MonitoringModule:
 
-    try:
-        from telegram_listener import TelegramListener
-
-        self.telegram_listener = TelegramListener(
-            api_id=int(settings["api_id"]),
-            api_hash=settings["api_hash"].strip(),
-            session_string=settings.get("session_string"),
-        )
-
-        monitored_chats = []
-        for chat in self.db.get_telegram_chats():
-            if not chat.get("is_active", True):
-                continue
-            try:
-                monitored_chats.append(int(chat["chat_id"]))
-            except Exception:
-                logger.warning(
-                    f"[TelegramModule] chat_id non valido ignorato: {chat}"
-                )
-
-        if not monitored_chats:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessuna chat monitorata attiva. Aggiungine almeno una.",
-            )
+    # ==========================================
+    # DASHBOARD STORICO
+    # ==========================================
+    def _refresh_dashboard_tab(self):
+        if not hasattr(self, "db"):
             return
 
-        self.telegram_listener.set_monitored_chats(monitored_chats)
-        self.telegram_listener.set_database(self.db)
+        today_pl = self.db.get_today_profit_loss()
+        active_count = self.db.get_active_bets_count()
 
-        self.telegram_listener.set_callbacks(
-            on_signal=lambda sig: self.bus.publish("TELEGRAM_SIGNAL", sig),
-            on_message=None,
-            on_status=lambda st, msg: self.bus.publish(
-                "TELEGRAM_STATUS", {"status": st, "message": msg}
-            ),
-        )
-
-        self.telegram_listener.start()
-        self.telegram_status = "LISTENING"
-        if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
-            self.tg_status_label.configure(
-                text=f"Stato: {self.telegram_status}",
-                text_color=COLORS["success"],
+        if hasattr(self, "dash_pl_label") and self.dash_pl_label.winfo_exists():
+            color = COLORS["success"] if today_pl >= 0 else COLORS["loss"]
+            sign = "+" if today_pl > 0 else ""
+            self.dash_pl_label.configure(
+                text=f"{sign}{today_pl:.2f} €",
+                text_color=color
             )
-        messagebox.showinfo("Successo", "Telegram Listener avviato")
 
-    except Exception as e:
-        messagebox.showerror("Errore", f"Impossibile avviare listener: {str(e)}")
+        if hasattr(self, "dash_active_label") and self.dash_active_label.winfo_exists():
+            self.dash_active_label.configure(text=str(active_count))
 
-def _stop_telegram_listener(self):
-    if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
-        self.telegram_listener.stop()
-        self.telegram_status = "STOPPED"
-        if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
-            self.tg_status_label.configure(
-                text=f"Stato: {self.telegram_status}",
-                text_color=COLORS["error"],
-            )
-        messagebox.showinfo("Info", "Telegram Listener fermato")
+        self._update_recent_bets_tree()
 
-def _handle_telegram_signal(self, signal):
-    """Riceve il segnale parsato e lo inoltra al RiskMiddleware via REQ_*."""
-    action = str(signal.get("action", "BACK")).upper()
-    selection_id = signal.get("selection_id")
-    market_id = signal.get("market_id")
-    selection_name = signal.get("selection", str(selection_id))
-
-    try:
-        price = float(signal.get("price", 2.0))
-    except Exception:
-        logger.error("[TelegramModule] Segnale ignorato: price non valido.")
-        if hasattr(self.db, "save_received_signal"):
-            self.db.save_received_signal(
-                selection=selection_name,
-                action=action,
-                price=0.0,
-                stake=0.0,
-                status="ERROR",
-            )
-        self._refresh_telegram_signals_tree()
-        return
-
-    try:
-        stake = float(self.tg_auto_stake_var.get().replace(",", "."))
-    except Exception:
-        stake = 1.0
-
-    if hasattr(self.db, "save_received_signal"):
-        self.db.save_received_signal(
-            selection=selection_name,
-            action=action,
-            price=price,
-            stake=stake,
-            status="RECEIVED",
-        )
-    self._refresh_telegram_signals_tree()
-
-    if not getattr(self, "tg_auto_bet_var", None) or not self.tg_auto_bet_var.get():
-        if getattr(self, "tg_confirm_var", None) and self.tg_confirm_var.get():
-            msg = (
-                f"Segnale ricevuto:\n"
-                f"{selection_name}\n"
-                f"Tipo: {action}\n"
-                f"Quota: {price}\n\n"
-                f"Piazzare la scommessa?"
-            )
-            if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
-                if hasattr(self.db, "save_received_signal"):
-                    self.db.save_received_signal(
-                        selection=selection_name,
-                        action=action,
-                        price=price,
-                        stake=stake,
-                        status="IGNORED",
-                    )
-                self._refresh_telegram_signals_tree()
-                return
-        else:
-            if hasattr(self.db, "save_received_signal"):
-                self.db.save_received_signal(
-                    selection=selection_name,
-                    action=action,
-                    price=price,
-                    stake=stake,
-                    status="IGNORED",
-                )
-            self._refresh_telegram_signals_tree()
+    def _update_recent_bets_tree(self):
+        if not hasattr(self, "dash_history_tree") or not self.dash_history_tree.winfo_exists():
             return
 
-    if not selection_id or not market_id:
-        logger.error(
-            "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
-        )
-        if hasattr(self.db, "save_received_signal"):
-            self.db.save_received_signal(
-                selection=selection_name,
-                action=action,
-                price=price,
-                stake=stake,
-                status="ERROR",
-            )
-        self._refresh_telegram_signals_tree()
-        return
+        self.dash_history_tree.delete(*self.dash_history_tree.get_children())
+        recent_bets = self.db.get_recent_bets(limit=20)
 
-    try:
-        payload = {
-            "market_id": str(market_id),
-            "market_type": signal.get("market_type", "MATCH_ODDS"),
-            "event_name": signal.get("match", "Segnale Telegram"),
-            "market_name": signal.get("market", "Scommessa da Segnale"),
-            "selection_id": int(selection_id),
-            "runner_name": selection_name,
-            "bet_type": action,
-            "price": price,
-            "stake": stake,
-            "simulation_mode": getattr(self, "simulation_mode", False),
-        }
-    except Exception as e:
-        logger.error(f"[TelegramModule] Segnale ignorato: payload invalido ({e})")
-        if hasattr(self.db, "save_received_signal"):
-            self.db.save_received_signal(
-                selection=selection_name,
-                action=action,
-                price=price,
-                stake=stake,
-                status="ERROR",
-            )
-        self._refresh_telegram_signals_tree()
-        return
+        for bet in recent_bets:
+            dt = str(bet.get("placed_at", ""))[:16]
+            market = bet.get("market_name", "Ignoto")
+            bet_type = bet.get("bet_type", "-")
+            stake = f"{float(bet.get('total_stake', 0) or 0):.2f}"
+            pl = float(bet.get("potential_profit") or 0.0)
+            pl_str = f"+{pl:.2f}" if pl > 0 else f"{pl:.2f}"
+            status = bet.get("status", "UNKNOWN")
 
-    logger.info(
-        f"[TelegramModule] Inoltro segnale all'OMS via RiskGate: {payload}"
-    )
-    self.bus.publish("REQ_QUICK_BET", payload)
-
-    if hasattr(self.db, "save_received_signal"):
-        self.db.save_received_signal(
-            selection=selection_name,
-            action=action,
-            price=price,
-            stake=stake,
-            status="SUBMITTED",
-        )
-    self._refresh_telegram_signals_tree()
-
-def _update_telegram_status(self, status, message):
-    self.telegram_status = status
-    color = COLORS["success"] if status == "LISTENING" else COLORS["error"]
-    if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
-        self.tg_status_label.configure(
-            text=f"Stato: {status} - {message}",
-            text_color=color,
-        )
-
-def _refresh_telegram_chats_tree(self):
-    if not hasattr(self, "tg_chats_tree") or not self.tg_chats_tree.winfo_exists():
-        return
-
-    self.tg_chats_tree.delete(*self.tg_chats_tree.get_children())
-    chats = self.db.get_telegram_chats()
-    for chat in chats:
-        state = "Sì" if chat.get("is_active") else "No"
-        title = chat.get("title") or chat.get("username") or str(chat.get("chat_id"))
-        self.tg_chats_tree.insert(
-            "",
-            tk.END,
-            iid=str(chat["chat_id"]),
-            values=(title, state),
-        )
-
-def _remove_telegram_chat(self):
-    selected = getattr(self, "tg_chats_tree", None) and self.tg_chats_tree.selection()
-    if not selected:
-        return
-
-    chats = self.db.get_telegram_chats()
-    updated_chats = [c for c in chats if str(c["chat_id"]) not in selected]
-    self.db.replace_telegram_chats(updated_chats)
-    self._refresh_telegram_chats_tree()
-
-def _add_selected_available_chats(self):
-    selected = getattr(self, "tg_available_tree", None) and self.tg_available_tree.selection()
-    if not selected:
-        return
-
-    for item_id in selected:
-        item = self.tg_available_tree.item(item_id)
-        values = item.get("values", [])
-        name = values[2] if len(values) > 2 else str(item_id)
-        self.db.save_telegram_chat(chat_id=item_id, title=name, is_active=True)
-
-    self._refresh_telegram_chats_tree()
-    messagebox.showinfo("Successo", "Chat aggiunte al monitoraggio.")
-
-def _refresh_rules_tree(self):
-    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
-        return
-
-    self.rules_tree.delete(*self.rules_tree.get_children())
-    rules = self.db.get_signal_patterns()
-    for r in rules:
-        state = "Sì" if r.get("enabled") else "No"
-        self.rules_tree.insert(
-            "",
-            tk.END,
-            iid=str(r["id"]),
-            values=(
-                state,
-                r.get("label", ""),
-                "MATCH_ODDS",
-                r.get("pattern", ""),
-            ),
-        )
-
-def _add_signal_pattern(self):
-    label = simpledialog.askstring("Nuova Regola", "Nome della regola:")
-    if not label:
-        return
-
-    pattern = simpledialog.askstring("Nuova Regola", "Pattern Regex:")
-    if not pattern:
-        return
-
-    self.db.save_signal_pattern(pattern=pattern, label=label, enabled=True)
-    self._refresh_rules_tree()
-
-def _edit_signal_pattern(self):
-    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
-        return
-
-    selected = self.rules_tree.selection()
-    if not selected:
-        messagebox.showwarning("Attenzione", "Seleziona una regola da modificare.")
-        return
-
-    pattern_id = selected[0]
-    rules = self.db.get_signal_patterns()
-    current = next((r for r in rules if str(r["id"]) == str(pattern_id)), None)
-    if not current:
-        messagebox.showerror("Errore", "Regola non trovata nel database.")
-        return
-
-    new_label = simpledialog.askstring(
-        "Modifica Regola",
-        "Nome della regola:",
-        initialvalue=current.get("label", ""),
-    )
-    if new_label is None:
-        return
-
-    new_pattern = simpledialog.askstring(
-        "Modifica Regola",
-        "Pattern Regex:",
-        initialvalue=current.get("pattern", ""),
-    )
-    if new_pattern is None:
-        return
-
-    try:
-        self.db.update_signal_pattern(
-            pattern_id=pattern_id,
-            pattern=new_pattern,
-            label=new_label,
-        )
-        self._refresh_rules_tree()
-        messagebox.showinfo("Successo", "Regola aggiornata correttamente.")
-    except Exception as e:
-        messagebox.showerror("Errore", f"Impossibile aggiornare la regola: {e}")
-
-def _delete_signal_pattern(self):
-    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
-        return
-
-    selected = self.rules_tree.selection()
-    if not selected:
-        messagebox.showwarning("Attenzione", "Seleziona una regola da eliminare.")
-        return
-
-    pattern_id = selected[0]
-
-    if not messagebox.askyesno(
-        "Conferma eliminazione",
-        "Vuoi davvero eliminare la regola selezionata?",
-    ):
-        return
-
-    try:
-        self.db.delete_signal_pattern(pattern_id)
-        self._refresh_rules_tree()
-        messagebox.showinfo("Successo", "Regola eliminata.")
-    except Exception as e:
-        messagebox.showerror("Errore", f"Impossibile eliminare la regola: {e}")
-
-def _toggle_signal_pattern(self):
-    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
-        return
-
-    selected = self.rules_tree.selection()
-    if not selected:
-        messagebox.showwarning(
-            "Attenzione",
-            "Seleziona una regola da attivare/disattivare.",
-        )
-        return
-
-    pattern_id = selected[0]
-
-    try:
-        new_state = self.db.toggle_signal_pattern(pattern_id)
-        self._refresh_rules_tree()
-        stato_txt = "attivata" if new_state else "disattivata"
-        messagebox.showinfo("Successo", f"Regola {stato_txt}.")
-    except Exception as e:
-        messagebox.showerror(
-            "Errore",
-            f"Impossibile cambiare stato della regola: {e}",
-        )
-
-def _refresh_telegram_signals_tree(self):
-    """Aggiorna la tabella visiva leggendo dallo storico salvato nel DB."""
-    if not hasattr(self, "tg_signals_tree") or not self.tg_signals_tree.winfo_exists():
-        return
-
-    self.tg_signals_tree.delete(*self.tg_signals_tree.get_children())
-
-    if hasattr(self.db, "get_received_signals"):
-        signals = self.db.get_received_signals(limit=50)
-        for sig in signals:
-            date_str = str(sig.get("received_at", ""))[:16]
-            sel = sig.get("selection", "")
-            action = sig.get("action", "")
-            price = f"{float(sig.get('price', 0) or 0):.2f}"
-            stake = f"{float(sig.get('stake', 0) or 0):.2f}"
-            status = sig.get("status", "")
-
-            tag = ""
-            if status in ("RECEIVED", "SUBMITTED"):
-                tag = "success"
-            elif status in ("ERROR", "IGNORED"):
-                tag = "failed"
-
-            self.tg_signals_tree.insert(
+            self.dash_history_tree.insert(
                 "",
                 tk.END,
-                values=(date_str, sel, action, price, stake, status),
-                tags=(tag,) if tag else (),
+                values=(dt, market, bet_type, stake, pl_str, status)
             )
 
-EOF
+    # ==========================================
+    # SCOMMESSE PIAZZATE (MERCATO CORRENTE)
+    # ==========================================
+    def _update_placed_bets(self):
+        """Popola la UI leggendo dal Client Betfair o dal DB in caso di simulazione."""
+        if not getattr(self, "current_market", None):
+            return
 
+        if hasattr(self, "placed_bets_tree") and self.placed_bets_tree.winfo_exists():
+            self.placed_bets_tree.delete(*self.placed_bets_tree.get_children())
+
+        if getattr(self, "simulation_mode", False):
+            sim_bets = self.db.get_simulation_bets(limit=50)
+            current_market_id = str(self.current_market.get("marketId", ""))
+
+            for bet in sim_bets:
+                if str(bet.get("market_id", "")) != current_market_id:
+                    continue
+
+                dt = str(bet.get("placed_at", ""))[:16]
+                sel_name = bet.get("selection_name", "")
+                side = bet.get("side", "")
+                price = f"{float(bet.get('price', 0) or 0):.2f}"
+                stake = f"{float(bet.get('stake', 0) or 0):.2f}"
+                status = bet.get("status", "MATCHED")
+
+                self.placed_bets_tree.insert(
+                    "",
+                    tk.END,
+                    values=(dt, sel_name, side, price, stake, status)
+                )
+            return
+
+        if not getattr(self, "client", None):
+            return
+
+        def fetch():
+            try:
+                orders = self.client.get_current_orders(
+                    market_ids=[self.current_market["marketId"]]
+                )
+                self.uiq.post(self._render_placed_bets, orders)
+            except Exception as e:
+                logger.error(f"Errore recupero current_orders: {e}")
+
+        self.executor.submit("fetch_orders", fetch)
+
+    def _render_placed_bets(self, orders):
+        if not hasattr(self, "placed_bets_tree") or not self.placed_bets_tree.winfo_exists():
+            return
+
+        self.placed_bets_tree.delete(*self.placed_bets_tree.get_children())
+
+        current_orders = orders.get("currentOrders", []) if orders else []
+        if not current_orders:
+            return
+
+        for order in current_orders:
+            sel_id = str(order.get("selectionId", ""))
+            sel_name = sel_id
+
+            if getattr(self, "current_market", None):
+                for runner in self.current_market.get("runners", []):
+                    if str(runner.get("selectionId")) == sel_id:
+                        sel_name = runner.get("runnerName", sel_id)
+                        break
+
+            side = order.get("side", "")
+            price_size = order.get("priceSize", {}) or {}
+            price = f"{float(price_size.get('price', 0) or 0):.2f}"
+            stake = f"{float(price_size.get('size', 0) or 0):.2f}"
+
+            raw_status = order.get("status", "UNKNOWN")
+            matched = float(order.get("sizeMatched", 0) or 0)
+
+            if raw_status == "EXECUTION_COMPLETE":
+                status = "MATCHED"
+            elif raw_status == "EXECUTABLE":
+                status = "PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED"
+            else:
+                status = raw_status
+
+            self.placed_bets_tree.insert(
+                "",
+                tk.END,
+                values=("Live", sel_name, side, price, stake, status)
+            )
+
+    # ==========================================
+    # MONITORAGGIO CASHOUT
+    # ==========================================
+    def _start_market_live_tracking(self):
+        def update():
+            if not getattr(self, "market_live_tracking_var", None) or not self.market_live_tracking_var.get():
+                return
+
+            self._update_market_cashout_positions()
+            self.market_live_tracking_id = self.root.after(15000, update)
+
+        self._update_market_cashout_positions()
+        self.market_live_tracking_id = self.root.after(15000, update)
+
+        if hasattr(self, "market_live_status") and self.market_live_status.winfo_exists():
+            self.market_live_status.configure(
+                text="LIVE",
+                text_color=COLORS["success"]
+            )
+
+    def _stop_market_live_tracking(self):
+        if hasattr(self, "market_live_tracking_id") and self.market_live_tracking_id:
+            try:
+                self.root.after_cancel(self.market_live_tracking_id)
+            except Exception:
+                pass
+            self.market_live_tracking_id = None
+
+        if hasattr(self, "market_live_status") and self.market_live_status.winfo_exists():
+            self.market_live_status.configure(
+                text="STOP",
+                text_color=COLORS["text_secondary"]
+            )
+
+    def _update_market_cashout_positions(self):
+        if getattr(self, "simulation_mode", False):
+            return
+        if not getattr(self, "client", None):
+            return
+        if not getattr(self, "current_market", None):
+            return
+
+        def fetch():
+            try:
+                orders = self.client.get_current_orders(
+                    market_ids=[self.current_market["marketId"]]
+                )
+                current_orders = orders.get("currentOrders", []) if orders else []
+                positions = self._calculate_positions(current_orders)
+                self.uiq.post(self._render_cashout_positions, positions)
+            except Exception as e:
+                logger.error(f"Errore calcolo posizioni cashout: {e}")
+
+        self.executor.submit("fetch_cashout", fetch)
+
+    def _calculate_positions(self, orders):
+        positions = {}
+
+        for order in orders:
+            raw_status = order.get("status")
+            matched_size = float(order.get("sizeMatched", 0) or 0)
+
+            if raw_status == "EXECUTION_COMPLETE":
+                pass
+            elif raw_status == "EXECUTABLE" and matched_size > 0:
+                pass
+            else:
+                continue
+
+            sel_id = str(order.get("selectionId", ""))
+            if not sel_id:
+                continue
+
+            if sel_id not in positions:
+                positions[sel_id] = {
+                    "selection_id": sel_id,
+                    "bets": [],
+                    "total_stake": 0.0,
+                    "avg_price": 0.0,
+                    "side": order.get("side", ""),
+                }
+
+            price_size = order.get("priceSize", {}) or {}
+            price = float(order.get("averagePriceMatched") or price_size.get("price", 0) or 0)
+            size = matched_size
+
+            if size <= 0:
+                continue
+
+            positions[sel_id]["bets"].append(order)
+
+            old_total = positions[sel_id]["total_stake"]
+            new_total = old_total + size
+
+            if new_total > 0:
+                positions[sel_id]["avg_price"] = (
+                    (positions[sel_id]["avg_price"] * old_total) + (price * size)
+                ) / new_total
+
+            positions[sel_id]["total_stake"] = new_total
+
+        return positions
+
+    def _render_cashout_positions(self, positions):
+        if not hasattr(self, "market_cashout_tree") or not self.market_cashout_tree.winfo_exists():
+            return
+
+        self.market_cashout_tree.delete(*self.market_cashout_tree.get_children())
+        self.market_cashout_positions = {}
+
+        for sel_id, pos in positions.items():
+            sel_name = sel_id
+            current_back = 0.0
+            current_lay = 0.0
+
+            if getattr(self, "current_market", None):
+                for runner in self.current_market.get("runners", []):
+                    if str(runner.get("selectionId")) == sel_id:
+                        sel_name = runner.get("runnerName", sel_id)
+                        current_back = float(runner.get("backPrice", 0) or 0)
+                        current_lay = float(runner.get("layPrice", 0) or 0)
+                        break
+
+            orig_side = pos["side"]
+            avg_price = float(pos["avg_price"] or 0)
+            stake = float(pos["total_stake"] or 0)
+
+            cashout_side = "LAY" if orig_side == "BACK" else "BACK"
+            current_price = current_back if cashout_side == "BACK" else current_lay
+
+            green_up = 0.0
+            cashout_stake = 0.0
+
+            if current_price > 0 and stake > 0 and avg_price > 0:
+                if orig_side == "BACK":
+                    cashout_stake = (stake * avg_price) / current_price
+                    green_up = cashout_stake - stake
+                else:
+                    cashout_stake = (stake * avg_price) / current_price
+                    green_up = stake - cashout_stake
+
+            pos["cashout_info"] = {
+                "cashout_side": cashout_side,
+                "cashout_stake": cashout_stake,
+                "current_price": current_price,
+                "green_up": green_up,
+            }
+
+            self.market_cashout_positions[sel_id] = pos
+
+            pl_str = f"+{green_up:.2f}" if green_up > 0 else f"{green_up:.2f}"
+            self.market_cashout_tree.insert(
+                "",
+                tk.END,
+                iid=sel_id,
+                values=(
+                    sel_name,
+                    orig_side,
+                    f"{stake:.2f}",
+                    f"{avg_price:.2f}",
+                    pl_str,
+                )
+            )
+
+    # ==========================================
+    # ESECUZIONE CASHOUT VIA OMS
+    # ==========================================
+    def _execute_cashout(self):
+        """Delega l'intento di cashout al RiskMiddleware/OMS."""
+        if not hasattr(self, "market_cashout_tree"):
+            return
+
+        selected = self.market_cashout_tree.selection()
+        if not selected:
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona una posizione per il Cashout."
+            )
+            return
+
+        sel_id = selected[0]
+        pos = getattr(self, "market_cashout_positions", {}).get(sel_id)
+        if not pos:
+            return
+
+        info = pos.get("cashout_info")
+        if not info or float(info.get("current_price", 0) or 0) <= 0:
+            messagebox.showerror(
+                "Errore",
+                "Quota di uscita non disponibile o mercato sospeso."
+            )
+            return
+
+        msg = (
+            f"Confermi l'intento di Cashout all'OMS?\n\n"
+            f"Tipo Ordine: {info['cashout_side']}\n"
+            f"Quota: {float(info['current_price']):.2f}\n"
+            f"Stake Richiesto: {float(info['cashout_stake']):.2f} €\n"
+            f"P&L Stimato: {float(info['green_up']):.2f} €"
+        )
+        if not messagebox.askyesno("Conferma Cashout", msg):
+            return
+
+        payload = {
+            "market_id": self.current_market["marketId"],
+            "selection_id": sel_id,
+            "side": info["cashout_side"],
+            "stake": float(info["cashout_stake"]),
+            "price": float(info["current_price"]),
+            "green_up": float(info["green_up"]),
+            "original_pos": pos,
+        }
+
+        logger.info(
+            f"Invio intento Cashout all'EventBus (REQ_EXECUTE_CASHOUT): {payload}"
+        )
+        self.bus.publish("REQ_EXECUTE_CASHOUT", payload)
+
+    # ==========================================
+    # CALLBACKS DA OMS
+    # ==========================================
+    def _on_cashout_success(self, data):
+        matched = float(data.get("matched", 0) or 0)
+        green_up = float(data.get("green_up", 0) or 0)
+
+        msg = "L'OMS ha elaborato il cashout!"
+        if matched > 0:
+            msg += f"\n\nImporto Abbinato: {matched:.2f} €"
+        msg += f"\nP&L Stimato: {green_up:.2f} €"
+
+        messagebox.showinfo("Cashout Eseguito", msg)
+
+        self._update_market_cashout_positions()
+        self._update_placed_bets()
+        if hasattr(self, "_update_balance"):
+            self._update_balance()
+
+    def _on_cashout_failed(self, error):
+        messagebox.showerror(
+            "Cashout Fallito",
+            f"L'OMS ha riscontrato un errore:\n{error}"
+        )
+EOF
