@@ -1,48 +1,32 @@
 """
 TelegramController
-Isola SOLO autenticazione e gestione chat.
-Non tocca listener, pattern editor né trading logic.
+Gestisce autenticazione Telegram e caricamento chat.
+Non esegue trading e non chiama mai direttamente il client di betting.
 """
 
 import asyncio
 import os
-import tkinter as tk
 from tkinter import messagebox
 
 
 class TelegramController:
-
     def __init__(self, app):
         self.app = app
 
-    # ==============================
-    # SETTINGS
-    # ==============================
-
-    def save_settings(self):
+    def _db_call(self, method_name, *args, default=None, **kwargs):
+        method = getattr(self.app.db, method_name, None)
+        if not callable(method):
+            return default
         try:
-            stake = float(self.app.tg_auto_stake_var.get().replace(",", "."))
+            return method(*args, **kwargs)
         except Exception:
-            stake = 1.0
+            return default
 
-        settings = self.app.db.get_telegram_settings() or {}
+    def _get_settings(self):
+        return self._db_call("get_telegram_settings", default={}) or {}
 
-        self.app.db.save_telegram_settings(
-            api_id=self.app.tg_api_id_var.get(),
-            api_hash=self.app.tg_api_hash_var.get(),
-            session_string=settings.get("session_string"),
-            phone_number=self.app.tg_phone_var.get(),
-            enabled=True,
-            auto_bet=self.app.tg_auto_bet_var.get(),
-            require_confirmation=self.app.tg_confirm_var.get(),
-            auto_stake=stake,
-        )
-
-        messagebox.showinfo("Salvato", "Impostazioni Telegram salvate.")
-
-    # ==============================
-    # AUTHENTICATION
-    # ==============================
+    def _save_settings_dict(self, data):
+        return self._db_call("save_telegram_settings", data, default=None)
 
     def _get_session_path(self):
         base = os.getenv("APPDATA") or os.path.expanduser("~")
@@ -50,7 +34,45 @@ class TelegramController:
         os.makedirs(session_dir, exist_ok=True)
         return os.path.join(session_dir, "telegram_session")
 
+    def save_settings(self):
+        try:
+            stake = float(str(self.app.tg_auto_stake_var.get()).replace(",", "."))
+        except Exception:
+            stake = 1.0
+            self.app.tg_auto_stake_var.set("1.0")
+
+        settings = self._get_settings()
+        settings.update(
+            {
+                "api_id": self.app.tg_api_id_var.get(),
+                "api_hash": self.app.tg_api_hash_var.get(),
+                "session_string": settings.get("session_string", ""),
+                "phone_number": self.app.tg_phone_var.get(),
+                "enabled": True,
+                "auto_bet": bool(self.app.tg_auto_bet_var.get()),
+                "require_confirmation": bool(self.app.tg_confirm_var.get()),
+                "auto_stake": stake,
+            }
+        )
+
+        if getattr(self.app.db, "save_telegram_settings", None):
+            self._save_settings_dict(settings)
+            messagebox.showinfo("Salvato", "Impostazioni Telegram salvate.")
+        else:
+            messagebox.showwarning(
+                "DB incompleto",
+                "save_telegram_settings non esiste nel database.py corrente.",
+            )
+
     def send_code(self):
+        listener = getattr(self.app, "telegram_listener", None)
+        if listener and getattr(listener, "running", False):
+            messagebox.showwarning(
+                "Attenzione",
+                "Ferma il Listener Telegram prima di inviare il codice.",
+            )
+            return
+
         api_id = self.app.tg_api_id_var.get()
         api_hash = self.app.tg_api_hash_var.get()
         phone = self.app.tg_phone_var.get()
@@ -85,7 +107,8 @@ class TelegramController:
                 loop.close()
 
                 self.app.uiq.post(
-                    self.app.tg_status_label.configure, text=f"Stato: {msg}"
+                    self.app.tg_status_label.configure,
+                    text=f"Stato: {msg}",
                 )
 
             except Exception as e:
@@ -98,6 +121,14 @@ class TelegramController:
         self.app.executor.submit("tg_send_code", task)
 
     def verify_code(self):
+        listener = getattr(self.app, "telegram_listener", None)
+        if listener and getattr(listener, "running", False):
+            messagebox.showwarning(
+                "Attenzione",
+                "Ferma il Listener Telegram prima di verificare il codice.",
+            )
+            return
+
         api_id = self.app.tg_api_id_var.get()
         api_hash = self.app.tg_api_hash_var.get()
         phone = self.app.tg_phone_var.get()
@@ -126,10 +157,7 @@ class TelegramController:
                     except SessionPasswordNeededError:
                         if not password:
                             await client.disconnect()
-                            return (
-                                False,
-                                "Password 2FA richiesta. Inseriscila e riprova.",
-                            )
+                            return False, "Password 2FA richiesta. Inseriscila e riprova."
                         await client.sign_in(password=password)
 
                     session_string = client.session.save()
@@ -142,13 +170,19 @@ class TelegramController:
                 loop.close()
 
                 if success:
-                    self.app.db.save_telegram_settings(
-                        api_id=api_id,
-                        api_hash=api_hash,
-                        session_string=result,
-                        phone_number=phone,
-                        enabled=True,
+                    settings = self._get_settings()
+                    settings.update(
+                        {
+                            "api_id": api_id,
+                            "api_hash": api_hash,
+                            "session_string": result,
+                            "phone_number": phone,
+                            "enabled": True,
+                        }
                     )
+
+                    if getattr(self.app.db, "save_telegram_settings", None):
+                        self._save_settings_dict(settings)
 
                     self.app.uiq.post(
                         self.app.tg_status_label.configure,
@@ -164,22 +198,37 @@ class TelegramController:
                         self.app.tg_status_label.configure,
                         text="Stato: Errore Verifica",
                     )
-                    self.app.uiq.post(messagebox.showwarning, "Attenzione", result)
+                    self.app.uiq.post(
+                        messagebox.showwarning,
+                        "Attenzione",
+                        result,
+                    )
 
             except Exception as e:
                 self.app.uiq.post(
-                    self.app.tg_status_label.configure, text="Stato: Errore Verifica"
+                    self.app.tg_status_label.configure,
+                    text="Stato: Errore Verifica",
                 )
                 self.app.uiq.post(
-                    messagebox.showerror, "Errore", f"Verifica fallita: {str(e)}"
+                    messagebox.showerror,
+                    "Errore",
+                    f"Verifica fallita: {str(e)}",
                 )
 
         self.app.executor.submit("tg_verify_code", task)
 
     def reset_session(self):
+        listener = getattr(self.app, "telegram_listener", None)
+        if listener and getattr(listener, "running", False):
+            messagebox.showwarning(
+                "Attenzione",
+                "Ferma il Listener Telegram prima di resettare.",
+            )
+            return
+
         if not messagebox.askyesno(
             "Conferma",
-            "Vuoi cancellare la sessione Telegram attuale? Dovrai ripetere l'autenticazione.",
+            "Vuoi cancellare la sessione Telegram attuale?",
         ):
             return
 
@@ -187,31 +236,32 @@ class TelegramController:
         if os.path.exists(path):
             try:
                 os.remove(path)
-            except:
+            except Exception:
                 pass
 
-        settings = self.app.db.get_telegram_settings() or {}
-        self.app.db.save_telegram_settings(
-            api_id=settings.get("api_id", ""),
-            api_hash=settings.get("api_hash", ""),
-            session_string="",
-            phone_number=settings.get("phone_number", ""),
-            enabled=False,
-        )
+        settings = self._get_settings()
+        settings.update({"session_string": "", "enabled": False})
+
+        if getattr(self.app.db, "save_telegram_settings", None):
+            self._save_settings_dict(settings)
 
         self.app.tg_status_label.configure(text="Stato: Sessione resettata.")
         messagebox.showinfo(
-            "OK", "Sessione rimossa. Reinserisci i dati e richiedi un nuovo codice."
+            "OK",
+            "Sessione rimossa. Reinserisci i dati e richiedi un nuovo codice.",
         )
 
-    # ==============================
-    # CHAT MANAGEMENT
-    # ==============================
-
     def load_dialogs(self):
-        settings = self.app.db.get_telegram_settings()
+        listener = getattr(self.app, "telegram_listener", None)
+        if listener and getattr(listener, "running", False):
+            messagebox.showwarning(
+                "Attenzione",
+                "Ferma il Listener Telegram prima di caricare le chat.",
+            )
+            return
 
-        if not settings or not settings.get("api_id") or not settings.get("api_hash"):
+        settings = self._get_settings()
+        if not settings.get("api_id") or not settings.get("api_hash"):
             messagebox.showwarning("Errore", "Configura Telegram prima.")
             return
 
@@ -244,7 +294,8 @@ class TelegramController:
 
                 if dialogs is None:
                     self.app.uiq.post(
-                        self.app.tg_available_status.configure, text="Non autenticato"
+                        self.app.tg_available_status.configure,
+                        text="Non autenticato",
                     )
                     self.app.uiq.post(
                         messagebox.showwarning,
@@ -260,16 +311,18 @@ class TelegramController:
 
                     monitored_ids = {
                         int(chat["chat_id"])
-                        for chat in self.app.db.get_telegram_chats()
+                        for chat in self._db_call("get_telegram_chats", default=[]) or []
                     }
 
                     for d in dialogs:
                         if d.id in monitored_ids:
                             continue
-                        # HARDENING: Fallback sicuro se d.name è None
                         safe_name = d.name or str(d.id)
                         self.app.tg_available_tree.insert(
-                            "", tk.END, iid=str(d.id), values=("", "Chat", safe_name)
+                            "",
+                            "end",
+                            iid=str(d.id),
+                            values=("", "Chat", safe_name),
                         )
 
                     count = len(self.app.tg_available_tree.get_children())
@@ -281,9 +334,14 @@ class TelegramController:
 
             except Exception as e:
                 self.app.uiq.post(
-                    self.app.tg_available_status.configure, text="Errore caricamento"
+                    self.app.tg_available_status.configure,
+                    text="Errore caricamento",
                 )
-                self.app.uiq.post(messagebox.showerror, "Errore", str(e))
+                self.app.uiq.post(
+                    messagebox.showerror,
+                    "Errore",
+                    str(e),
+                )
 
         self.app.executor.submit("tg_load_dialogs", task)
 
