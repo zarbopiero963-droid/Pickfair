@@ -2,8 +2,8 @@
 Betfair Dutching - Tutti i Mercati
 Main application orchestrator.
 
-Architettura Tier-1: 
-Il main.py funge solo da Bootstrapper. 
+Architettura Tier-1:
+Il main.py funge solo da Bootstrapper.
 L'inizializzazione è divisa in scompartimenti per evitare Merge Conflicts.
 """
 import logging
@@ -86,7 +86,7 @@ class PickfairApp(
         window_height = min(WINDOW_HEIGHT, int(available_height * 0.9))
         x = (screen_width - window_width) // 2
         y = max(0, (available_height - window_height) // 2)
-        
+
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
         self.root.minsize(min_width=900, min_height=500)
         self.root.resizable(True, True)
@@ -110,7 +110,7 @@ class PickfairApp(
 
         self.bus = EventBus()
         self.executor = SafeExecutor(max_workers=4)
-        
+
         self.shutdown_mgr = ShutdownManager()
         self.shutdown_mgr.register("uiq", self.uiq.stop, priority=3)
         if hasattr(self, "db") and self.db:
@@ -189,7 +189,7 @@ class PickfairApp(
 
     def _wire_events(self):
         """Centralizza tutto il wiring dell'EventBus per renderlo facilmente leggibile."""
-        
+
         # 1. Safe Mode / Emergenze
         self.bus.subscribe("SAFE_MODE_TRIGGER", self._on_safe_mode_trigger)
 
@@ -224,7 +224,7 @@ class PickfairApp(
     def _start_services(self):
         self.goal_engine.start()
         self.root.after(3600000, getattr(self, "_schedule_order_cleanup", lambda: None))
-        
+
         if hasattr(self, "_start_booking_monitor"):
             self._start_booking_monitor()
         if hasattr(self, "_start_auto_cashout_monitor"):
@@ -249,7 +249,7 @@ class PickfairApp(
             bp_vol = bp[0][1] if bp and len(bp[0]) > 1 else 0
             lp_price = lp[0][0] if lp else 0
             lp_vol = lp[0][1] if lp and len(lp[0]) > 1 else 0
-            
+
             if sel_id and (bp_price > 0 or lp_price > 0):
                 self.wom_engine.record_tick(sel_id, bp_price, bp_vol, lp_price, lp_vol)
 
@@ -407,3 +407,4 @@ class PickfairApp(
 if __name__ == "__main__":
     app = PickfairApp()
     app.root.mainloop()
+

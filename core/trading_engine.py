@@ -3,6 +3,7 @@ Trading Engine (UI-Agnostic)
 Livello Istituzionale: OMS unico, Pattern Saga, Recovery, Persistence Completa,
 Simulazione, Best Price, stati ordine coerenti, eventi UI coerenti.
 """
+
 __all__ = ["TradingEngine"]
 
 import json
@@ -49,12 +50,6 @@ class TradingEngine:
     def _release_lock(self, customer_ref):
         with self._lock_mutex:
             self._active_submissions.discard(customer_ref)
-
-    def _publish_ui_event(self, ok_event, fail_event, ok_payload=None, fail_message=None):
-        if ok_payload is not None:
-            self.bus.publish(ok_event, ok_payload)
-        elif fail_message is not None:
-            self.bus.publish(fail_event, fail_message)
 
     def _compute_order_status(self, matched_amount, requested_amount):
         matched_amount = float(matched_amount or 0.0)
@@ -104,7 +99,8 @@ class TradingEngine:
                     if "results" in payload:
                         matched = self._safe_sum_matched(recovered_reports)
                         requested_size = sum(
-                            float(r.get("stake", 0) or 0) for r in payload.get("results", [])
+                            float(r.get("stake", 0) or 0)
+                            for r in payload.get("results", [])
                         )
                         status = self._compute_order_status(matched, requested_size)
 
@@ -118,6 +114,7 @@ class TradingEngine:
                             potential_profit=0.0,
                             status=status,
                         )
+
                     elif "green_up" in payload:
                         self.db.save_cashout_transaction(
                             market_id=market_id,
@@ -132,6 +129,7 @@ class TradingEngine:
                             cashout_price=payload.get("price", 0),
                             profit_loss=payload.get("green_up", 0.0),
                         )
+
                     elif "stake" in payload:
                         matched = self._safe_sum_matched(recovered_reports)
                         requested_size = float(payload.get("stake", 0.0) or 0.0)
@@ -168,12 +166,15 @@ class TradingEngine:
             try:
                 try:
                     orders = client.get_current_orders(
-                        market_ids=[market_id], customer_order_refs=[customer_ref]
+                        market_ids=[market_id],
+                        customer_order_refs=[customer_ref],
                     )
                 except TypeError:
                     orders = client.get_current_orders()
 
-                all_orders = (orders.get("matched", []) or []) + (orders.get("unmatched", []) or [])
+                all_orders = (orders.get("matched", []) or []) + (
+                    orders.get("unmatched", []) or []
+                )
                 recovered = [
                     o
                     for o in all_orders
@@ -187,6 +188,7 @@ class TradingEngine:
                     return True, recovered
             except Exception:
                 continue
+
         return False, []
 
     def _handle_quick_bet(self, payload):
@@ -316,6 +318,7 @@ class TradingEngine:
                             "QUICK_BET_FAILED",
                             f"Stato API: {result.get('status')}",
                         )
+
                 except Exception as e:
                     is_recovered, recovered_reports = self._reconcile_orders(
                         client, market_id, customer_ref
@@ -379,6 +382,7 @@ class TradingEngine:
                                 {"reason": "Circuit Breaker", "details": str(e)},
                             )
                         self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+
             finally:
                 self._release_lock(customer_ref)
 
@@ -454,6 +458,7 @@ class TradingEngine:
                     if use_best_price:
                         book = client.get_market_book(market_id)
                         current_prices = {}
+
                         if book and book.get("runners"):
                             for r in book["runners"]:
                                 sel_id = r.get("selectionId")
@@ -491,7 +496,9 @@ class TradingEngine:
                         ]
 
                     result = client.place_orders(
-                        market_id, instructions, customer_ref=customer_ref
+                        market_id,
+                        instructions,
+                        customer_ref=customer_ref,
                     )
                     reports = result.get("instructionReports", []) or []
 
@@ -535,6 +542,7 @@ class TradingEngine:
                             "DUTCHING_FAILED",
                             f"Stato API: {result.get('status')}",
                         )
+
                 except Exception as e:
                     is_recovered, recovered_reports = self._reconcile_orders(
                         client, market_id, customer_ref
@@ -582,6 +590,7 @@ class TradingEngine:
                                 {"reason": "Circuit Breaker", "details": str(e)},
                             )
                         self.bus.publish("DUTCHING_FAILED", f"Errore Rete: {str(e)}")
+
             finally:
                 self._release_lock(customer_ref)
 
@@ -610,6 +619,7 @@ class TradingEngine:
                 green_up = float(payload["green_up"])
 
                 self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+
                 instructions = [
                     {
                         "selectionId": selection_id,
@@ -625,7 +635,9 @@ class TradingEngine:
 
                 try:
                     result = client.place_orders(
-                        market_id, instructions, customer_ref=customer_ref
+                        market_id,
+                        instructions,
+                        customer_ref=customer_ref,
                     )
                     reports = result.get("instructionReports", []) or []
 
@@ -661,6 +673,7 @@ class TradingEngine:
                             "CASHOUT_FAILED",
                             f"Stato API: {result.get('status')}",
                         )
+
                 except Exception as e:
                     is_recovered, recovered_reports = self._reconcile_orders(
                         client, market_id, customer_ref
@@ -703,6 +716,7 @@ class TradingEngine:
                                 },
                             )
                         self.bus.publish("CASHOUT_FAILED", f"Errore Rete: {str(e)}")
+
             finally:
                 self._release_lock(customer_ref)
 
