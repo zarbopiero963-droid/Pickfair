@@ -1,249 +1,154 @@
-"""
-Toolbar - Barra strumenti avanzata per Pickfair
-
-Toggle rapidi per:
-- Simulation Mode
-- Auto-Green
-- AI Mixed / WoM Mode
-- Indicatori stato mercato
-- Preset stake buttons
-
-v3.66 - Toolbar avanzata con integrazione DutchingController
-"""
-
-from typing import TYPE_CHECKING, Callable, Optional
-
+Barra superiore dell'applicazione.
+Reattiva allo stato globale via EventBus
+Inoltra comandi globali come Panic Cashout
+Gestisce il toggle simulazione tramite l'app """
+import tkinter as tk from tkinter import messagebox
 import customtkinter as ctk
-
 from theme import COLORS
+class Toolbar(ctk.CTkFrame): def init(self, master, app, event_bus, **kwargs): super().init( master, fg_color=COLORS["bg_panel"], height=50, corner_radius=0, **kwargs, ) self.pack_propagate(False)
+self.app = app
+    self.bus = event_bus
 
-if TYPE_CHECKING:
-    from controllers.dutching_controller import DutchingController
+    self.status_indicator = None
+    self.btn_cashout_all = None
+    self.sim_switch = None
 
+    self._build_ui()
+    self._wire_events()
 
-class Toolbar(ctk.CTkFrame):
-    """
-    Toolbar avanzata con toggle e controlli rapidi.
-
-    Features:
-    - Toggle Simulation Mode (blocca ordini reali)
-    - Toggle Auto-Green (cashout automatico)
-    - Toggle AI Mixed Mode (BACK/LAY automatico con WoM)
-    - Indicatore stato mercato (OK / warning / block)
-    - Preset stake buttons (25%, 50%, 100%)
-    """
-
-    def __init__(
+def _build_ui(self):
+    self.status_indicator = ctk.CTkLabel(
         self,
-        parent,
-        controller: Optional["DutchingController"] = None,
-        on_status_change: Optional[Callable] = None,
-        **kwargs,
+        text="🟢 SISTEMA OPERATIVO",
+        font=("Segoe UI", 12, "bold"),
+        text_color=COLORS["success"],
+    )
+    self.status_indicator.pack(side=tk.LEFT, padx=20)
+
+    self.btn_cashout_all = ctk.CTkButton(
+        self,
+        text="⚠️ PANIC CASHOUT (Tutto)",
+        fg_color=COLORS["button_danger"],
+        hover_color="#b71c1c",
+        font=("Segoe UI", 12, "bold"),
+        command=self._cmd_panic_cashout,
+    )
+    self.btn_cashout_all.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    if not hasattr(self.app, "simulation_var"):
+        self.app.simulation_var = tk.BooleanVar(value=False)
+
+    self.sim_switch = ctk.CTkSwitch(
+        self,
+        text="Modalità Simulazione",
+        variable=self.app.simulation_var,
+        command=self._cmd_toggle_sim,
+        progress_color=COLORS["warning"],
+        font=("Segoe UI", 12, "bold"),
+    )
+    self.sim_switch.pack(side=tk.RIGHT, padx=20, pady=10)
+
+def _wire_events(self):
+    if self.bus:
+        self.bus.subscribe("STATE_UPDATE_SAFE_MODE", self._on_safe_mode_update)
+
+def _on_safe_mode_update(self, payload):
+    """
+    Compatibile sia con payload bool sia con payload dict.
+    """
+    if isinstance(payload, dict):
+        enabled = bool(payload.get("enabled", False))
+        reason = str(payload.get("reason", "") or "")
+    else:
+        enabled = bool(payload)
+        reason = ""
+
+    def update_visuals():
+        if enabled:
+            text = "🔴 SAFE MODE ATTIVO"
+            if reason:
+                text = f"🔴 SAFE MODE: {reason}"
+
+            self.status_indicator.configure(
+                text=text,
+                text_color=COLORS["warning"],
+            )
+
+            # Cashout/exit devono restare disponibili
+            self.btn_cashout_all.configure(state=tk.NORMAL)
+        else:
+            self.status_indicator.configure(
+                text="🟢 SISTEMA OPERATIVO",
+                text_color=COLORS["success"],
+            )
+            self.btn_cashout_all.configure(state=tk.NORMAL)
+
+    if hasattr(self.app, "uiq"):
+        self.app.uiq.post(update_visuals)
+    else:
+        update_visuals()
+
+def _cmd_toggle_sim(self):
+    if hasattr(self.app, "_toggle_simulation"):
+        self.app._toggle_simulation()
+
+def _cmd_panic_cashout(self):
+    if not messagebox.askyesno(
+        "PANIC CASHOUT",
+        "Sei sicuro di voler chiudere TUTTE le posizioni aperte sul mercato corrente?",
     ):
-        """
-        Args:
-            parent: Widget parent
-            controller: DutchingController per gestire i flag
-            on_status_change: Callback quando cambia uno stato
-        """
-        super().__init__(
-            parent, fg_color=COLORS.get("bg_secondary", "#2b2b2b"), **kwargs
+        return
+
+    if not getattr(self.app, "current_market", None):
+        messagebox.showwarning("Errore", "Nessun mercato selezionato.")
+        return
+
+    market_id = self.app.current_market.get("marketId")
+    positions = getattr(self.app, "market_cashout_positions", {}) or {}
+
+    if not positions:
+        messagebox.showinfo(
+            "Info",
+            "Nessuna posizione aperta da chiudere su questo mercato.",
         )
+        return
 
-        self.controller = controller
-        self.on_status_change = on_status_change
+    sent_count = 0
+    for sel_id, pos in positions.items():
+        info = pos.get("cashout_info", {})
+        if not info:
+            continue
 
-        self.simulation_enabled = False
-        self.auto_green_enabled = True
-        self.ai_enabled = True
-        self.preset_stake_pct = 1.0
-        self.market_status = "OK"
+        current_price = float(info.get("current_price", 0) or 0)
+        cashout_stake = float(info.get("cashout_stake", 0) or 0)
+        cashout_side = info.get("cashout_side")
+        green_up = float(info.get("green_up", 0) or 0)
 
-        self._build()
+        if current_price <= 0 or cashout_stake <= 0 or not cashout_side:
+            continue
 
-    def _build(self):
-        """Costruisce la toolbar."""
-        self.columnconfigure((0, 1, 2, 3, 4, 5, 6), weight=1)
-
-        self.sim_var = ctk.BooleanVar(value=self.simulation_enabled)
-        self.sim_toggle = ctk.CTkCheckBox(
-            self,
-            text="Simulation",
-            variable=self.sim_var,
-            command=self._toggle_simulation,
-            fg_color=COLORS.get("warning", "#ff9800"),
-            hover_color=COLORS.get("warning", "#ff9800"),
-            text_color=COLORS.get("text", "#ffffff"),
-            font=("Roboto", 11),
-        )
-        self.sim_toggle.grid(row=0, column=0, padx=6, pady=6, sticky="w")
-
-        self.green_var = ctk.BooleanVar(value=self.auto_green_enabled)
-        self.green_toggle = ctk.CTkCheckBox(
-            self,
-            text="Auto-Green",
-            variable=self.green_var,
-            command=self._toggle_auto_green,
-            fg_color=COLORS.get("profit", "#4caf50"),
-            hover_color=COLORS.get("profit", "#4caf50"),
-            text_color=COLORS.get("text", "#ffffff"),
-            font=("Roboto", 11),
-        )
-        self.green_toggle.grid(row=0, column=1, padx=6, pady=6, sticky="w")
-
-        self.ai_var = ctk.BooleanVar(value=self.ai_enabled)
-        self.ai_toggle = ctk.CTkCheckBox(
-            self,
-            text="AI Mixed",
-            variable=self.ai_var,
-            command=self._toggle_ai,
-            fg_color=COLORS.get("back", "#1e88e5"),
-            hover_color=COLORS.get("back", "#1e88e5"),
-            text_color=COLORS.get("text", "#ffffff"),
-            font=("Roboto", 11),
-        )
-        self.ai_toggle.grid(row=0, column=2, padx=6, pady=6, sticky="w")
-
-        self.status_label = ctk.CTkLabel(
-            self,
-            text="Market OK",
-            fg_color=COLORS.get("profit", "#4caf50"),
-            corner_radius=4,
-            font=("Roboto", 11, "bold"),
-            padx=8,
-            pady=2,
-        )
-        self.status_label.grid(row=0, column=3, padx=10, pady=6)
-
-        stake_frame = ctk.CTkFrame(self, fg_color="transparent")
-        stake_frame.grid(row=0, column=4, columnspan=3, padx=6, pady=6, sticky="e")
-
-        ctk.CTkLabel(
-            stake_frame,
-            text="Stake:",
-            font=("Roboto", 10),
-            text_color=COLORS.get("text_secondary", "#888888"),
-        ).pack(side="left", padx=(0, 4))
-
-        for pct in [25, 50, 100]:
-            btn = ctk.CTkButton(
-                stake_frame,
-                text=f"{pct}%",
-                width=45,
-                height=26,
-                font=("Roboto", 10),
-                fg_color=COLORS.get("bg_tertiary", "#3d3d3d"),
-                hover_color=COLORS.get("back", "#1e88e5"),
-                command=lambda p=pct: self._set_preset_stake(p),
-            )
-            btn.pack(side="left", padx=2)
-
-    def _toggle_simulation(self):
-        """Toggle simulation mode."""
-        self.simulation_enabled = self.sim_var.get()
-
-        if self.controller:
-            self.controller.simulation = self.simulation_enabled
-
-        if self.on_status_change:
-            self.on_status_change("simulation", self.simulation_enabled)
-
-    def _toggle_auto_green(self):
-        """Toggle auto-green."""
-        self.auto_green_enabled = self.green_var.get()
-
-        if self.controller and hasattr(self.controller, "auto_green_enabled"):
-            self.controller.auto_green_enabled = self.auto_green_enabled
-
-        if self.on_status_change:
-            self.on_status_change("auto_green", self.auto_green_enabled)
-
-    def _toggle_ai(self):
-        """Toggle AI Mixed mode."""
-        self.ai_enabled = self.ai_var.get()
-
-        if self.controller and hasattr(self.controller, "ai_enabled"):
-            self.controller.ai_enabled = self.ai_enabled
-
-        if self.on_status_change:
-            self.on_status_change("ai_enabled", self.ai_enabled)
-
-    def _set_preset_stake(self, pct: int):
-        """Imposta preset stake."""
-        self.preset_stake_pct = pct / 100.0
-
-        if self.controller and hasattr(self.controller, "preset_stake_pct"):
-            self.controller.preset_stake_pct = self.preset_stake_pct
-
-        if self.on_status_change:
-            self.on_status_change("preset_stake", self.preset_stake_pct)
-
-    def set_market_status(self, status: str, message: str = ""):
-        """
-        Aggiorna indicatore stato mercato.
-
-        Args:
-            status: 'OK', 'WARNING', 'BLOCK'
-            message: Messaggio opzionale
-        """
-        self.market_status = status
-
-        if status == "OK":
-            color = COLORS.get("profit", "#4caf50")
-            text = message or "Market OK"
-        elif status == "WARNING":
-            color = COLORS.get("warning", "#ff9800")
-            text = message or "Warning"
-        else:
-            color = COLORS.get("loss", "#f44336")
-            text = message or "Blocked"
-
-        self.status_label.configure(text=text, fg_color=color)
-
-    def set_preflight_status(self, preflight_result):
-        """
-        Aggiorna status basato su preflight result.
-
-        Args:
-            preflight_result: PreflightResult dataclass
-        """
-        if not preflight_result.is_valid:
-            self.set_market_status("BLOCK", "Preflight FAIL")
-        elif preflight_result.warnings:
-            self.set_market_status(
-                "WARNING", f"{len(preflight_result.warnings)} warnings"
-            )
-        else:
-            self.set_market_status("OK", "Ready")
-
-    def get_state(self) -> dict:
-        """Ritorna stato corrente della toolbar."""
-        return {
-            "simulation_enabled": self.simulation_enabled,
-            "auto_green_enabled": self.auto_green_enabled,
-            "ai_enabled": self.ai_enabled,
-            "preset_stake_pct": self.preset_stake_pct,
-            "market_status": self.market_status,
+        payload = {
+            "market_id": str(market_id),
+            "selection_id": sel_id,
+            "side": cashout_side,
+            "stake": cashout_stake,
+            "price": current_price,
+            "green_up": green_up,
+            "original_pos": pos,
+            "source": "PANIC_BUTTON",
         }
+        self.bus.publish("REQ_EXECUTE_CASHOUT", payload)
+        sent_count += 1
 
-    def set_simulation(self, enabled: bool):
-        """Imposta simulation mode programmaticamente."""
-        self.simulation_enabled = enabled
-        self.sim_var.set(enabled)
-        if self.controller:
-            self.controller.simulation = enabled
+    if sent_count == 0:
+        messagebox.showinfo(
+            "Info",
+            "Nessuna posizione valida da inviare in cashout.",
+        )
+        return
 
-    def set_auto_green(self, enabled: bool):
-        """Imposta auto-green programmaticamente."""
-        self.auto_green_enabled = enabled
-        self.green_var.set(enabled)
-        if self.controller and hasattr(self.controller, "auto_green_enabled"):
-            self.controller.auto_green_enabled = enabled
-
-    def set_ai_enabled(self, enabled: bool):
-        """Imposta AI mode programmaticamente."""
-        self.ai_enabled = enabled
-        self.ai_var.set(enabled)
-        if self.controller and hasattr(self.controller, "ai_enabled"):
-            self.controller.ai_enabled = enabled
+    messagebox.showinfo(
+        "Inviato",
+        f"Comandi di Cashout inviati all'OMS: {sent_count}",
+    )
 

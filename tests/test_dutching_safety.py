@@ -73,3 +73,4 @@ def test_risk_middleware_forwards_only_one_duplicate_request():
     assert len(published) == 1
     assert published[0]["market_id"] == "1.123"
     assert published[0]["bet_type"] == "BACK"
+

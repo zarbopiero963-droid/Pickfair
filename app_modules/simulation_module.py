@@ -229,3 +229,4 @@ class SimulationModule:
                 self._refresh_simulation_bets()
         except Exception as e:
             logger.error(f"[SimulationModule] Errore refresh post-evento simulato: {e}")
+

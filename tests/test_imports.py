@@ -16,3 +16,4 @@ def test_core_architecture_imports():
     assert ai.ai_pattern_engine is not None
     assert ai.wom_engine is not None
     assert dutching is not None
+

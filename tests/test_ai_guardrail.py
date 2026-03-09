@@ -62,3 +62,4 @@ def test_get_status_returns_expected_keys():
     assert "blocked_until" in status
     assert "warnings" in status
     assert "block_reasons" in status
+
