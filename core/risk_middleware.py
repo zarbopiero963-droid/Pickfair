@@ -223,3 +223,4 @@ class RiskMiddleware:
 
         logger.info("[RiskMiddleware] Forward REQ_REPLACE_ORDER -> CMD_REPLACE_ORDER")
         self.bus.publish("CMD_REPLACE_ORDER", normalized)
+

@@ -59,3 +59,4 @@ class AutoThrottle:
     def is_blocked(self):
         """Metodo legacy compatibile."""
         return self._blocked
+

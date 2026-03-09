@@ -390,3 +390,4 @@ class Toolbar(ctk.CTkFrame):
             f"Comandi di Cashout inviati all'OMS: {sent_count}",
         )
 EOF
+
