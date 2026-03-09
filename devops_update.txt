@@ -1,389 +1,401 @@
-CREA_FILE app_modules/monitoring_module.py
-import tkinter as tk
-from tkinter import messagebox
+CREATE_FILE auto_throttle.py """ Auto Throttle - DEPRECATED (Tier-1 Architecture)
+Questo modulo è stato ufficialmente dismesso.
+Nella nuova architettura OMS:
+La protezione anti-spam (doppi click) è gestita in core/risk_middleware.py.
+Il rate-limiting applicativo è gestito dai timer UI / executor / scheduler.
+Il blocco chiamate in caso di errore è gestito da circuit breaker e OMS.
+Manteniamo questo file solo per retrocompatibilità con codice legacy che potrebbe ancora importarlo o chiamarne alcuni metodi. """
 import logging
+logger = logging.getLogger("AutoThrottle")
+class AutoThrottle: def init(self, *args, **kwargs): logger.warning( "[DEPRECATED] AutoThrottle istanziato. " "Usare RiskMiddleware / Executor / OMS." ) self._last_rate = 0.0 self._blocked = False
+def wait(self):
+    """Metodo legacy: non blocca più nulla."""
+    return None
 
+def record_call(self):
+    """Metodo legacy: no-op."""
+    return None
+
+def get_current_rate(self):
+    """Metodo legacy."""
+    return self._last_rate
+
+def update(self, *args, **kwargs):
+    """
+    Metodo legacy compatibile con vecchi punti del codice
+    che chiamano throttle.update(...).
+    """
+    api_calls_min = kwargs.get("api_calls_min")
+    if api_calls_min is not None:
+        try:
+            self._last_rate = float(api_calls_min)
+        except Exception:
+            self._last_rate = 0.0
+    return None
+
+def reset(self):
+    """Metodo legacy compatibile."""
+    self._last_rate = 0.0
+    self._blocked = False
+
+def is_blocked(self):
+    """Metodo legacy compatibile."""
+    return self._blocked
+EOF
+CREATE_FILE ui/mini_ladder.py """ Mini Ladder Component
+Componente UI disaccoppiato.
+Non esegue ordini direttamente. Pubblica soltanto intenti REQ_QUICK_BET sull'EventBus. """
+import tkinter as tk from tkinter import messagebox
+import customtkinter as ctk
 from theme import COLORS
+class MiniLadder(ctk.CTkFrame): def init(self, master, app, event_bus, market_data, selection_data, **kwargs): super().init(master, fg_color="transparent", **kwargs)
+self.app = app
+    self.bus = event_bus
+    self.market_data = market_data or {}
+    self.selection_data = selection_data or {}
 
-logger = logging.getLogger("MonitoringModule")
+    self.header = None
+    self.grid_frame = None
+    self.btn_back = None
+    self.btn_lay = None
 
+    self._build_ui()
 
-class MonitoringModule:
+def _extract_back_price(self, data):
+    price = data.get("backPrice")
+    if isinstance(price, (int, float)) and price > 0:
+        return float(price)
 
-    # ==========================================
-    # DASHBOARD STORICO
-    # ==========================================
-    def _refresh_dashboard_tab(self):
-        if not hasattr(self, "db"):
-            return
-
-        today_pl = self.db.get_today_profit_loss()
-        active_count = self.db.get_active_bets_count()
-
-        if hasattr(self, "dash_pl_label") and self.dash_pl_label.winfo_exists():
-            color = COLORS["success"] if today_pl >= 0 else COLORS["loss"]
-            sign = "+" if today_pl > 0 else ""
-            self.dash_pl_label.configure(
-                text=f"{sign}{today_pl:.2f} €",
-                text_color=color
-            )
-
-        if hasattr(self, "dash_active_label") and self.dash_active_label.winfo_exists():
-            self.dash_active_label.configure(text=str(active_count))
-
-        self._update_recent_bets_tree()
-
-    def _update_recent_bets_tree(self):
-        if not hasattr(self, "dash_history_tree") or not self.dash_history_tree.winfo_exists():
-            return
-
-        self.dash_history_tree.delete(*self.dash_history_tree.get_children())
-        recent_bets = self.db.get_recent_bets(limit=20)
-
-        for bet in recent_bets:
-            dt = str(bet.get("placed_at", ""))[:16]
-            market = bet.get("market_name", "Ignoto")
-            bet_type = bet.get("bet_type", "-")
-            stake = f"{float(bet.get('total_stake', 0) or 0):.2f}"
-            pl = float(bet.get("potential_profit") or 0.0)
-            pl_str = f"+{pl:.2f}" if pl > 0 else f"{pl:.2f}"
-            status = bet.get("status", "UNKNOWN")
-
-            self.dash_history_tree.insert(
-                "",
-                tk.END,
-                values=(dt, market, bet_type, stake, pl_str, status)
-            )
-
-    # ==========================================
-    # SCOMMESSE PIAZZATE (MERCATO CORRENTE)
-    # ==========================================
-    def _update_placed_bets(self):
-        """Popola la UI leggendo dal Client Betfair o dal DB in caso di simulazione."""
-        if not getattr(self, "current_market", None):
-            return
-
-        if hasattr(self, "placed_bets_tree") and self.placed_bets_tree.winfo_exists():
-            self.placed_bets_tree.delete(*self.placed_bets_tree.get_children())
-
-        if getattr(self, "simulation_mode", False):
-            sim_bets = self.db.get_simulation_bets(limit=50)
-            current_market_id = str(self.current_market.get("marketId", ""))
-
-            for bet in sim_bets:
-                if str(bet.get("market_id", "")) != current_market_id:
-                    continue
-
-                dt = str(bet.get("placed_at", ""))[:16]
-                sel_name = bet.get("selection_name", "")
-                side = bet.get("side", "")
-                price = f"{float(bet.get('price', 0) or 0):.2f}"
-                stake = f"{float(bet.get('stake', 0) or 0):.2f}"
-                status = bet.get("status", "MATCHED")
-
-                self.placed_bets_tree.insert(
-                    "",
-                    tk.END,
-                    values=(dt, sel_name, side, price, stake, status)
-                )
-            return
-
-        if not getattr(self, "client", None):
-            return
-
-        def fetch():
+    back_prices = data.get("backPrices", [])
+    if back_prices and isinstance(back_prices, list):
+        first = back_prices[0]
+        if isinstance(first, (list, tuple)) and first:
             try:
-                orders = self.client.get_current_orders(
-                    market_ids=[self.current_market["marketId"]]
-                )
-                self.uiq.post(self._render_placed_bets, orders)
-            except Exception as e:
-                logger.error(f"Errore recupero current_orders: {e}")
-
-        self.executor.submit("fetch_orders", fetch)
-
-    def _render_placed_bets(self, orders):
-        if not hasattr(self, "placed_bets_tree") or not self.placed_bets_tree.winfo_exists():
-            return
-
-        self.placed_bets_tree.delete(*self.placed_bets_tree.get_children())
-
-        current_orders = orders.get("currentOrders", []) if orders else []
-        if not current_orders:
-            return
-
-        for order in current_orders:
-            sel_id = str(order.get("selectionId", ""))
-            sel_name = sel_id
-
-            if getattr(self, "current_market", None):
-                for runner in self.current_market.get("runners", []):
-                    if str(runner.get("selectionId")) == sel_id:
-                        sel_name = runner.get("runnerName", sel_id)
-                        break
-
-            side = order.get("side", "")
-            price_size = order.get("priceSize", {}) or {}
-            price = f"{float(price_size.get('price', 0) or 0):.2f}"
-            stake = f"{float(price_size.get('size', 0) or 0):.2f}"
-
-            raw_status = order.get("status", "UNKNOWN")
-            matched = float(order.get("sizeMatched", 0) or 0)
-
-            if raw_status == "EXECUTION_COMPLETE":
-                status = "MATCHED"
-            elif raw_status == "EXECUTABLE":
-                status = "PARTIALLY_MATCHED" if matched > 0 else "UNMATCHED"
-            else:
-                status = raw_status
-
-            self.placed_bets_tree.insert(
-                "",
-                tk.END,
-                values=("Live", sel_name, side, price, stake, status)
-            )
-
-    # ==========================================
-    # MONITORAGGIO CASHOUT
-    # ==========================================
-    def _start_market_live_tracking(self):
-        def update():
-            if not getattr(self, "market_live_tracking_var", None) or not self.market_live_tracking_var.get():
-                return
-
-            self._update_market_cashout_positions()
-            self.market_live_tracking_id = self.root.after(15000, update)
-
-        self._update_market_cashout_positions()
-        self.market_live_tracking_id = self.root.after(15000, update)
-
-        if hasattr(self, "market_live_status") and self.market_live_status.winfo_exists():
-            self.market_live_status.configure(
-                text="LIVE",
-                text_color=COLORS["success"]
-            )
-
-    def _stop_market_live_tracking(self):
-        if hasattr(self, "market_live_tracking_id") and self.market_live_tracking_id:
-            try:
-                self.root.after_cancel(self.market_live_tracking_id)
+                return float(first[0])
             except Exception:
-                pass
-            self.market_live_tracking_id = None
-
-        if hasattr(self, "market_live_status") and self.market_live_status.winfo_exists():
-            self.market_live_status.configure(
-                text="STOP",
-                text_color=COLORS["text_secondary"]
-            )
-
-    def _update_market_cashout_positions(self):
-        if getattr(self, "simulation_mode", False):
-            return
-        if not getattr(self, "client", None):
-            return
-        if not getattr(self, "current_market", None):
-            return
-
-        def fetch():
+                return 0.0
+        if isinstance(first, dict):
             try:
-                orders = self.client.get_current_orders(
-                    market_ids=[self.current_market["marketId"]]
-                )
-                current_orders = orders.get("currentOrders", []) if orders else []
-                positions = self._calculate_positions(current_orders)
-                self.uiq.post(self._render_cashout_positions, positions)
-            except Exception as e:
-                logger.error(f"Errore calcolo posizioni cashout: {e}")
+                return float(first.get("price", 0.0))
+            except Exception:
+                return 0.0
 
-        self.executor.submit("fetch_cashout", fetch)
+    back_ladder = data.get("back_ladder", [])
+    if back_ladder and isinstance(back_ladder, list):
+        first = back_ladder[0]
+        if isinstance(first, dict):
+            try:
+                return float(first.get("price", 0.0))
+            except Exception:
+                return 0.0
 
-    def _calculate_positions(self, orders):
-        positions = {}
+    return 0.0
 
-        for order in orders:
-            raw_status = order.get("status")
-            matched_size = float(order.get("sizeMatched", 0) or 0)
+def _extract_lay_price(self, data):
+    price = data.get("layPrice")
+    if isinstance(price, (int, float)) and price > 0:
+        return float(price)
 
-            if raw_status == "EXECUTION_COMPLETE":
-                pass
-            elif raw_status == "EXECUTABLE" and matched_size > 0:
-                pass
-            else:
-                continue
+    lay_prices = data.get("layPrices", [])
+    if lay_prices and isinstance(lay_prices, list):
+        first = lay_prices[0]
+        if isinstance(first, (list, tuple)) and first:
+            try:
+                return float(first[0])
+            except Exception:
+                return 0.0
+        if isinstance(first, dict):
+            try:
+                return float(first.get("price", 0.0))
+            except Exception:
+                return 0.0
 
-            sel_id = str(order.get("selectionId", ""))
-            if not sel_id:
-                continue
+    lay_ladder = data.get("lay_ladder", [])
+    if lay_ladder and isinstance(lay_ladder, list):
+        first = lay_ladder[0]
+        if isinstance(first, dict):
+            try:
+                return float(first.get("price", 0.0))
+            except Exception:
+                return 0.0
 
-            if sel_id not in positions:
-                positions[sel_id] = {
-                    "selection_id": sel_id,
-                    "bets": [],
-                    "total_stake": 0.0,
-                    "avg_price": 0.0,
-                    "side": order.get("side", ""),
-                }
+    return 0.0
 
-            price_size = order.get("priceSize", {}) or {}
-            price = float(order.get("averagePriceMatched") or price_size.get("price", 0) or 0)
-            size = matched_size
+def _build_ui(self):
+    runner_name = self.selection_data.get("runnerName", "Unknown")
 
-            if size <= 0:
-                continue
+    self.header = ctk.CTkLabel(
+        self,
+        text=runner_name,
+        font=("Segoe UI", 12, "bold"),
+        text_color=COLORS["text_primary"],
+    )
+    self.header.pack(pady=(0, 5))
 
-            positions[sel_id]["bets"].append(order)
+    self.grid_frame = ctk.CTkFrame(self, fg_color="transparent")
+    self.grid_frame.pack(fill=tk.X)
 
-            old_total = positions[sel_id]["total_stake"]
-            new_total = old_total + size
+    back_price = self._extract_back_price(self.selection_data)
+    lay_price = self._extract_lay_price(self.selection_data)
 
-            if new_total > 0:
-                positions[sel_id]["avg_price"] = (
-                    (positions[sel_id]["avg_price"] * old_total) + (price * size)
-                ) / new_total
+    back_text = f"{back_price:.2f}" if back_price > 0 else "-"
+    lay_text = f"{lay_price:.2f}" if lay_price > 0 else "-"
 
-            positions[sel_id]["total_stake"] = new_total
+    self.btn_back = ctk.CTkButton(
+        self.grid_frame,
+        text=back_text,
+        width=60,
+        fg_color=COLORS["back"],
+        hover_color=COLORS["back_hover"],
+        text_color="#000000",
+        command=lambda: self._on_price_clicked("BACK", back_price),
+    )
+    self.btn_back.pack(side=tk.LEFT, padx=2)
 
-        return positions
+    self.btn_lay = ctk.CTkButton(
+        self.grid_frame,
+        text=lay_text,
+        width=60,
+        fg_color=COLORS["lay"],
+        hover_color=COLORS["lay_hover"],
+        text_color="#000000",
+        command=lambda: self._on_price_clicked("LAY", lay_price),
+    )
+    self.btn_lay.pack(side=tk.LEFT, padx=2)
 
-    def _render_cashout_positions(self, positions):
-        if not hasattr(self, "market_cashout_tree") or not self.market_cashout_tree.winfo_exists():
-            return
+def _get_current_stake(self):
+    try:
+        if hasattr(self.app, "stake_var"):
+            return max(1.0, float(self.app.stake_var.get().replace(",", ".")))
+    except Exception:
+        pass
+    return 1.0
 
-        self.market_cashout_tree.delete(*self.market_cashout_tree.get_children())
-        self.market_cashout_positions = {}
+def _on_price_clicked(self, side, price):
+    if price <= 0:
+        messagebox.showwarning("Attenzione", "Quota non valida o mercato sospeso.")
+        return
 
-        for sel_id, pos in positions.items():
-            sel_name = sel_id
-            current_back = 0.0
-            current_lay = 0.0
+    stake = self._get_current_stake()
 
-            if getattr(self, "current_market", None):
-                for runner in self.current_market.get("runners", []):
-                    if str(runner.get("selectionId")) == sel_id:
-                        sel_name = runner.get("runnerName", sel_id)
-                        current_back = float(runner.get("backPrice", 0) or 0)
-                        current_lay = float(runner.get("layPrice", 0) or 0)
-                        break
+    mode_str = "[SIMULAZIONE] " if getattr(self.app, "simulation_mode", False) else ""
+    msg = (
+        f"{mode_str}Confermi la scommessa rapida?\n\n"
+        f"Runner: {self.selection_data.get('runnerName', 'Unknown')}\n"
+        f"Tipo: {side}\n"
+        f"Quota: {price:.2f}\n"
+        f"Stake: {stake:.2f} €"
+    )
 
-            orig_side = pos["side"]
-            avg_price = float(pos["avg_price"] or 0)
-            stake = float(pos["total_stake"] or 0)
+    if not messagebox.askyesno("Quick Bet", msg):
+        return
 
-            cashout_side = "LAY" if orig_side == "BACK" else "BACK"
-            current_price = current_back if cashout_side == "BACK" else current_lay
+    payload = {
+        "market_id": str(self.market_data.get("marketId", "")),
+        "market_type": str(self.market_data.get("marketType", "MATCH_ODDS")),
+        "event_name": str(self.market_data.get("eventName", "")),
+        "market_name": str(self.market_data.get("marketName", "")),
+        "selection_id": self.selection_data.get("selectionId"),
+        "runner_name": self.selection_data.get("runnerName", ""),
+        "bet_type": side,
+        "price": float(price),
+        "stake": float(stake),
+        "simulation_mode": bool(getattr(self.app, "simulation_mode", False)),
+        "source": "UI_MINI_LADDER",
+    }
 
-            green_up = 0.0
-            cashout_stake = 0.0
+    self.bus.publish("REQ_QUICK_BET", payload)
 
-            if current_price > 0 and stake > 0 and avg_price > 0:
-                if orig_side == "BACK":
-                    cashout_stake = (stake * avg_price) / current_price
-                    green_up = cashout_stake - stake
-                else:
-                    cashout_stake = (stake * avg_price) / current_price
-                    green_up = stake - cashout_stake
+def update_prices(self, new_back=None, new_lay=None):
+    """
+    Aggiorna la vista se cambiano le quote dal websocket/polling.
+    Se un valore è None, prova a rileggerlo dal selection_data corrente.
+    """
+    if new_back is None:
+        new_back = self._extract_back_price(self.selection_data)
+    if new_lay is None:
+        new_lay = self._extract_lay_price(self.selection_data)
 
-            pos["cashout_info"] = {
-                "cashout_side": cashout_side,
-                "cashout_stake": cashout_stake,
-                "current_price": current_price,
-                "green_up": green_up,
-            }
+    try:
+        self.selection_data["backPrice"] = float(new_back) if new_back else 0.0
+    except Exception:
+        self.selection_data["backPrice"] = 0.0
 
-            self.market_cashout_positions[sel_id] = pos
+    try:
+        self.selection_data["layPrice"] = float(new_lay) if new_lay else 0.0
+    except Exception:
+        self.selection_data["layPrice"] = 0.0
 
-            pl_str = f"+{green_up:.2f}" if green_up > 0 else f"{green_up:.2f}"
-            self.market_cashout_tree.insert(
-                "",
-                tk.END,
-                iid=sel_id,
-                values=(
-                    sel_name,
-                    orig_side,
-                    f"{stake:.2f}",
-                    f"{avg_price:.2f}",
-                    pl_str,
-                )
+    if self.btn_back:
+        if new_back and new_back > 0:
+            self.btn_back.configure(
+                text=f"{float(new_back):.2f}",
+                command=lambda: self._on_price_clicked("BACK", float(new_back)),
+            )
+        else:
+            self.btn_back.configure(text="-", command=lambda: None)
+
+    if self.btn_lay:
+        if new_lay and new_lay > 0:
+            self.btn_lay.configure(
+                text=f"{float(new_lay):.2f}",
+                command=lambda: self._on_price_clicked("LAY", float(new_lay)),
+            )
+        else:
+            self.btn_lay.configure(text="-", command=lambda: None)
+EOF
+CREATE_FILE ui/toolbar.py """ Toolbar Component
+Barra superiore dell'applicazione.
+Reattiva allo stato globale via EventBus
+Inoltra comandi globali come Panic Cashout
+Gestisce il toggle simulazione tramite l'app """
+import tkinter as tk from tkinter import messagebox
+import customtkinter as ctk
+from theme import COLORS
+class Toolbar(ctk.CTkFrame): def init(self, master, app, event_bus, **kwargs): super().init( master, fg_color=COLORS["bg_panel"], height=50, corner_radius=0, **kwargs, ) self.pack_propagate(False)
+self.app = app
+    self.bus = event_bus
+
+    self.status_indicator = None
+    self.btn_cashout_all = None
+    self.sim_switch = None
+
+    self._build_ui()
+    self._wire_events()
+
+def _build_ui(self):
+    self.status_indicator = ctk.CTkLabel(
+        self,
+        text="🟢 SISTEMA OPERATIVO",
+        font=("Segoe UI", 12, "bold"),
+        text_color=COLORS["success"],
+    )
+    self.status_indicator.pack(side=tk.LEFT, padx=20)
+
+    self.btn_cashout_all = ctk.CTkButton(
+        self,
+        text="⚠️ PANIC CASHOUT (Tutto)",
+        fg_color=COLORS["button_danger"],
+        hover_color="#b71c1c",
+        font=("Segoe UI", 12, "bold"),
+        command=self._cmd_panic_cashout,
+    )
+    self.btn_cashout_all.pack(side=tk.RIGHT, padx=10, pady=10)
+
+    if not hasattr(self.app, "simulation_var"):
+        self.app.simulation_var = tk.BooleanVar(value=False)
+
+    self.sim_switch = ctk.CTkSwitch(
+        self,
+        text="Modalità Simulazione",
+        variable=self.app.simulation_var,
+        command=self._cmd_toggle_sim,
+        progress_color=COLORS["warning"],
+        font=("Segoe UI", 12, "bold"),
+    )
+    self.sim_switch.pack(side=tk.RIGHT, padx=20, pady=10)
+
+def _wire_events(self):
+    if self.bus:
+        self.bus.subscribe("STATE_UPDATE_SAFE_MODE", self._on_safe_mode_update)
+
+def _on_safe_mode_update(self, payload):
+    """
+    Compatibile sia con payload bool sia con payload dict.
+    """
+    if isinstance(payload, dict):
+        enabled = bool(payload.get("enabled", False))
+        reason = str(payload.get("reason", "") or "")
+    else:
+        enabled = bool(payload)
+        reason = ""
+
+    def update_visuals():
+        if enabled:
+            text = "🔴 SAFE MODE ATTIVO"
+            if reason:
+                text = f"🔴 SAFE MODE: {reason}"
+
+            self.status_indicator.configure(
+                text=text,
+                text_color=COLORS["warning"],
             )
 
-    # ==========================================
-    # ESECUZIONE CASHOUT VIA OMS
-    # ==========================================
-    def _execute_cashout(self):
-        """Delega l'intento di cashout al RiskMiddleware/OMS."""
-        if not hasattr(self, "market_cashout_tree"):
-            return
-
-        selected = self.market_cashout_tree.selection()
-        if not selected:
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona una posizione per il Cashout."
+            # Cashout/exit devono restare disponibili
+            self.btn_cashout_all.configure(state=tk.NORMAL)
+        else:
+            self.status_indicator.configure(
+                text="🟢 SISTEMA OPERATIVO",
+                text_color=COLORS["success"],
             )
-            return
+            self.btn_cashout_all.configure(state=tk.NORMAL)
 
-        sel_id = selected[0]
-        pos = getattr(self, "market_cashout_positions", {}).get(sel_id)
-        if not pos:
-            return
+    if hasattr(self.app, "uiq"):
+        self.app.uiq.post(update_visuals)
+    else:
+        update_visuals()
 
-        info = pos.get("cashout_info")
-        if not info or float(info.get("current_price", 0) or 0) <= 0:
-            messagebox.showerror(
-                "Errore",
-                "Quota di uscita non disponibile o mercato sospeso."
-            )
-            return
+def _cmd_toggle_sim(self):
+    if hasattr(self.app, "_toggle_simulation"):
+        self.app._toggle_simulation()
 
-        msg = (
-            f"Confermi l'intento di Cashout all'OMS?\n\n"
-            f"Tipo Ordine: {info['cashout_side']}\n"
-            f"Quota: {float(info['current_price']):.2f}\n"
-            f"Stake Richiesto: {float(info['cashout_stake']):.2f} €\n"
-            f"P&L Stimato: {float(info['green_up']):.2f} €"
+def _cmd_panic_cashout(self):
+    if not messagebox.askyesno(
+        "PANIC CASHOUT",
+        "Sei sicuro di voler chiudere TUTTE le posizioni aperte sul mercato corrente?",
+    ):
+        return
+
+    if not getattr(self.app, "current_market", None):
+        messagebox.showwarning("Errore", "Nessun mercato selezionato.")
+        return
+
+    market_id = self.app.current_market.get("marketId")
+    positions = getattr(self.app, "market_cashout_positions", {}) or {}
+
+    if not positions:
+        messagebox.showinfo(
+            "Info",
+            "Nessuna posizione aperta da chiudere su questo mercato.",
         )
-        if not messagebox.askyesno("Conferma Cashout", msg):
-            return
+        return
+
+    sent_count = 0
+    for sel_id, pos in positions.items():
+        info = pos.get("cashout_info", {})
+        if not info:
+            continue
+
+        current_price = float(info.get("current_price", 0) or 0)
+        cashout_stake = float(info.get("cashout_stake", 0) or 0)
+        cashout_side = info.get("cashout_side")
+        green_up = float(info.get("green_up", 0) or 0)
+
+        if current_price <= 0 or cashout_stake <= 0 or not cashout_side:
+            continue
 
         payload = {
-            "market_id": self.current_market["marketId"],
+            "market_id": str(market_id),
             "selection_id": sel_id,
-            "side": info["cashout_side"],
-            "stake": float(info["cashout_stake"]),
-            "price": float(info["current_price"]),
-            "green_up": float(info["green_up"]),
+            "side": cashout_side,
+            "stake": cashout_stake,
+            "price": current_price,
+            "green_up": green_up,
             "original_pos": pos,
+            "source": "PANIC_BUTTON",
         }
-
-        logger.info(
-            f"Invio intento Cashout all'EventBus (REQ_EXECUTE_CASHOUT): {payload}"
-        )
         self.bus.publish("REQ_EXECUTE_CASHOUT", payload)
+        sent_count += 1
 
-    # ==========================================
-    # CALLBACKS DA OMS
-    # ==========================================
-    def _on_cashout_success(self, data):
-        matched = float(data.get("matched", 0) or 0)
-        green_up = float(data.get("green_up", 0) or 0)
-
-        msg = "L'OMS ha elaborato il cashout!"
-        if matched > 0:
-            msg += f"\n\nImporto Abbinato: {matched:.2f} €"
-        msg += f"\nP&L Stimato: {green_up:.2f} €"
-
-        messagebox.showinfo("Cashout Eseguito", msg)
-
-        self._update_market_cashout_positions()
-        self._update_placed_bets()
-        if hasattr(self, "_update_balance"):
-            self._update_balance()
-
-    def _on_cashout_failed(self, error):
-        messagebox.showerror(
-            "Cashout Fallito",
-            f"L'OMS ha riscontrato un errore:\n{error}"
+    if sent_count == 0:
+        messagebox.showinfo(
+            "Info",
+            "Nessuna posizione valida da inviare in cashout.",
         )
-EOF
+        return
 
+    messagebox.showinfo(
+        "Inviato",
+        f"Comandi di Cashout inviati all'OMS: {sent_count}",
+    )
+EOF
