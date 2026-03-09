@@ -1,392 +1,1182 @@
-CREA_FILE main.py
+CREA_FILE core/trading_engine.py
 """
-Betfair Dutching - Tutti i Mercati
-Main application orchestrator.
+Trading Engine (UI-Agnostic)
+Livello Istituzionale: OMS unico, Pattern Saga, Recovery, Persistence Completa,
+Simulazione, Best Price, stati ordine coerenti, eventi UI coerenti.
 """
+__all__ = ["TradingEngine"]
+
+import json
 import logging
 import threading
 import time
+import uuid
 
-import customtkinter as ctk
+from circuit_breaker import PermanentError
 
-from ui.tabs.telegram_tab_ui import TelegramTabUI
-from app_modules.betting_module import BettingModule
-from app_modules.monitoring_module import MonitoringModule
-from app_modules.simulation_module import SimulationModule
-from app_modules.streaming_module import StreamingModule
-from app_modules.telegram_module import TelegramModule
-from app_modules.ui_module import UIModule
-from controllers.telegram_controller import TelegramController
-from core.event_bus import EventBus
-from core.trading_engine import TradingEngine
-from database import Database
-from executor_manager import SafeExecutor
-from goal_engine_pro import APIFootballClient, GoalEnginePro
-from shutdown_manager import ShutdownManager
-from telegram_listener import SignalQueue
-from theme import COLORS
-from tree_manager import TreeManager
-from ui_queue import UIQueue
-
-APP_NAME = "Pickfair"
-APP_VERSION = "3.19.1"
-WINDOW_WIDTH = 1400
-WINDOW_HEIGHT = 900
+logger = logging.getLogger(__name__)
 
 
-class PickfairApp(
-    UIModule,
-    TelegramModule,
-    StreamingModule,
-    BettingModule,
-    SimulationModule,
-    MonitoringModule,
-):
-    def __init__(self):
-        from theme import configure_customtkinter
+class TradingEngine:
+    def __init__(self, bus, db, client_getter, executor):
+        self.bus = bus
+        self.db = db
+        self.client_getter = client_getter
+        self.executor = executor
 
-        configure_customtkinter()
-        self.root = ctk.CTk()
-        self.root.title(f"{APP_NAME} v{APP_VERSION}")
-        self.root.configure(fg_color=COLORS["bg_dark"])
+        self.is_killed = False
+        self._active_submissions = set()
+        self._lock_mutex = threading.Lock()
 
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        available_height = screen_height - 50
-        window_width = min(WINDOW_WIDTH, int(screen_width * 0.9))
-        window_height = min(WINDOW_HEIGHT, int(available_height * 0.9))
-        x = (screen_width - window_width) // 2
-        y = max(0, (available_height - window_height) // 2)
-        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        self.root.minsize(min_width=900, min_height=500)
-        self.root.resizable(True, True)
+        self.bus.subscribe("CMD_QUICK_BET", self._handle_quick_bet)
+        self.bus.subscribe("CMD_PLACE_DUTCHING", self._handle_place_dutching)
+        self.bus.subscribe("CMD_EXECUTE_CASHOUT", self._handle_cashout)
+        self.bus.subscribe("STATE_UPDATE_SAFE_MODE", self._toggle_kill_switch)
+        self.bus.subscribe("CLIENT_CONNECTED", lambda _: self._recover_pending_sagas())
 
-        if screen_width <= 1366 or screen_height <= 768:
-            self.root.after(100, lambda: self._try_maximize())
+    def _toggle_kill_switch(self, payload):
+        if isinstance(payload, dict):
+            self.is_killed = bool(payload.get("enabled", False))
+        else:
+            self.is_killed = bool(payload)
 
-        try:
-            self.root.iconbitmap("icon.ico")
-        except:
-            pass
+    def _acquire_lock(self, customer_ref):
+        with self._lock_mutex:
+            if customer_ref in self._active_submissions:
+                return False
+            self._active_submissions.add(customer_ref)
+            return True
 
-        self.logger = logging.getLogger("PickfairApp")
+    def _release_lock(self, customer_ref):
+        with self._lock_mutex:
+            self._active_submissions.discard(customer_ref)
 
-        self.db = Database()
-        print(f"[DEBUG] Database path: {self.db.db_path}")
+    def _publish_ui_event(self, ok_event, fail_event, ok_payload=None, fail_message=None):
+        if ok_payload is not None:
+            self.bus.publish(ok_event, ok_payload)
+        elif fail_message is not None:
+            self.bus.publish(fail_event, fail_message)
 
-        self.bus = EventBus()
+    def _compute_order_status(self, matched_amount, requested_amount):
+        matched_amount = float(matched_amount or 0.0)
+        requested_amount = float(requested_amount or 0.0)
 
-        # --- SAFE MODE GLOBAL KILL SWITCH BRIDGE ---
-        self.safe_mode_active = False
-        self.bus.subscribe("SAFE_MODE_TRIGGER", self._on_safe_mode_trigger)
+        if matched_amount <= 0:
+            return "UNMATCHED"
+        if matched_amount + 0.01 >= requested_amount:
+            return "MATCHED"
+        return "PARTIALLY_MATCHED"
 
-        if hasattr(self, "_handle_telegram_signal"):
-            self.bus.subscribe("TELEGRAM_SIGNAL", self._handle_telegram_signal)
+    def _safe_sum_matched(self, reports):
+        total = 0.0
+        for report in reports or []:
+            total += float(report.get("sizeMatched", 0) or 0)
+        return total
 
-        self.bus.subscribe(
-            "TELEGRAM_STATUS",
-            lambda data: self._update_telegram_status(data["status"], data["message"])
-            if hasattr(self, "_update_telegram_status")
-            else None,
-        )
-        self.bus.subscribe("MARKET_TICK", self._buffer_market_tick)
-
-        self.client = None
-        self.current_event = None
-        self.current_market = None
-        self.available_markets = []
-        self.selected_runners = {}
-        self.streaming_active = False
-        self.live_mode = False
-        self.live_refresh_id = None
-        self.booking_monitor_id = None
-        self.auto_cashout_monitor_id = None
-        self.pending_bookings = []
-        self.account_data = {"available": 0, "exposure": 0, "total": 0}
-        self.telegram_listener = None
-        self.telegram_signal_queue = SignalQueue()
-        self.telegram_status = "STOPPED"
-        self.market_status = "OPEN"
-        self.simulation_mode = False
-
-        self._buffer_lock = threading.Lock()
-        self._market_update_buffer = {}
-        self._pending_tree_update = False
-
-        self.uiq = UIQueue(self.root, fps=30)
-        self.uiq.start()
-
-        self.executor = SafeExecutor(max_workers=4)
-        self.shutdown_mgr = ShutdownManager()
-        self.telegram_controller = TelegramController(self)
-
-        from ai.wom_engine import get_wom_engine
-        from ai.ai_guardrail import get_guardrail
-
-        self.wom_engine = get_wom_engine()
-        self.guardrail = get_guardrail()
-
-        from core.risk_middleware import RiskMiddleware
-        from core.trading_engine import TradingEngine
-
-        self.risk_middleware = RiskMiddleware(self.bus, self.guardrail, self.wom_engine)
-        self.trading_engine = TradingEngine(
-            self.bus, self.db, lambda: self.client, self.executor
-        )
-
-        def _feed_wom(payload):
-            if not hasattr(self, "wom_engine") or not self.wom_engine:
+    def _recover_pending_sagas(self):
+        def task():
+            pending = self.db.get_pending_sagas()
+            if not pending:
                 return
-            for r in payload.get("runners_data", []):
-                sel_id = r.get("selectionId")
-                bp = r.get("backPrices", [])
-                lp = r.get("layPrices", [])
-                bp_price = bp[0][0] if bp else 0
-                bp_vol = bp[0][1] if bp and len(bp[0]) > 1 else 0
-                lp_price = lp[0][0] if lp else 0
-                lp_vol = lp[0][1] if lp and len(lp[0]) > 1 else 0
-                if sel_id and (bp_price > 0 or lp_price > 0):
-                    self.wom_engine.record_tick(
-                        sel_id, bp_price, bp_vol, lp_price, lp_vol
+
+            client = self.client_getter()
+            if not client:
+                return
+
+            logger.warning(f"[Recovery] Trovate {len(pending)} saghe pendenti post-crash.")
+
+            for saga in pending:
+                customer_ref = saga["customer_ref"]
+                market_id = saga["market_id"]
+                raw_payload = saga.get("raw_payload", "{}")
+
+                try:
+                    payload = json.loads(raw_payload)
+                except Exception:
+                    payload = {}
+
+                is_recovered, recovered_reports = self._reconcile_orders(
+                    client, market_id, customer_ref
+                )
+
+                if is_recovered:
+                    self.db.mark_saga_reconciled(customer_ref)
+
+                    if "results" in payload:
+                        matched = self._safe_sum_matched(recovered_reports)
+                        requested_size = sum(
+                            float(r.get("stake", 0) or 0) for r in payload.get("results", [])
+                        )
+                        status = self._compute_order_status(matched, requested_size)
+
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", "Recuperato"),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=payload.get("bet_type", ""),
+                            selections=payload.get("results", []),
+                            total_stake=payload.get("total_stake", 0.0),
+                            potential_profit=0.0,
+                            status=status,
+                        )
+                    elif "green_up" in payload:
+                        self.db.save_cashout_transaction(
+                            market_id=market_id,
+                            selection_id=payload.get("selection_id", ""),
+                            original_bet_id="",
+                            cashout_bet_id=customer_ref,
+                            original_side="",
+                            original_stake=0,
+                            original_price=0,
+                            cashout_side=payload.get("side", ""),
+                            cashout_stake=payload.get("stake", 0),
+                            cashout_price=payload.get("price", 0),
+                            profit_loss=payload.get("green_up", 0.0),
+                        )
+                    elif "stake" in payload:
+                        matched = self._safe_sum_matched(recovered_reports)
+                        requested_size = float(payload.get("stake", 0.0) or 0.0)
+                        status = self._compute_order_status(matched, requested_size)
+
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", "Recuperato"),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=payload.get("bet_type", ""),
+                            selections=[
+                                {
+                                    "selectionId": payload.get("selection_id"),
+                                    "runnerName": payload.get("runner_name"),
+                                    "price": payload.get("price"),
+                                    "stake": payload.get("stake"),
+                                }
+                            ],
+                            total_stake=payload.get("stake", 0.0),
+                            potential_profit=0.0,
+                            status=status,
+                        )
+
+                    logger.info(f"[Recovery] Saga {customer_ref} riconciliata.")
+                else:
+                    self.db.mark_saga_failed(customer_ref)
+                    logger.warning(f"[Recovery] Saga {customer_ref} marcata fallita.")
+
+        self.executor.submit("saga_recovery", task)
+
+    def _reconcile_orders(self, client, market_id, customer_ref):
+        for delay in [0.5, 1.0, 2.0]:
+            time.sleep(delay)
+            try:
+                try:
+                    orders = client.get_current_orders(
+                        market_ids=[market_id], customer_order_refs=[customer_ref]
+                    )
+                except TypeError:
+                    orders = client.get_current_orders()
+
+                all_orders = (orders.get("matched", []) or []) + (orders.get("unmatched", []) or [])
+                recovered = [
+                    o
+                    for o in all_orders
+                    if (
+                        o.get("customerOrderRef") == customer_ref
+                        or o.get("customerRef") == customer_ref
+                    )
+                    and str(o.get("marketId")) == str(market_id)
+                ]
+                if recovered:
+                    return True, recovered
+            except Exception:
+                continue
+        return False, []
+
+    def _handle_quick_bet(self, payload):
+        def task():
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref):
+                return
+
+            try:
+                if self.is_killed:
+                    self.bus.publish("QUICK_BET_FAILED", "SAFE MODE ATTIVO")
+                    return
+
+                market_id = payload["market_id"]
+                selection_id = payload["selection_id"]
+                bet_type = payload["bet_type"]
+                price = float(payload["price"])
+                stake = float(payload["stake"])
+                sim_mode = bool(payload.get("simulation_mode", False))
+
+                if sim_mode:
+                    sim_settings = self.db.get_simulation_settings()
+                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+                    liability = stake * (price - 1) if bet_type == "LAY" else stake
+
+                    if v_balance >= liability:
+                        new_bal = v_balance - liability
+                        self.db.save_simulation_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            side=bet_type,
+                            selection_id=selection_id,
+                            selection_name=payload.get("runner_name", ""),
+                            price=price,
+                            stake=stake,
+                            status="MATCHED",
+                        )
+                        self.db.increment_simulation_bet_count(new_bal)
+                        self.bus.publish(
+                            "QUICK_BET_SUCCESS",
+                            {
+                                "runner_name": payload.get("runner_name", ""),
+                                "price": price,
+                                "stake": stake,
+                                "matched": stake,
+                                "status": "MATCHED",
+                                "new_balance": new_bal,
+                                "sim": True,
+                            },
+                        )
+                    else:
+                        self.bus.publish("QUICK_BET_FAILED", "Saldo virtuale insufficiente")
+                    return
+
+                client = self.client_getter()
+                if not client:
+                    raise Exception("Client non connesso")
+
+                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+
+                try:
+                    result = client.place_bet(
+                        market_id=market_id,
+                        selection_id=selection_id,
+                        side=bet_type,
+                        price=price,
+                        size=stake,
+                        persistence_type="LAPSE",
+                        customer_ref=customer_ref,
+                    )
+                    reports = result.get("instructionReports", []) or []
+
+                    if result.get("status") == "SUCCESS":
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(reports)
+                        status = self._compute_order_status(matched, stake)
+
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=[
+                                {
+                                    "selectionId": selection_id,
+                                    "runnerName": payload.get("runner_name", ""),
+                                    "price": price,
+                                    "stake": stake,
+                                }
+                            ],
+                            total_stake=stake,
+                            potential_profit=0.0,
+                            status=status,
+                        )
+                        self.bus.publish(
+                            "QUICK_BET_SUCCESS",
+                            {
+                                "runner_name": payload.get("runner_name", ""),
+                                "price": price,
+                                "stake": stake,
+                                "matched": matched,
+                                "status": status,
+                                "sim": False,
+                            },
+                        )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=[
+                                {
+                                    "selectionId": selection_id,
+                                    "runnerName": payload.get("runner_name", ""),
+                                    "price": price,
+                                    "stake": stake,
+                                }
+                            ],
+                            total_stake=stake,
+                            potential_profit=0.0,
+                            status="FAILED",
+                        )
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            f"Stato API: {result.get('status')}",
+                        )
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client, market_id, customer_ref
+                    )
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(recovered_reports)
+                        status = self._compute_order_status(matched, stake)
+
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=[
+                                {
+                                    "selectionId": selection_id,
+                                    "runnerName": payload.get("runner_name", ""),
+                                    "price": price,
+                                    "stake": stake,
+                                }
+                            ],
+                            total_stake=stake,
+                            potential_profit=0.0,
+                            status=status,
+                        )
+                        self.bus.publish(
+                            "QUICK_BET_SUCCESS",
+                            {
+                                "runner_name": payload.get("runner_name", ""),
+                                "price": price,
+                                "stake": stake,
+                                "matched": matched,
+                                "status": status,
+                                "sim": False,
+                                "recovered": True,
+                            },
+                        )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=[
+                                {
+                                    "selectionId": selection_id,
+                                    "runnerName": payload.get("runner_name", ""),
+                                    "price": price,
+                                    "stake": stake,
+                                }
+                            ],
+                            total_stake=stake,
+                            potential_profit=0.0,
+                            status="FAILED",
+                        )
+                        if isinstance(e, PermanentError):
+                            self.bus.publish(
+                                "SAFE_MODE_TRIGGER",
+                                {"reason": "Circuit Breaker", "details": str(e)},
+                            )
+                        self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+            finally:
+                self._release_lock(customer_ref)
+
+        self.executor.submit("engine_quick_bet", task)
+
+    def _handle_place_dutching(self, payload):
+        def task():
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref):
+                return
+
+            try:
+                if self.is_killed:
+                    self.bus.publish("DUTCHING_FAILED", "SAFE MODE ATTIVO")
+                    return
+
+                market_id = payload["market_id"]
+                bet_type = payload["bet_type"]
+                results = payload["results"]
+                sim_mode = bool(payload.get("simulation_mode", False))
+                total_stake = float(payload["total_stake"])
+                use_best_price = bool(payload.get("use_best_price", False))
+                requested_size = sum(float(r.get("stake", 0) or 0) for r in results)
+
+                if sim_mode:
+                    sim_settings = self.db.get_simulation_settings()
+                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+
+                    total_risk = (
+                        sum(
+                            float(r.get("stake", 0) or 0)
+                            * (float(r.get("price", 1.0) or 1.0) - 1.0)
+                            for r in results
+                        )
+                        if bet_type == "LAY"
+                        else total_stake
                     )
 
-        self.bus.subscribe("MARKET_TICK", _feed_wom)
+                    if v_balance >= total_risk:
+                        new_bal = v_balance - total_risk
+                        self.db.save_simulation_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            side=bet_type,
+                            status="MATCHED",
+                            selections=results,
+                            total_stake=total_stake,
+                        )
+                        self.db.increment_simulation_bet_count(new_bal)
+                        self.bus.publish(
+                            "DUTCHING_SUCCESS",
+                            {
+                                "sim": True,
+                                "matched": requested_size,
+                                "status": "MATCHED",
+                                "total_stake": total_stake,
+                                "new_balance": new_bal,
+                            },
+                        )
+                    else:
+                        self.bus.publish("DUTCHING_FAILED", "Saldo virtuale insufficiente")
+                    return
 
-        self.bus.subscribe(
-            "QUICK_BET_SUCCESS",
-            lambda d: self.uiq.post(self._on_engine_success, d)
-            if hasattr(self, "_on_engine_success")
-            else None,
-        )
-        self.bus.subscribe(
-            "QUICK_BET_FAILED",
-            lambda e: self.uiq.post(self._on_engine_error, e)
-            if hasattr(self, "_on_engine_error")
-            else None,
-        )
-        self.bus.subscribe(
-            "DUTCHING_SUCCESS",
-            lambda d: self.uiq.post(self._on_engine_success, d)
-            if hasattr(self, "_on_engine_success")
-            else None,
-        )
-        self.bus.subscribe(
-            "DUTCHING_FAILED",
-            lambda e: self.uiq.post(self._on_engine_error, e)
-            if hasattr(self, "_on_engine_error")
-            else None,
-        )
-        self.bus.subscribe(
-            "CASHOUT_SUCCESS",
-            lambda d: self.uiq.post(self._on_cashout_success, d)
-            if hasattr(self, "_on_cashout_success")
-            else None,
-        )
-        self.bus.subscribe(
-            "CASHOUT_FAILED",
-            lambda e: self.uiq.post(self._on_cashout_failed, e)
-            if hasattr(self, "_on_cashout_failed")
-            else None,
-        )
+                client = self.client_getter()
+                if not client:
+                    raise Exception("Client non connesso")
 
-        if not hasattr(self, "last_ui_tick"):
-            self.last_ui_tick = time.time()
+                self.db.create_pending_saga(customer_ref, market_id, None, payload)
 
-        self.api_football = APIFootballClient(api_key="INSERISCI_TUA_API_KEY_QUI")
-        self.goal_engine = GoalEnginePro(
-            api_client=self.api_football,
-            betfair_stream=getattr(self, "stream", None),
-            hedge_callback=self._on_goal_hedge,
-            reopen_callback=self._on_goal_reopen,
-            ui_queue=self.uiq,
-        )
-        self.goal_engine.set_delay("500ms")
-        self.goal_engine.set_confirm_mode(True)
-        self.goal_engine.set_low_request_mode(True)
-        self.goal_engine.start()
-
-        self.shutdown_mgr.register("uiq", self.uiq.stop, priority=3)
-        self.shutdown_mgr.register("goal_engine", self.goal_engine.stop, priority=5)
-        if hasattr(self, "db") and self.db:
-            self.shutdown_mgr.register("database", self.db.close, priority=4)
-
-        from plugin_manager import PluginManager
-
-        self.plugin_manager = PluginManager(self)
-        self.plugin_tabs = {}
-
-        self._create_menu()
-        self._create_main_layout()
-
-        self.tm_events = TreeManager(self.events_tree)
-        self.tm_runners = TreeManager(self.runners_tree)
-        self.tm_placed_bets = TreeManager(self.placed_bets_tree)
-        self.tm_cashout = TreeManager(self.market_cashout_tree)
-
-        self.root.after(3600000, self._schedule_order_cleanup)
-        self._load_settings()
-        self._configure_styles()
-
-        if hasattr(self, "_start_booking_monitor"):
-            self._start_booking_monitor()
-        if hasattr(self, "_start_auto_cashout_monitor"):
-            self._start_auto_cashout_monitor()
-        self._check_for_updates_on_startup()
-
-    def _create_telegram_tab(self):
-        self.telegram_tab_ui = TelegramTabUI(self.telegram_tab, self)
-
-    def _set_safe_mode(self, enabled, reason=None, source="SYSTEM"):
-        enabled = bool(enabled)
-        previous = getattr(self, "safe_mode_active", False)
-        self.safe_mode_active = enabled
-
-        payload = {
-            "enabled": enabled,
-            "reason": reason or "",
-            "source": source,
-            "ts": time.time(),
-        }
-
-        self.logger.warning(
-            "SAFE MODE %s source=%s reason=%s",
-            "ON" if enabled else "OFF",
-            source,
-            reason or "",
-        )
-
-        self.bus.publish("STATE_UPDATE_SAFE_MODE", payload)
-
-        if previous != enabled:
-            self.uiq.post(self._apply_safe_mode_ui, payload)
-
-    def _on_safe_mode_trigger(self, data):
-        data = data or {}
-        reason = data.get("reason") or data.get("message") or "Trigger ricevuto"
-        source = data.get("source") or "TRADING_ENGINE"
-        self._set_safe_mode(True, reason=reason, source=source)
-
-    def _apply_safe_mode_ui(self, payload):
-        enabled = payload.get("enabled", False)
-        reason = payload.get("reason", "")
-
-        try:
-            status_text = "SAFE MODE ATTIVO"
-            if reason:
-                status_text = f"{status_text} - {reason}"
-
-            if hasattr(self, "status_label") and self.status_label.winfo_exists():
-                self.status_label.configure(
-                    text=status_text if enabled else "Safe Mode disattivato",
-                    text_color=COLORS["warning"] if enabled else COLORS["success"],
-                )
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, "place_btn") and self.place_btn.winfo_exists():
-                self.place_btn.configure(state=ctk.DISABLED if enabled else ctk.NORMAL)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, "dutch_modal_btn") and self.dutch_modal_btn.winfo_exists():
-                self.dutch_modal_btn.configure(
-                    state=ctk.DISABLED if enabled else ctk.NORMAL
-                )
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, "connect_btn") and self.connect_btn.winfo_exists():
-                self.connect_btn.configure(
-                    fg_color=COLORS["warning"] if enabled else COLORS["button_primary"]
-                )
-        except Exception:
-            pass
-
-    def _buffer_market_tick(self, payload):
-        market_id = payload["market_id"]
-        if (
-            not getattr(self, "current_market", None)
-            or market_id != self.current_market["marketId"]
-        ):
-            return
-
-        with self._buffer_lock:
-            if len(self._market_update_buffer) > 5:
-                self._market_update_buffer.clear()
-            self._market_update_buffer[market_id] = payload["runners_data"]
-            if not getattr(self, "_pending_tree_update", False):
-                self._pending_tree_update = True
-                self.root.after(100, self._throttled_refresh)
-
-    def _throttled_refresh(self):
-        with self._buffer_lock:
-            snapshot = dict(self._market_update_buffer)
-            self._market_update_buffer.clear()
-            self._pending_tree_update = False
-
-        if not getattr(self, "current_market", None):
-            return
-        market_id = self.current_market["marketId"]
-        runners_data = snapshot.get(market_id)
-        if not runners_data:
-            return
-
-        def update_ui():
-            recalc_needed = False
-            for runner_update in runners_data:
-                selection_id = str(runner_update["selectionId"])
                 try:
-                    item = self.runners_tree.item(selection_id)
-                    if not item:
-                        continue
-                    current_values = list(item["values"])
-                    back_prices = runner_update.get("backPrices", [])
-                    lay_prices = runner_update.get("layPrices", [])
+                    instructions = []
+                    if use_best_price:
+                        book = client.get_market_book(market_id)
+                        current_prices = {}
+                        if book and book.get("runners"):
+                            for r in book["runners"]:
+                                sel_id = r.get("selectionId")
+                                ex = r.get("ex", {})
+                                if bet_type == "BACK":
+                                    avail = ex.get("availableToBack", [])
+                                    current_prices[sel_id] = (
+                                        avail[0].get("price", 1.01) if avail else 1.01
+                                    )
+                                else:
+                                    avail = ex.get("availableToLay", [])
+                                    current_prices[sel_id] = (
+                                        avail[0].get("price", 1000.0) if avail else 1000.0
+                                    )
 
-                    if back_prices:
-                        current_values[2] = f"{back_prices[0][0]:.2f}"
-                        current_values[3] = (
-                            f"{back_prices[0][1]:.0f}"
-                            if len(back_prices[0]) > 1
-                            else "-"
+                        for r in results:
+                            price = current_prices.get(r["selectionId"], r["price"])
+                            instructions.append(
+                                {
+                                    "selectionId": r["selectionId"],
+                                    "side": bet_type,
+                                    "price": price,
+                                    "size": r["stake"],
+                                }
+                            )
+                    else:
+                        instructions = [
+                            {
+                                "selectionId": r["selectionId"],
+                                "side": bet_type,
+                                "price": r["price"],
+                                "size": r["stake"],
+                            }
+                            for r in results
+                        ]
+
+                    result = client.place_orders(
+                        market_id, instructions, customer_ref=customer_ref
+                    )
+                    reports = result.get("instructionReports", []) or []
+
+                    if result.get("status") == "SUCCESS":
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(reports)
+                        status = self._compute_order_status(matched, requested_size)
+
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=results,
+                            total_stake=total_stake,
+                            potential_profit=0.0,
+                            status=status,
                         )
-                    if lay_prices:
-                        current_values[4] = f"{lay_prices[0][0]:.2f}"
-                        current_values[5] = (
-                            f"{lay_prices[0][1]:.0f}"
-                            if len(lay_prices[0]) > 1
-                            else "-"
+                        self.bus.publish(
+                            "DUTCHING_SUCCESS",
+                            {
+                                "sim": False,
+                                "matched": matched,
+                                "status": status,
+                                "total_stake": total_stake,
+                            },
                         )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=results,
+                            total_stake=total_stake,
+                            potential_profit=0.0,
+                            status="FAILED",
+                        )
+                        self.bus.publish(
+                            "DUTCHING_FAILED",
+                            f"Stato API: {result.get('status')}",
+                        )
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client, market_id, customer_ref
+                    )
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(recovered_reports)
+                        status = self._compute_order_status(matched, requested_size)
 
-                    self.runners_tree.item(selection_id, values=current_values)
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=results,
+                            total_stake=total_stake,
+                            potential_profit=0.0,
+                            status=status,
+                        )
+                        self.bus.publish(
+                            "DUTCHING_SUCCESS",
+                            {
+                                "sim": False,
+                                "matched": matched,
+                                "status": status,
+                                "total_stake": total_stake,
+                                "recovered": True,
+                            },
+                        )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.db.save_bet(
+                            event_name=payload.get("event_name", ""),
+                            market_id=market_id,
+                            market_name=payload.get("market_name", ""),
+                            bet_type=bet_type,
+                            selections=results,
+                            total_stake=total_stake,
+                            potential_profit=0.0,
+                            status="FAILED",
+                        )
+                        if isinstance(e, PermanentError):
+                            self.bus.publish(
+                                "SAFE_MODE_TRIGGER",
+                                {"reason": "Circuit Breaker", "details": str(e)},
+                            )
+                        self.bus.publish("DUTCHING_FAILED", f"Errore Rete: {str(e)}")
+            finally:
+                self._release_lock(customer_ref)
 
-                    if selection_id in self.selected_runners:
-                        recalc_needed = True
-                        if back_prices:
-                            self.selected_runners[selection_id]["backPrice"] = back_prices[0][0]
-                        if lay_prices:
-                            self.selected_runners[selection_id]["layPrice"] = lay_prices[0][0]
-                        bet_type = getattr(self, "bet_type_var", None)
-                        if bet_type:
-                            if bet_type.get() == "BACK" and back_prices:
-                                self.selected_runners[selection_id]["price"] = back_prices[0][0]
-                            elif bet_type.get() == "LAY" and lay_prices:
-                                self.selected_runners[selection_id]["price"] = lay_prices[0][0]
-                except Exception:
-                    pass
-            if recalc_needed:
-                self._recalculate()
+        self.executor.submit("engine_dutching", task)
 
-        self.uiq.post(update_ui)
+    def _handle_cashout(self, payload):
+        def task():
+            customer_ref = uuid.uuid4().hex[:32]
+            if not self._acquire_lock(customer_ref):
+                return
 
+            try:
+                if self.is_killed:
+                    self.bus.publish("CASHOUT_FAILED", "SAFE MODE ATTIVO")
+                    return
 
-if __name__ == "__main__":
-    app = PickfairApp()
-    app.root.mainloop()
+                client = self.client_getter()
+                if not client:
+                    raise Exception("Client non connesso")
+
+                market_id = payload["market_id"]
+                selection_id = payload["selection_id"]
+                side = payload["side"]
+                stake = float(payload["stake"])
+                price = float(payload["price"])
+                green_up = float(payload["green_up"])
+
+                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                instructions = [
+                    {
+                        "selectionId": selection_id,
+                        "side": side,
+                        "orderType": "LIMIT",
+                        "limitOrder": {
+                            "size": stake,
+                            "price": price,
+                            "persistenceType": "LAPSE",
+                        },
+                    }
+                ]
+
+                try:
+                    result = client.place_orders(
+                        market_id, instructions, customer_ref=customer_ref
+                    )
+                    reports = result.get("instructionReports", []) or []
+
+                    if result.get("status") == "SUCCESS":
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(reports)
+                        status = self._compute_order_status(matched, stake)
+
+                        self.db.save_cashout_transaction(
+                            market_id=market_id,
+                            selection_id=selection_id,
+                            original_bet_id="",
+                            cashout_bet_id=customer_ref,
+                            original_side="",
+                            original_stake=0,
+                            original_price=0,
+                            cashout_side=side,
+                            cashout_stake=stake,
+                            cashout_price=price,
+                            profit_loss=green_up,
+                        )
+                        self.bus.publish(
+                            "CASHOUT_SUCCESS",
+                            {
+                                "green_up": green_up,
+                                "matched": matched,
+                                "status": status,
+                            },
+                        )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        self.bus.publish(
+                            "CASHOUT_FAILED",
+                            f"Stato API: {result.get('status')}",
+                        )
+                except Exception as e:
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client, market_id, customer_ref
+                    )
+                    if is_recovered:
+                        self.db.mark_saga_reconciled(customer_ref)
+                        matched = self._safe_sum_matched(recovered_reports)
+                        status = self._compute_order_status(matched, stake)
+
+                        self.db.save_cashout_transaction(
+                            market_id=market_id,
+                            selection_id=selection_id,
+                            original_bet_id="",
+                            cashout_bet_id=customer_ref,
+                            original_side="",
+                            original_stake=0,
+                            original_price=0,
+                            cashout_side=side,
+                            cashout_stake=stake,
+                            cashout_price=price,
+                            profit_loss=green_up,
+                        )
+                        self.bus.publish(
+                            "CASHOUT_SUCCESS",
+                            {
+                                "green_up": green_up,
+                                "matched": matched,
+                                "status": status,
+                                "recovered": True,
+                            },
+                        )
+                    else:
+                        self.db.mark_saga_failed(customer_ref)
+                        if isinstance(e, PermanentError):
+                            self.bus.publish(
+                                "SAFE_MODE_TRIGGER",
+                                {
+                                    "reason": "Circuit Breaker Cashout",
+                                    "details": str(e),
+                                },
+                            )
+                        self.bus.publish("CASHOUT_FAILED", f"Errore Rete: {str(e)}")
+            finally:
+                self._release_lock(customer_ref)
+
+        self.executor.submit("engine_cashout", task)
 EOF
 
-FIX_WHITESPACE
+CREA_FILE controllers/dutching_controller.py
+"""
+DutchingController - Orchestratore unificato per dutching
+Coordina UI -> validazioni -> AI -> dutching -> EventBus (RiskGate)
+Entry point unico per tutto il flusso di dutching.
+Zero esecuzione ordini diretta: solo validazione, calcolo, preflight e publish REQ_PLACE_DUTCHING.
+"""
+import logging
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
+from ai.ai_guardrail import get_guardrail
+from ai.ai_pattern_engine import AIPatternEngine
+from ai.wom_engine import get_wom_engine
+from automation_engine import AutomationEngine
+from dutching import calculate_dutching_stakes, calculate_mixed_dutching
+from market_validator import MarketValidator
+from safe_mode import get_safe_mode_manager
+from safety_logger import get_safety_logger
+from trading_config import (
+    BOOK_BLOCK,
+    BOOK_WARNING,
+    LIQUIDITY_GUARD_ENABLED,
+    LIQUIDITY_MULTIPLIER,
+    LIQUIDITY_WARNING_ONLY,
+    MAX_SPREAD_TICKS,
+    MAX_STAKE_PCT,
+    MIN_LIQUIDITY,
+    MIN_LIQUIDITY_ABSOLUTE,
+    MIN_PRICE,
+    MIN_STAKE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreflightResult:
+    is_valid: bool = True
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    liquidity_ok: bool = True
+    liquidity_guard_ok: bool = True
+    spread_ok: bool = True
+    stake_ok: bool = True
+    price_ok: bool = True
+    book_ok: bool = True
+    details: Dict = field(default_factory=dict)
+
+
+class DutchingController:
+    def __init__(self, broker=None, pnl_engine=None, bus=None, simulation: bool = False):
+        self.broker = broker
+        self.pnl_engine = pnl_engine
+        self.bus = bus
+        self.simulation = simulation
+        self.auto_green_enabled = True
+        self.ai_enabled = True
+        self.preset_stake_pct = 1.0
+
+        self.ai_engine = AIPatternEngine()
+        self.wom_engine = get_wom_engine()
+        self.guardrail = get_guardrail()
+        self.market_validator = MarketValidator()
+        self.automation = AutomationEngine()
+        self.safety_logger = get_safety_logger()
+        self.safe_mode = get_safe_mode_manager()
+
+        self.current_event_name = ""
+        self.current_market_name = ""
+
+    def submit_dutching(
+        self,
+        market_id: str,
+        market_type: str,
+        selections: List[Dict],
+        total_stake: float,
+        mode: str = "BACK",
+        ai_enabled: bool = False,
+        ai_wom_enabled: bool = False,
+        auto_green: bool = False,
+        commission: float = 4.5,
+        use_best_price: bool = False,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        trailing: Optional[float] = None,
+        dry_run: bool = False,
+    ) -> Dict:
+        if self.safe_mode.is_safe_mode_active:
+            raise RuntimeError("SAFE MODE attivo: dutching bloccato")
+
+        if not self.bus:
+            raise RuntimeError("EventBus mancante nel DutchingController")
+
+        validation_errors = self.validate_selections(selections)
+        if validation_errors:
+            return {
+                "status": "VALIDATION_FAILED",
+                "orders": [],
+                "errors": validation_errors,
+                "simulation": self.simulation,
+                "mode": mode,
+                "dry_run": dry_run,
+            }
+
+        if ai_enabled or ai_wom_enabled:
+            tick_count = 10
+            wom_confidence = 0.5
+            volatility = 0.0
+
+            if selections and hasattr(self, "wom_engine") and self.wom_engine:
+                first_sel_id = selections[0].get("selectionId")
+                if first_sel_id:
+                    wom_result = self.wom_engine.calculate_enhanced_wom(first_sel_id)
+                    if wom_result:
+                        tick_count = wom_result.tick_count
+                        wom_confidence = wom_result.confidence
+                        volatility = wom_result.volatility
+
+            guardrail_result = self.check_guardrail(
+                market_type=market_type,
+                tick_count=tick_count,
+                wom_confidence=wom_confidence,
+                volatility=volatility,
+            )
+            if not guardrail_result["can_proceed"]:
+                return {
+                    "status": "GUARDRAIL_BLOCKED",
+                    "orders": [],
+                    "simulation": self.simulation,
+                    "mode": mode,
+                    "guardrail": guardrail_result,
+                    "dry_run": dry_run,
+                }
+
+        if ai_enabled:
+            if not self.market_validator.is_dutching_ready(market_type):
+                raise ValueError(f"Mercato {market_type} non compatibile")
+
+            ai_sides = self.ai_engine.decide(selections)
+            for sel in selections:
+                side = ai_sides.get(sel["selectionId"], "BACK")
+                sel["side"] = side
+                sel["effectiveType"] = side
+            mode = "MIXED"
+
+        try:
+            if mode == "MIXED":
+                results, profit, implied_prob = calculate_mixed_dutching(
+                    selections, total_stake, commission=commission
+                )
+            else:
+                results, profit, implied_prob = calculate_dutching_stakes(
+                    selections,
+                    total_stake,
+                    bet_type=mode,
+                    commission=commission,
+                )
+        except Exception as e:
+            self.safe_mode.report_error("DutchingCalcError", str(e), market_id)
+            raise
+
+        self.safe_mode.report_success()
+        preflight = self.preflight_check(selections, total_stake, mode)
+
+        for r in results:
+            stake = r.get("stake", 0)
+            side = r.get("side", r.get("effectiveType", mode))
+            if side == "BACK" and stake < MIN_STAKE:
+                preflight.is_valid = False
+                preflight.stake_ok = False
+            if side == "LAY" and stake * (r.get("price", 1) - 1) < MIN_STAKE:
+                preflight.is_valid = False
+                preflight.stake_ok = False
+
+        results_with_ladders = self._merge_ladders_to_results(results, selections)
+        liq_ok, liq_msgs = self._check_liquidity_guard(
+            results_with_ladders, mode, market_id
+        )
+        if not liq_ok:
+            preflight.liquidity_guard_ok = False
+            preflight.is_valid = False
+            preflight.errors.extend(liq_msgs)
+
+        if not preflight.is_valid and not dry_run:
+            return {
+                "status": "PREFLIGHT_FAILED",
+                "orders": [],
+                "preflight": {
+                    "is_valid": False,
+                    "errors": preflight.errors,
+                    "warnings": preflight.warnings,
+                    "details": preflight.details,
+                },
+            }
+
+        payload = {
+            "market_id": market_id,
+            "market_type": market_type,
+            "event_name": getattr(self, "current_event_name", "Event"),
+            "market_name": getattr(self, "current_market_name", "Market"),
+            "results": results,
+            "bet_type": mode,
+            "total_stake": total_stake,
+            "use_best_price": use_best_price,
+            "simulation_mode": self.simulation,
+            "auto_green": auto_green,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "trailing": trailing,
+            "preflight": {
+                "is_valid": preflight.is_valid,
+                "warnings": preflight.warnings,
+                "errors": preflight.errors,
+                "details": preflight.details,
+            },
+            "analytics": {
+                "potential_profit": profit,
+                "implied_probability": implied_prob,
+            },
+        }
+
+        if dry_run:
+            placed = [
+                {
+                    "betId": f"DRY_{r['selectionId']}",
+                    "selectionId": r["selectionId"],
+                    "side": r.get("side", mode),
+                    "price": r["price"],
+                    "size": r["stake"],
+                    "status": "DRY_RUN",
+                    "dry_run": True,
+                }
+                for r in results
+            ]
+            return {
+                "status": "DRY_RUN",
+                "orders": placed,
+                "payload": payload,
+            }
+
+        self.bus.publish("REQ_PLACE_DUTCHING", payload)
+        return {
+            "status": "SUBMITTED",
+            "async": True,
+            "preflight": {
+                "is_valid": preflight.is_valid,
+                "warnings": preflight.warnings,
+                "errors": preflight.errors,
+                "details": preflight.details,
+            },
+        }
+
+    def validate_selections(self, selections: List[Dict]) -> List[str]:
+        errors = []
+        if not selections:
+            return ["Nessuna selezione"]
+
+        for sel in selections:
+            if not sel.get("price") or sel["price"] <= 1:
+                errors.append(
+                    f"{sel.get('runnerName', 'Runner')}: prezzo non valido"
+                )
+            if not sel.get("selectionId"):
+                errors.append(
+                    f"{sel.get('runnerName', 'Runner')}: selectionId mancante"
+                )
+        return errors
+
+    def set_simulation(self, enabled: bool):
+        self.simulation = enabled
+
+    def get_ai_analysis(self, selections: List[Dict]) -> List[Dict]:
+        return self.ai_engine.get_wom_analysis(selections)
+
+    def preflight_check(
+        self, selections: List[Dict], total_stake: float, mode: str = "BACK"
+    ) -> PreflightResult:
+        result = PreflightResult()
+        num_selections = len(selections)
+
+        if num_selections == 0:
+            result.is_valid = False
+            result.errors.append("Nessuna selezione")
+            return result
+
+        min_total = MIN_STAKE * num_selections
+        if total_stake < min_total:
+            result.is_valid = False
+            result.stake_ok = False
+            result.errors.append(
+                f"Stake totale €{total_stake:.2f} insufficiente (min €{min_total:.2f})"
+            )
+
+        total_liquidity = 0.0
+        total_implied_prob = 0.0
+
+        for sel in selections:
+            runner_name = sel.get("runnerName", f"ID {sel.get('selectionId', '?')}")
+            price = sel.get("price", 0)
+            back_ladder = sel.get("back_ladder", [])
+            lay_ladder = sel.get("lay_ladder", [])
+
+            if price > 0 and price < MIN_PRICE:
+                result.price_ok = False
+                result.warnings.append(
+                    f"{runner_name}: quota {price:.2f} troppo bassa (min {MIN_PRICE:.2f})"
+                )
+
+            if price > 1:
+                total_implied_prob += 1.0 / price
+
+            back_liq = sum(p.get("size", 0) for p in back_ladder)
+            lay_liq = sum(p.get("size", 0) for p in lay_ladder)
+            side = sel.get("side", sel.get("effectiveType", mode))
+            relevant_liq = back_liq if side == "BACK" else lay_liq
+            total_liquidity += relevant_liq
+
+            if relevant_liq < MIN_LIQUIDITY:
+                result.liquidity_ok = False
+                result.warnings.append(
+                    f"{runner_name}: liquidità {side} bassa (€{relevant_liq:.0f})"
+                )
+
+            if back_ladder and lay_ladder:
+                best_back = back_ladder[0].get("price", 0)
+                best_lay = lay_ladder[0].get("price", 0)
+                if best_back > 0 and best_lay > 0:
+                    spread = best_lay - best_back
+                    tick_size = 0.02 if best_back < 2 else 0.05 if best_back < 4 else 0.1
+                    spread_ticks = spread / tick_size if tick_size > 0 else 0
+                    if spread_ticks > MAX_SPREAD_TICKS:
+                        result.spread_ok = False
+                        result.warnings.append(
+                            f"{runner_name}: spread largo ({spread_ticks:.0f} tick)"
+                        )
+                    result.details[sel.get("selectionId")] = {
+                        "back_liq": back_liq,
+                        "lay_liq": lay_liq,
+                        "best_back": best_back,
+                        "best_lay": best_lay,
+                        "spread_ticks": spread_ticks,
+                    }
+
+        if total_liquidity > 0:
+            stake_pct = total_stake / total_liquidity
+            if stake_pct > MAX_STAKE_PCT:
+                result.warnings.append(
+                    f"Stake alto rispetto a liquidità ({stake_pct * 100:.0f}% > {MAX_STAKE_PCT * 100:.0f}%)"
+                )
+
+        book_pct = total_implied_prob * 100
+        if book_pct > BOOK_BLOCK:
+            result.book_ok = False
+            result.is_valid = False
+            result.errors.append(
+                f"Book {book_pct:.1f}% troppo alto (blocco a {BOOK_BLOCK:.0f}%)"
+            )
+        elif book_pct > BOOK_WARNING:
+            result.book_ok = False
+            result.warnings.append(
+                f"Book {book_pct:.1f}% elevato (warning a {BOOK_WARNING:.0f}%)"
+            )
+
+        result.details["book_pct"] = book_pct
+        if result.errors:
+            result.is_valid = False
+        return result
+
+    def _check_liquidity_guard(
+        self, selections: List[Dict], mode: str = "BACK", market_id: str = ""
+    ) -> Tuple[bool, List[str]]:
+        if not LIQUIDITY_GUARD_ENABLED:
+            return True, []
+
+        messages = []
+        for sel in selections:
+            selection_id = sel.get("selectionId", 0)
+            runner_name = sel.get("runnerName", f"ID {selection_id}")
+            stake = sel.get("stake", 0)
+            price = sel.get("price", 1)
+            side = sel.get("side", sel.get("effectiveType", mode))
+            back_liq = sum(p.get("size", 0) for p in sel.get("back_ladder", []))
+            lay_liq = sum(p.get("size", 0) for p in sel.get("lay_ladder", []))
+
+            if side == "BACK":
+                available = back_liq
+                required = stake * LIQUIDITY_MULTIPLIER
+            else:
+                liability = stake * (price - 1) if price > 1 else stake
+                available = lay_liq
+                required = liability * LIQUIDITY_MULTIPLIER
+
+            if available < MIN_LIQUIDITY_ABSOLUTE:
+                return False, [
+                    f"{runner_name}: liquidità troppo bassa (€{available:.0f} < €{MIN_LIQUIDITY_ABSOLUTE:.0f})"
+                ]
+
+            if available < required:
+                messages.append(
+                    f"{runner_name}: liquidità insufficiente (€{available:.0f} < €{required:.0f} richiesti)"
+                )
+                if not LIQUIDITY_WARNING_ONLY:
+                    return False, messages
+
+        return len(messages) == 0, messages
+
+    def _merge_ladders_to_results(
+        self, results: List[Dict], selections: List[Dict]
+    ) -> List[Dict]:
+        sel_by_id = {s.get("selectionId"): s for s in selections}
+        merged = []
+
+        for r in results:
+            original = sel_by_id.get(r.get("selectionId"), {})
+            merged_item = dict(r)
+            merged_item["back_ladder"] = original.get("back_ladder", [])
+            merged_item["lay_ladder"] = original.get("lay_ladder", [])
+            merged.append(merged_item)
+
+        return merged
+
+    def record_market_tick(
+        self,
+        selection_id: int,
+        back_price: float,
+        back_volume: float,
+        lay_price: float,
+        lay_volume: float,
+    ):
+        self.wom_engine.record_tick(
+            selection_id, back_price, back_volume, lay_price, lay_volume
+        )
+
+    def get_wom_analysis(
+        self, selections: List[Dict], use_historical: bool = True
+    ) -> List[Dict]:
+        if use_historical:
+            return self.ai_engine.get_enhanced_analysis(selections, self.wom_engine)
+        return self.ai_engine.get_wom_analysis(selections)
+
+    def get_wom_stats(self) -> Dict:
+        return self.wom_engine.get_stats()
+
+    def check_guardrail(
+        self,
+        market_type: str,
+        tick_count: int = 10,
+        wom_confidence: float = 0.5,
+        volatility: float = 0.0,
+    ) -> Dict:
+        return self.guardrail.full_check(
+            market_type=market_type,
+            tick_count=tick_count,
+            wom_confidence=wom_confidence,
+            volatility=volatility,
+        )
+
+    def check_auto_green_ready(self, bet_id: str):
+        return self.guardrail.check_auto_green_grace(bet_id)
+
+    def register_for_auto_green(self, bet_id: str):
+        self.guardrail.register_order_for_auto_green(bet_id)
+
+    def get_time_window_signal(self, selection_id: int) -> Dict:
+        return self.wom_engine.get_time_window_signal(selection_id)
+
+    def get_guardrail_status(self) -> Dict:
+        return self.guardrail.get_status()
+EOF
