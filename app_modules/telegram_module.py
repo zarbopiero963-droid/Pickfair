@@ -92,63 +92,76 @@ class TelegramModule:
             messagebox.showinfo("Info", "Telegram Listener fermato")
 
     def _handle_telegram_signal(self, signal):
-        """Riceve il segnale parsato e lo inoltra al RiskMiddleware via REQ_*."""
-        action = str(signal.get("action", "BACK")).upper()
-        selection_id = signal.get("selection_id")
-        market_id = signal.get("market_id")
-        selection_name = signal.get("selection", str(selection_id))
+        """Riceve il segnale dal listener e lo processa in modo sicuro nel main thread."""
 
-        try:
-            price = float(signal.get("price", 2.0))
-        except Exception:
-            logger.error("[TelegramModule] Segnale ignorato: price non valido.")
+        def safe_process_signal():
+            action = str(signal.get("action", "BACK")).upper()
+            selection_id = signal.get("selection_id")
+            market_id = signal.get("market_id")
+            selection_name = signal.get("selection", str(selection_id))
+
+            try:
+                price = float(signal.get("price", 2.0))
+            except Exception:
+                logger.error("[TelegramModule] Segnale ignorato: price non valido.")
+                if hasattr(self.db, "save_received_signal"):
+                    self.db.save_received_signal(
+                        selection=selection_name,
+                        action=action,
+                        price=0.0,
+                        stake=0.0,
+                        status="ERROR",
+                    )
+                self._refresh_telegram_signals_tree()
+                return
+
+            try:
+                stake = float(self.tg_auto_stake_var.get().replace(",", "."))
+            except Exception:
+                stake = 1.0
+
             if hasattr(self.db, "save_received_signal"):
                 self.db.save_received_signal(
                     selection=selection_name,
                     action=action,
-                    price=0.0,
-                    stake=0.0,
-                    status="ERROR",
+                    price=price,
+                    stake=stake,
+                    status="RECEIVED",
                 )
             self._refresh_telegram_signals_tree()
-            return
 
-        try:
-            stake = float(self.tg_auto_stake_var.get().replace(",", "."))
-        except Exception:
-            stake = 1.0
-
-        if hasattr(self.db, "save_received_signal"):
-            self.db.save_received_signal(
-                selection=selection_name,
-                action=action,
-                price=price,
-                stake=stake,
-                status="RECEIVED",
+            auto_bet_enabled = (
+                hasattr(self, "tg_auto_bet_var")
+                and self.tg_auto_bet_var is not None
+                and self.tg_auto_bet_var.get()
             )
-        self._refresh_telegram_signals_tree()
+            confirm_enabled = (
+                hasattr(self, "tg_confirm_var")
+                and self.tg_confirm_var is not None
+                and self.tg_confirm_var.get()
+            )
 
-        auto_bet_enabled = (
-            hasattr(self, "tg_auto_bet_var")
-            and self.tg_auto_bet_var is not None
-            and self.tg_auto_bet_var.get()
-        )
-        confirm_enabled = (
-            hasattr(self, "tg_confirm_var")
-            and self.tg_confirm_var is not None
-            and self.tg_confirm_var.get()
-        )
-
-        if not auto_bet_enabled:
-            if confirm_enabled:
-                msg = (
-                    f"Segnale ricevuto:\n"
-                    f"{selection_name}\n"
-                    f"Tipo: {action}\n"
-                    f"Quota: {price}\n\n"
-                    f"Piazzare la scommessa?"
-                )
-                if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
+            if not auto_bet_enabled:
+                if confirm_enabled:
+                    msg = (
+                        f"Segnale ricevuto:\n"
+                        f"{selection_name}\n"
+                        f"Tipo: {action}\n"
+                        f"Quota: {price}\n\n"
+                        f"Piazzare la scommessa?"
+                    )
+                    if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
+                        if hasattr(self.db, "save_received_signal"):
+                            self.db.save_received_signal(
+                                selection=selection_name,
+                                action=action,
+                                price=price,
+                                stake=stake,
+                                status="IGNORED",
+                            )
+                        self._refresh_telegram_signals_tree()
+                        return
+                else:
                     if hasattr(self.db, "save_received_signal"):
                         self.db.save_received_signal(
                             selection=selection_name,
@@ -159,78 +172,72 @@ class TelegramModule:
                         )
                     self._refresh_telegram_signals_tree()
                     return
-            else:
+
+            if not selection_id or not market_id:
+                logger.error(
+                    "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
+                )
                 if hasattr(self.db, "save_received_signal"):
                     self.db.save_received_signal(
                         selection=selection_name,
                         action=action,
                         price=price,
                         stake=stake,
-                        status="IGNORED",
+                        status="ERROR",
                     )
                 self._refresh_telegram_signals_tree()
                 return
 
-        if not selection_id or not market_id:
-            logger.error(
-                "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
+            try:
+                payload = {
+                    "market_id": str(market_id),
+                    "market_type": signal.get("market_type", "MATCH_ODDS"),
+                    "event_name": signal.get("match", "Segnale Telegram"),
+                    "market_name": signal.get("market", "Scommessa da Segnale"),
+                    "selection_id": int(selection_id),
+                    "runner_name": selection_name,
+                    "bet_type": action,
+                    "price": price,
+                    "stake": stake,
+                    "simulation_mode": getattr(self, "simulation_mode", False),
+                    "source": "TELEGRAM",
+                }
+            except Exception as e:
+                logger.error(
+                    "[TelegramModule] Segnale ignorato: payload invalido (%s)",
+                    e,
+                )
+                if hasattr(self.db, "save_received_signal"):
+                    self.db.save_received_signal(
+                        selection=selection_name,
+                        action=action,
+                        price=price,
+                        stake=stake,
+                        status="ERROR",
+                    )
+                self._refresh_telegram_signals_tree()
+                return
+
+            logger.info(
+                "[TelegramModule] Inoltro segnale all'OMS via RiskGate: %s",
+                payload,
             )
+            self.bus.publish("REQ_QUICK_BET", payload)
+
             if hasattr(self.db, "save_received_signal"):
                 self.db.save_received_signal(
                     selection=selection_name,
                     action=action,
                     price=price,
                     stake=stake,
-                    status="ERROR",
+                    status="SUBMITTED",
                 )
             self._refresh_telegram_signals_tree()
-            return
 
-        try:
-            payload = {
-                "market_id": str(market_id),
-                "market_type": signal.get("market_type", "MATCH_ODDS"),
-                "event_name": signal.get("match", "Segnale Telegram"),
-                "market_name": signal.get("market", "Scommessa da Segnale"),
-                "selection_id": int(selection_id),
-                "runner_name": selection_name,
-                "bet_type": action,
-                "price": price,
-                "stake": stake,
-                "simulation_mode": getattr(self, "simulation_mode", False),
-                "source": "TELEGRAM",
-            }
-        except Exception as e:
-            logger.error(
-                "[TelegramModule] Segnale ignorato: payload invalido (%s)",
-                e,
-            )
-            if hasattr(self.db, "save_received_signal"):
-                self.db.save_received_signal(
-                    selection=selection_name,
-                    action=action,
-                    price=price,
-                    stake=stake,
-                    status="ERROR",
-                )
-            self._refresh_telegram_signals_tree()
-            return
-
-        logger.info(
-            "[TelegramModule] Inoltro segnale all'OMS via RiskGate: %s",
-            payload,
-        )
-        self.bus.publish("REQ_QUICK_BET", payload)
-
-        if hasattr(self.db, "save_received_signal"):
-            self.db.save_received_signal(
-                selection=selection_name,
-                action=action,
-                price=price,
-                stake=stake,
-                status="SUBMITTED",
-            )
-        self._refresh_telegram_signals_tree()
+        if hasattr(self, "uiq") and self.uiq:
+            self.uiq.post(safe_process_signal)
+        else:
+            safe_process_signal()
 
     def _update_telegram_status(self, status, message):
         self.telegram_status = status
@@ -452,4 +459,3 @@ class TelegramModule:
                     values=(date_str, sel, action, price, stake, status),
                     tags=(tag,) if tag else (),
                 )
-
