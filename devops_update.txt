@@ -1,76 +1,35 @@
-CREA_FILE app_modules/telegram_module.py
-import logging
-import tkinter as tk
-from tkinter import messagebox, simpledialog
+CREA_FILE app_modules/telegram_module.py import logging import tkinter as tk from tkinter import messagebox, simpledialog
 
 from theme import COLORS
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
+class TelegramModule: def _start_telegram_listener(self): """Start the Telegram listener background thread (Decoupled with EventBus).""" settings = self.db.get_telegram_settings() if not settings or not settings.get("api_id") or not settings.get("api_hash"): messagebox.showwarning( "Attenzione", "Configura e salva le credenziali Telegram prima di avviare il listener.", ) return
 
-class TelegramModule:
-    def _db_call(self, method_name, *args, default=None, **kwargs):
-        method = getattr(self.db, method_name, None)
-        if not callable(method):
-            logger.warning("[TelegramModule] DB method mancante: %s", method_name)
-            return default
-        try:
-            return method(*args, **kwargs)
-        except Exception as e:
-            logger.exception("[TelegramModule] Errore DB su %s: %s", method_name, e)
-            return default
+if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
+        messagebox.showinfo("Info", "Listener già in esecuzione")
+        return
 
-    def _get_telegram_settings(self):
-        return self._db_call("get_telegram_settings", default={}) or {}
+    try:
+        from telegram_listener import TelegramListener
 
-    def _get_telegram_chats(self):
-        return self._db_call("get_telegram_chats", default=[]) or []
-
-    def _get_signal_patterns(self):
-        return self._db_call("get_signal_patterns", default=[]) or []
-
-    def _save_telegram_chat(self, chat_id, title, is_active=True):
-        return self._db_call(
-            "save_telegram_chat",
-            chat_id=chat_id,
-            title=title,
-            is_active=is_active,
-            default=None,
+        self.telegram_listener = TelegramListener(
+            api_id=int(settings["api_id"]),
+            api_hash=settings["api_hash"].strip(),
+            session_string=settings.get("session_string"),
         )
 
-    def _replace_telegram_chats(self, chats):
-        return self._db_call("replace_telegram_chats", chats, default=None)
+        monitored_chats = []
+        for chat in self.db.get_telegram_chats():
+            if not chat.get("is_active", True):
+                continue
+            try:
+                monitored_chats.append(int(chat["chat_id"]))
+            except Exception:
+                logger.warning(
+                    f"[TelegramModule] chat_id non valido ignorato: {chat}"
+                )
 
-    def _save_signal_pattern(self, pattern, label, enabled=True):
-        return self._db_call(
-            "save_signal_pattern",
-            pattern=pattern,
-            label=label,
-            enabled=enabled,
-            default=None,
-        )
-
-    def _start_telegram_listener(self):
-        """Avvia il listener Telegram. Telegram produce intenti, non esegue ordini."""
-        settings = self._get_telegram_settings()
-        if not settings.get("api_id") or not settings.get("api_hash"):
-            messagebox.showwarning(
-                "Attenzione",
-                "Configura e salva le credenziali Telegram prima di avviare il listener.",
-            )
-            return
-
-        if getattr(self, "telegram_listener", None) and getattr(
-            self.telegram_listener, "running", False
-        ):
-            messagebox.showinfo("Info", "Listener già in esecuzione")
-            return
-
-        monitored_chats = [
-            int(chat["chat_id"])
-            for chat in self._get_telegram_chats()
-            if chat.get("is_active", True)
-        ]
         if not monitored_chats:
             messagebox.showwarning(
                 "Attenzione",
@@ -78,52 +37,32 @@ class TelegramModule:
             )
             return
 
-        try:
-            from telegram_listener import TelegramListener
+        self.telegram_listener.set_monitored_chats(monitored_chats)
+        self.telegram_listener.set_database(self.db)
 
-            self.telegram_listener = TelegramListener(
-                api_id=int(settings["api_id"]),
-                api_hash=str(settings["api_hash"]).strip(),
-                session_string=settings.get("session_string"),
+        self.telegram_listener.set_callbacks(
+            on_signal=lambda sig: self.bus.publish("TELEGRAM_SIGNAL", sig),
+            on_message=None,
+            on_status=lambda st, msg: self.bus.publish(
+                "TELEGRAM_STATUS", {"status": st, "message": msg}
+            ),
+        )
+
+        self.telegram_listener.start()
+        self.telegram_status = "LISTENING"
+        if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
+            self.tg_status_label.configure(
+                text=f"Stato: {self.telegram_status}",
+                text_color=COLORS["success"],
             )
+        messagebox.showinfo("Successo", "Telegram Listener avviato")
 
-            if hasattr(self.telegram_listener, "set_monitored_chats"):
-                self.telegram_listener.set_monitored_chats(monitored_chats)
-            if hasattr(self.telegram_listener, "set_database"):
-                self.telegram_listener.set_database(self.db)
+    except Exception as e:
+        messagebox.showerror("Errore", f"Impossibile avviare listener: {str(e)}")
 
-            if hasattr(self.telegram_listener, "set_callbacks"):
-                self.telegram_listener.set_callbacks(
-                    on_signal=lambda sig: self.bus.publish("TELEGRAM_SIGNAL", sig),
-                    on_message=None,
-                    on_status=lambda st, msg: self.bus.publish(
-                        "TELEGRAM_STATUS", {"status": st, "message": msg}
-                    ),
-                )
-
-            self.telegram_listener.start()
-            self.telegram_status = "LISTENING"
-
-            if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
-                self.tg_status_label.configure(
-                    text=f"Stato: {self.telegram_status}",
-                    text_color=COLORS["success"],
-                )
-
-            messagebox.showinfo("Successo", "Telegram Listener avviato")
-
-        except Exception as e:
-            logger.exception("[TelegramModule] Avvio listener fallito: %s", e)
-            messagebox.showerror("Errore", f"Impossibile avviare listener: {str(e)}")
-
-    def _stop_telegram_listener(self):
-        listener = getattr(self, "telegram_listener", None)
-        if listener and getattr(listener, "running", False):
-            try:
-                listener.stop()
-            except Exception as e:
-                logger.exception("[TelegramModule] Errore stop listener: %s", e)
-
+def _stop_telegram_listener(self):
+    if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
+        self.telegram_listener.stop()
         self.telegram_status = "STOPPED"
         if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
             self.tg_status_label.configure(
@@ -132,1055 +71,332 @@ class TelegramModule:
             )
         messagebox.showinfo("Info", "Telegram Listener fermato")
 
-    def _handle_telegram_signal(self, signal):
-        """
-        Telegram è solo sorgente di intenti.
-        Nessun CMD_*, nessuna chiamata diretta client/broker.
-        """
-        self._refresh_telegram_signals_tree()
+def _handle_telegram_signal(self, signal):
+    """Riceve il segnale parsato e lo inoltra al RiskMiddleware via REQ_*."""
+    action = str(signal.get("action", "BACK")).upper()
+    selection_id = signal.get("selection_id")
+    market_id = signal.get("market_id")
+    selection_name = signal.get("selection", str(selection_id))
 
-        auto_bet_enabled = bool(
-            getattr(self, "tg_auto_bet_var", None) and self.tg_auto_bet_var.get()
-        )
-        require_confirmation = bool(
-            getattr(self, "tg_confirm_var", None) and self.tg_confirm_var.get()
-        )
-
-        if not auto_bet_enabled:
-            if require_confirmation:
-                msg = (
-                    f"Segnale ricevuto:\n"
-                    f"{signal.get('selection', 'Ignota')}\n"
-                    f"Tipo: {signal.get('action', 'BACK')}\n"
-                    f"Quota: {signal.get('price', '-')}\n\n"
-                    f"Vuoi inoltrare l'intento al RiskGate?"
-                )
-                if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
-                    return
-            else:
-                return
-
-        try:
-            stake = float(str(self.tg_auto_stake_var.get()).replace(",", "."))
-        except Exception:
-            stake = 1.0
-
-        action = str(signal.get("action", "BACK")).upper()
+    try:
         price = float(signal.get("price", 2.0))
-        selection_id = signal.get("selection_id")
-        market_id = signal.get("market_id")
-
-        if not selection_id or not market_id:
-            logger.error(
-                "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
+    except Exception:
+        logger.error("[TelegramModule] Segnale ignorato: price non valido.")
+        if hasattr(self.db, "save_received_signal"):
+            self.db.save_received_signal(
+                selection=selection_name,
+                action=action,
+                price=0.0,
+                stake=0.0,
+                status="ERROR",
             )
+        self._refresh_telegram_signals_tree()
+        return
+
+    try:
+        stake = float(self.tg_auto_stake_var.get().replace(",", "."))
+    except Exception:
+        stake = 1.0
+
+    if hasattr(self.db, "save_received_signal"):
+        self.db.save_received_signal(
+            selection=selection_name,
+            action=action,
+            price=price,
+            stake=stake,
+            status="RECEIVED",
+        )
+    self._refresh_telegram_signals_tree()
+
+    if not getattr(self, "tg_auto_bet_var", None) or not self.tg_auto_bet_var.get():
+        if getattr(self, "tg_confirm_var", None) and self.tg_confirm_var.get():
+            msg = (
+                f"Segnale ricevuto:\n"
+                f"{selection_name}\n"
+                f"Tipo: {action}\n"
+                f"Quota: {price}\n\n"
+                f"Piazzare la scommessa?"
+            )
+            if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
+                if hasattr(self.db, "save_received_signal"):
+                    self.db.save_received_signal(
+                        selection=selection_name,
+                        action=action,
+                        price=price,
+                        stake=stake,
+                        status="IGNORED",
+                    )
+                self._refresh_telegram_signals_tree()
+                return
+        else:
+            if hasattr(self.db, "save_received_signal"):
+                self.db.save_received_signal(
+                    selection=selection_name,
+                    action=action,
+                    price=price,
+                    stake=stake,
+                    status="IGNORED",
+                )
+            self._refresh_telegram_signals_tree()
             return
 
+    if not selection_id or not market_id:
+        logger.error(
+            "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
+        )
+        if hasattr(self.db, "save_received_signal"):
+            self.db.save_received_signal(
+                selection=selection_name,
+                action=action,
+                price=price,
+                stake=stake,
+                status="ERROR",
+            )
+        self._refresh_telegram_signals_tree()
+        return
+
+    try:
         payload = {
             "market_id": str(market_id),
             "market_type": signal.get("market_type", "MATCH_ODDS"),
             "event_name": signal.get("match", "Segnale Telegram"),
             "market_name": signal.get("market", "Scommessa da Segnale"),
             "selection_id": int(selection_id),
-            "runner_name": signal.get("selection", str(selection_id)),
+            "runner_name": selection_name,
             "bet_type": action,
             "price": price,
             "stake": stake,
             "simulation_mode": getattr(self, "simulation_mode", False),
-            "source": "TELEGRAM",
         }
-
-        logger.info("[TelegramModule] Publish REQ_QUICK_BET: %s", payload)
-        self.bus.publish("REQ_QUICK_BET", payload)
-
-    def _update_telegram_status(self, status, message):
-        self.telegram_status = status
-        color = COLORS["success"] if status == "LISTENING" else COLORS["error"]
-        if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
-            self.tg_status_label.configure(
-                text=f"Stato: {status} - {message}",
-                text_color=color,
+    except Exception as e:
+        logger.error(f"[TelegramModule] Segnale ignorato: payload invalido ({e})")
+        if hasattr(self.db, "save_received_signal"):
+            self.db.save_received_signal(
+                selection=selection_name,
+                action=action,
+                price=price,
+                stake=stake,
+                status="ERROR",
             )
+        self._refresh_telegram_signals_tree()
+        return
 
-    def _refresh_telegram_chats_tree(self):
-        if not hasattr(self, "tg_chats_tree") or not self.tg_chats_tree.winfo_exists():
-            return
+    logger.info(
+        f"[TelegramModule] Inoltro segnale all'OMS via RiskGate: {payload}"
+    )
+    self.bus.publish("REQ_QUICK_BET", payload)
 
-        self.tg_chats_tree.delete(*self.tg_chats_tree.get_children())
+    if hasattr(self.db, "save_received_signal"):
+        self.db.save_received_signal(
+            selection=selection_name,
+            action=action,
+            price=price,
+            stake=stake,
+            status="SUBMITTED",
+        )
+    self._refresh_telegram_signals_tree()
 
-        for chat in self._get_telegram_chats():
-            state = "Sì" if chat.get("is_active") else "No"
-            title = chat.get("title") or chat.get("username") or str(chat.get("chat_id"))
-            self.tg_chats_tree.insert(
-                "",
-                tk.END,
-                iid=str(chat["chat_id"]),
-                values=(title, state),
-            )
+def _update_telegram_status(self, status, message):
+    self.telegram_status = status
+    color = COLORS["success"] if status == "LISTENING" else COLORS["error"]
+    if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
+        self.tg_status_label.configure(
+            text=f"Stato: {status} - {message}",
+            text_color=color,
+        )
 
-    def _remove_telegram_chat(self):
-        selected = getattr(self, "tg_chats_tree", None) and self.tg_chats_tree.selection()
-        if not selected:
-            return
+def _refresh_telegram_chats_tree(self):
+    if not hasattr(self, "tg_chats_tree") or not self.tg_chats_tree.winfo_exists():
+        return
 
-        chats = self._get_telegram_chats()
-        updated_chats = [c for c in chats if str(c["chat_id"]) not in selected]
-        self._replace_telegram_chats(updated_chats)
-        self._refresh_telegram_chats_tree()
+    self.tg_chats_tree.delete(*self.tg_chats_tree.get_children())
+    chats = self.db.get_telegram_chats()
+    for chat in chats:
+        state = "Sì" if chat.get("is_active") else "No"
+        title = chat.get("title") or chat.get("username") or str(chat.get("chat_id"))
+        self.tg_chats_tree.insert(
+            "",
+            tk.END,
+            iid=str(chat["chat_id"]),
+            values=(title, state),
+        )
 
-    def _add_selected_available_chats(self):
-        selected = getattr(self, "tg_available_tree", None) and self.tg_available_tree.selection()
-        if not selected:
-            return
+def _remove_telegram_chat(self):
+    selected = getattr(self, "tg_chats_tree", None) and self.tg_chats_tree.selection()
+    if not selected:
+        return
 
-        for item_id in selected:
-            item = self.tg_available_tree.item(item_id)
-            values = item.get("values", [])
-            name = values[2] if len(values) >= 3 else str(item_id)
-            self._save_telegram_chat(chat_id=item_id, title=name, is_active=True)
+    chats = self.db.get_telegram_chats()
+    updated_chats = [c for c in chats if str(c["chat_id"]) not in selected]
+    self.db.replace_telegram_chats(updated_chats)
+    self._refresh_telegram_chats_tree()
 
-        self._refresh_telegram_chats_tree()
-        messagebox.showinfo("Successo", "Chat aggiunte al monitoraggio.")
+def _add_selected_available_chats(self):
+    selected = getattr(self, "tg_available_tree", None) and self.tg_available_tree.selection()
+    if not selected:
+        return
 
-    def _refresh_rules_tree(self):
-        if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
-            return
+    for item_id in selected:
+        item = self.tg_available_tree.item(item_id)
+        values = item.get("values", [])
+        name = values[2] if len(values) > 2 else str(item_id)
+        self.db.save_telegram_chat(chat_id=item_id, title=name, is_active=True)
 
-        self.rules_tree.delete(*self.rules_tree.get_children())
-        rules = self._get_signal_patterns()
+    self._refresh_telegram_chats_tree()
+    messagebox.showinfo("Successo", "Chat aggiunte al monitoraggio.")
 
-        for r in rules:
-            state = "Sì" if r.get("enabled") else "No"
-            self.rules_tree.insert(
-                "",
-                tk.END,
-                iid=str(r.get("id", "")),
-                values=(
-                    state,
-                    r.get("label", ""),
-                    r.get("market_type", "MATCH_ODDS"),
-                    r.get("pattern", ""),
-                ),
-            )
+def _refresh_rules_tree(self):
+    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
+        return
 
-    def _add_signal_pattern(self):
-        label = simpledialog.askstring("Nuova Regola", "Nome della regola:")
-        if not label:
-            return
+    self.rules_tree.delete(*self.rules_tree.get_children())
+    rules = self.db.get_signal_patterns()
+    for r in rules:
+        state = "Sì" if r.get("enabled") else "No"
+        self.rules_tree.insert(
+            "",
+            tk.END,
+            iid=str(r["id"]),
+            values=(
+                state,
+                r.get("label", ""),
+                "MATCH_ODDS",
+                r.get("pattern", ""),
+            ),
+        )
 
-        pattern = simpledialog.askstring("Nuova Regola", "Pattern Regex:")
-        if not pattern:
-            return
+def _add_signal_pattern(self):
+    label = simpledialog.askstring("Nuova Regola", "Nome della regola:")
+    if not label:
+        return
 
-        self._save_signal_pattern(pattern=pattern, label=label, enabled=True)
+    pattern = simpledialog.askstring("Nuova Regola", "Pattern Regex:")
+    if not pattern:
+        return
+
+    self.db.save_signal_pattern(pattern=pattern, label=label, enabled=True)
+    self._refresh_rules_tree()
+
+def _edit_signal_pattern(self):
+    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
+        return
+
+    selected = self.rules_tree.selection()
+    if not selected:
+        messagebox.showwarning("Attenzione", "Seleziona una regola da modificare.")
+        return
+
+    pattern_id = selected[0]
+    rules = self.db.get_signal_patterns()
+    current = next((r for r in rules if str(r["id"]) == str(pattern_id)), None)
+    if not current:
+        messagebox.showerror("Errore", "Regola non trovata nel database.")
+        return
+
+    new_label = simpledialog.askstring(
+        "Modifica Regola",
+        "Nome della regola:",
+        initialvalue=current.get("label", ""),
+    )
+    if new_label is None:
+        return
+
+    new_pattern = simpledialog.askstring(
+        "Modifica Regola",
+        "Pattern Regex:",
+        initialvalue=current.get("pattern", ""),
+    )
+    if new_pattern is None:
+        return
+
+    try:
+        self.db.update_signal_pattern(
+            pattern_id=pattern_id,
+            pattern=new_pattern,
+            label=new_label,
+        )
         self._refresh_rules_tree()
+        messagebox.showinfo("Successo", "Regola aggiornata correttamente.")
+    except Exception as e:
+        messagebox.showerror("Errore", f"Impossibile aggiornare la regola: {e}")
 
-    def _edit_signal_pattern(self):
-        messagebox.showinfo("Info", "Modifica regola non ancora implementata.")
+def _delete_signal_pattern(self):
+    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
+        return
 
-    def _delete_signal_pattern(self):
-        messagebox.showinfo("Info", "Eliminazione regola non ancora implementata.")
+    selected = self.rules_tree.selection()
+    if not selected:
+        messagebox.showwarning("Attenzione", "Seleziona una regola da eliminare.")
+        return
 
-    def _toggle_signal_pattern(self):
-        messagebox.showinfo("Info", "Toggle regola non ancora implementato.")
+    pattern_id = selected[0]
 
-    def _refresh_telegram_signals_tree(self):
-        if not hasattr(self, "tg_signals_tree") or not self.tg_signals_tree.winfo_exists():
-            return
-        # Placeholder: se hai una tabella DB received_signals, qui puoi popolarla.
-        pass
+    if not messagebox.askyesno(
+        "Conferma eliminazione",
+        "Vuoi davvero eliminare la regola selezionata?",
+    ):
+        return
+
+    try:
+        self.db.delete_signal_pattern(pattern_id)
+        self._refresh_rules_tree()
+        messagebox.showinfo("Successo", "Regola eliminata.")
+    except Exception as e:
+        messagebox.showerror("Errore", f"Impossibile eliminare la regola: {e}")
+
+def _toggle_signal_pattern(self):
+    if not hasattr(self, "rules_tree") or not self.rules_tree.winfo_exists():
+        return
+
+    selected = self.rules_tree.selection()
+    if not selected:
+        messagebox.showwarning(
+            "Attenzione",
+            "Seleziona una regola da attivare/disattivare.",
+        )
+        return
+
+    pattern_id = selected[0]
+
+    try:
+        new_state = self.db.toggle_signal_pattern(pattern_id)
+        self._refresh_rules_tree()
+        stato_txt = "attivata" if new_state else "disattivata"
+        messagebox.showinfo("Successo", f"Regola {stato_txt}.")
+    except Exception as e:
+        messagebox.showerror(
+            "Errore",
+            f"Impossibile cambiare stato della regola: {e}",
+        )
+
+def _refresh_telegram_signals_tree(self):
+    """Aggiorna la tabella visiva leggendo dallo storico salvato nel DB."""
+    if not hasattr(self, "tg_signals_tree") or not self.tg_signals_tree.winfo_exists():
+        return
+
+    self.tg_signals_tree.delete(*self.tg_signals_tree.get_children())
+
+    if hasattr(self.db, "get_received_signals"):
+        signals = self.db.get_received_signals(limit=50)
+        for sig in signals:
+            date_str = str(sig.get("received_at", ""))[:16]
+            sel = sig.get("selection", "")
+            action = sig.get("action", "")
+            price = f"{float(sig.get('price', 0) or 0):.2f}"
+            stake = f"{float(sig.get('stake', 0) or 0):.2f}"
+            status = sig.get("status", "")
+
+            tag = ""
+            if status in ("RECEIVED", "SUBMITTED"):
+                tag = "success"
+            elif status in ("ERROR", "IGNORED"):
+                tag = "failed"
+
+            self.tg_signals_tree.insert(
+                "",
+                tk.END,
+                values=(date_str, sel, action, price, stake, status),
+                tags=(tag,) if tag else (),
+            )
+
 EOF
-
-CREA_FILE controllers/telegram_controller.py
-"""
-TelegramController
-Gestisce autenticazione Telegram e caricamento chat.
-Non esegue trading e non chiama mai direttamente il client di betting.
-"""
-
-import asyncio
-import os
-from tkinter import messagebox
-
-
-class TelegramController:
-    def __init__(self, app):
-        self.app = app
-
-    def _db_call(self, method_name, *args, default=None, **kwargs):
-        method = getattr(self.app.db, method_name, None)
-        if not callable(method):
-            return default
-        try:
-            return method(*args, **kwargs)
-        except Exception:
-            return default
-
-    def _get_settings(self):
-        return self._db_call("get_telegram_settings", default={}) or {}
-
-    def _save_settings_dict(self, data):
-        return self._db_call("save_telegram_settings", data, default=None)
-
-    def _get_session_path(self):
-        base = os.getenv("APPDATA") or os.path.expanduser("~")
-        session_dir = os.path.join(base, "Pickfair")
-        os.makedirs(session_dir, exist_ok=True)
-        return os.path.join(session_dir, "telegram_session")
-
-    def save_settings(self):
-        try:
-            stake = float(str(self.app.tg_auto_stake_var.get()).replace(",", "."))
-        except Exception:
-            stake = 1.0
-            self.app.tg_auto_stake_var.set("1.0")
-
-        settings = self._get_settings()
-        settings.update(
-            {
-                "api_id": self.app.tg_api_id_var.get(),
-                "api_hash": self.app.tg_api_hash_var.get(),
-                "session_string": settings.get("session_string", ""),
-                "phone_number": self.app.tg_phone_var.get(),
-                "enabled": True,
-                "auto_bet": bool(self.app.tg_auto_bet_var.get()),
-                "require_confirmation": bool(self.app.tg_confirm_var.get()),
-                "auto_stake": stake,
-            }
-        )
-
-        if getattr(self.app.db, "save_telegram_settings", None):
-            self._save_settings_dict(settings)
-            messagebox.showinfo("Salvato", "Impostazioni Telegram salvate.")
-        else:
-            messagebox.showwarning(
-                "DB incompleto",
-                "save_telegram_settings non esiste nel database.py corrente.",
-            )
-
-    def send_code(self):
-        listener = getattr(self.app, "telegram_listener", None)
-        if listener and getattr(listener, "running", False):
-            messagebox.showwarning(
-                "Attenzione",
-                "Ferma il Listener Telegram prima di inviare il codice.",
-            )
-            return
-
-        api_id = self.app.tg_api_id_var.get()
-        api_hash = self.app.tg_api_hash_var.get()
-        phone = self.app.tg_phone_var.get()
-
-        if not api_id or not api_hash or not phone:
-            messagebox.showwarning("Errore", "Compila API ID, API Hash e Telefono.")
-            return
-
-        self.app.tg_status_label.configure(text="Stato: Invio codice in corso...")
-
-        def task():
-            try:
-                from telethon import TelegramClient
-
-                async def run():
-                    client = TelegramClient(
-                        self._get_session_path(), int(api_id), api_hash
-                    )
-                    await client.connect()
-
-                    if await client.is_user_authorized():
-                        await client.disconnect()
-                        return True, "Già autenticato. Nessun codice necessario."
-
-                    await client.send_code_request(phone)
-                    await client.disconnect()
-                    return False, "Codice inviato. Inseriscilo e clicca Verifica."
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                authorized, msg = loop.run_until_complete(run())
-                loop.close()
-
-                self.app.uiq.post(
-                    self.app.tg_status_label.configure,
-                    text=f"Stato: {msg}",
-                )
-
-            except Exception as e:
-                self.app.uiq.post(
-                    messagebox.showerror,
-                    "Errore",
-                    f"Impossibile inviare codice: {str(e)}",
-                )
-
-        self.app.executor.submit("tg_send_code", task)
-
-    def verify_code(self):
-        listener = getattr(self.app, "telegram_listener", None)
-        if listener and getattr(listener, "running", False):
-            messagebox.showwarning(
-                "Attenzione",
-                "Ferma il Listener Telegram prima di verificare il codice.",
-            )
-            return
-
-        api_id = self.app.tg_api_id_var.get()
-        api_hash = self.app.tg_api_hash_var.get()
-        phone = self.app.tg_phone_var.get()
-        code = self.app.tg_code_var.get()
-        password = self.app.tg_2fa_var.get()
-
-        if not code:
-            messagebox.showwarning("Errore", "Inserisci il codice ricevuto.")
-            return
-
-        self.app.tg_status_label.configure(text="Stato: Verifica in corso...")
-
-        def task():
-            try:
-                from telethon import TelegramClient
-                from telethon.errors import SessionPasswordNeededError
-
-                async def run():
-                    client = TelegramClient(
-                        self._get_session_path(), int(api_id), api_hash
-                    )
-                    await client.connect()
-
-                    try:
-                        await client.sign_in(phone, code)
-                    except SessionPasswordNeededError:
-                        if not password:
-                            await client.disconnect()
-                            return False, "Password 2FA richiesta. Inseriscila e riprova."
-                        await client.sign_in(password=password)
-
-                    session_string = client.session.save()
-                    await client.disconnect()
-                    return True, session_string
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                success, result = loop.run_until_complete(run())
-                loop.close()
-
-                if success:
-                    settings = self._get_settings()
-                    settings.update(
-                        {
-                            "api_id": api_id,
-                            "api_hash": api_hash,
-                            "session_string": result,
-                            "phone_number": phone,
-                            "enabled": True,
-                        }
-                    )
-
-                    if getattr(self.app.db, "save_telegram_settings", None):
-                        self._save_settings_dict(settings)
-
-                    self.app.uiq.post(
-                        self.app.tg_status_label.configure,
-                        text="Stato: Autenticato con successo",
-                    )
-                    self.app.uiq.post(
-                        messagebox.showinfo,
-                        "Successo",
-                        "Login Telegram completato. Ora puoi usare il listener.",
-                    )
-                else:
-                    self.app.uiq.post(
-                        self.app.tg_status_label.configure,
-                        text="Stato: Errore Verifica",
-                    )
-                    self.app.uiq.post(
-                        messagebox.showwarning,
-                        "Attenzione",
-                        result,
-                    )
-
-            except Exception as e:
-                self.app.uiq.post(
-                    self.app.tg_status_label.configure,
-                    text="Stato: Errore Verifica",
-                )
-                self.app.uiq.post(
-                    messagebox.showerror,
-                    "Errore",
-                    f"Verifica fallita: {str(e)}",
-                )
-
-        self.app.executor.submit("tg_verify_code", task)
-
-    def reset_session(self):
-        listener = getattr(self.app, "telegram_listener", None)
-        if listener and getattr(listener, "running", False):
-            messagebox.showwarning(
-                "Attenzione",
-                "Ferma il Listener Telegram prima di resettare.",
-            )
-            return
-
-        if not messagebox.askyesno(
-            "Conferma",
-            "Vuoi cancellare la sessione Telegram attuale?",
-        ):
-            return
-
-        path = self._get_session_path() + ".session"
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-
-        settings = self._get_settings()
-        settings.update({"session_string": "", "enabled": False})
-
-        if getattr(self.app.db, "save_telegram_settings", None):
-            self._save_settings_dict(settings)
-
-        self.app.tg_status_label.configure(text="Stato: Sessione resettata.")
-        messagebox.showinfo(
-            "OK",
-            "Sessione rimossa. Reinserisci i dati e richiedi un nuovo codice.",
-        )
-
-    def load_dialogs(self):
-        listener = getattr(self.app, "telegram_listener", None)
-        if listener and getattr(listener, "running", False):
-            messagebox.showwarning(
-                "Attenzione",
-                "Ferma il Listener Telegram prima di caricare le chat.",
-            )
-            return
-
-        settings = self._get_settings()
-        if not settings.get("api_id") or not settings.get("api_hash"):
-            messagebox.showwarning("Errore", "Configura Telegram prima.")
-            return
-
-        self.app.tg_available_status.configure(text="Caricamento...")
-
-        def task():
-            try:
-                from telethon import TelegramClient
-
-                async def run():
-                    client = TelegramClient(
-                        self._get_session_path(),
-                        int(settings["api_id"]),
-                        settings["api_hash"],
-                    )
-                    await client.connect()
-
-                    if not await client.is_user_authorized():
-                        await client.disconnect()
-                        return None
-
-                    dialogs = await client.get_dialogs()
-                    await client.disconnect()
-                    return dialogs
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                dialogs = loop.run_until_complete(run())
-                loop.close()
-
-                if dialogs is None:
-                    self.app.uiq.post(
-                        self.app.tg_available_status.configure,
-                        text="Non autenticato",
-                    )
-                    self.app.uiq.post(
-                        messagebox.showwarning,
-                        "Attenzione",
-                        "Non autenticato. Effettua il login.",
-                    )
-                    return
-
-                def update_ui():
-                    self.app.tg_available_tree.delete(
-                        *self.app.tg_available_tree.get_children()
-                    )
-
-                    monitored_ids = {
-                        int(chat["chat_id"])
-                        for chat in self._db_call("get_telegram_chats", default=[]) or []
-                    }
-
-                    for d in dialogs:
-                        if d.id in monitored_ids:
-                            continue
-                        safe_name = d.name or str(d.id)
-                        self.app.tg_available_tree.insert(
-                            "",
-                            "end",
-                            iid=str(d.id),
-                            values=("", "Chat", safe_name),
-                        )
-
-                    count = len(self.app.tg_available_tree.get_children())
-                    self.app.tg_available_status.configure(
-                        text=f"{count} chat disponibili"
-                    )
-
-                self.app.uiq.post(update_ui)
-
-            except Exception as e:
-                self.app.uiq.post(
-                    self.app.tg_available_status.configure,
-                    text="Errore caricamento",
-                )
-                self.app.uiq.post(
-                    messagebox.showerror,
-                    "Errore",
-                    str(e),
-                )
-
-        self.app.executor.submit("tg_load_dialogs", task)
-EOF
-
-CREA_FILE ui/tabs/telegram_tab_ui.py
-"""
-Telegram Tab UI
-Disegna solo i widget e collega i comandi ai metodi dell'app/controller.
-Nessuna logica di trading qui.
-"""
-
-__all__ = ["TelegramTabUI"]
-
-import tkinter as tk
-from tkinter import ttk
-
-import customtkinter as ctk
-
-from theme import COLORS, FONTS
-
-
-class TelegramTabUI:
-    def __init__(self, parent_frame, app):
-        self.parent = parent_frame
-        self.app = app
-        self.build()
-
-    def _safe_settings(self):
-        getter = getattr(self.app.db, "get_telegram_settings", None)
-        if callable(getter):
-            try:
-                return getter() or {}
-            except Exception:
-                return {}
-        return {}
-
-    def build(self):
-        main_frame = ctk.CTkFrame(self.parent, fg_color="transparent")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        left_container = ctk.CTkFrame(main_frame, fg_color="transparent", width=450)
-        left_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10))
-        left_container.pack_propagate(False)
-
-        left_canvas = tk.Canvas(
-            left_container,
-            highlightthickness=0,
-            bg=COLORS["bg_dark"],
-        )
-        left_scrollbar = ttk.Scrollbar(
-            left_container,
-            orient=tk.VERTICAL,
-            command=left_canvas.yview,
-        )
-        left_frame = ctk.CTkFrame(left_canvas, fg_color="transparent")
-
-        left_frame.bind(
-            "<Configure>",
-            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")),
-        )
-        left_canvas.create_window((0, 0), window=left_frame, anchor="nw")
-        left_canvas.configure(yscrollcommand=left_scrollbar.set)
-
-        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        right_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-        settings = self._safe_settings()
-
-        config_frame = ctk.CTkFrame(
-            left_frame,
-            fg_color=COLORS["bg_panel"],
-            corner_radius=8,
-        )
-        config_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Configurazione Telegram",
-            font=FONTS["heading"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Ottieni API ID e Hash su my.telegram.org",
-            font=("Segoe UI", 8),
-            text_color=COLORS["text_tertiary"],
-        ).pack(anchor=tk.W, padx=10)
-
-        self.app.tg_api_id_var = tk.StringVar(value=settings.get("api_id", ""))
-        self.app.tg_api_hash_var = tk.StringVar(value=settings.get("api_hash", ""))
-        self.app.tg_phone_var = tk.StringVar(value=settings.get("phone_number", ""))
-        self.app.tg_auto_stake_var = tk.StringVar(
-            value=str(settings.get("auto_stake", "1.0"))
-        )
-        self.app.tg_auto_bet_var = tk.BooleanVar(
-            value=bool(settings.get("auto_bet", False))
-        )
-        self.app.tg_confirm_var = tk.BooleanVar(
-            value=bool(settings.get("require_confirmation", True))
-        )
-        self.app.tg_code_var = tk.StringVar()
-        self.app.tg_2fa_var = tk.StringVar()
-
-        ctk.CTkLabel(
-            config_frame,
-            text="API ID:",
-            text_color=COLORS["text_secondary"],
-        ).pack(anchor=tk.W, padx=10, pady=(5, 0))
-        ctk.CTkEntry(
-            config_frame,
-            textvariable=self.app.tg_api_id_var,
-            width=200,
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(anchor=tk.W, padx=10)
-
-        ctk.CTkLabel(
-            config_frame,
-            text="API Hash:",
-            text_color=COLORS["text_secondary"],
-        ).pack(anchor=tk.W, padx=10, pady=(5, 0))
-        ctk.CTkEntry(
-            config_frame,
-            textvariable=self.app.tg_api_hash_var,
-            width=260,
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(anchor=tk.W, padx=10)
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Numero di Telefono (+39...)",
-            text_color=COLORS["text_secondary"],
-        ).pack(anchor=tk.W, padx=10, pady=(5, 0))
-        ctk.CTkEntry(
-            config_frame,
-            textvariable=self.app.tg_phone_var,
-            width=180,
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(anchor=tk.W, padx=10)
-
-        ctk.CTkLabel(
-            config_frame,
-            text="Stake Automatico (EUR)",
-            text_color=COLORS["text_secondary"],
-        ).pack(anchor=tk.W, padx=10, pady=(5, 0))
-        ctk.CTkEntry(
-            config_frame,
-            textvariable=self.app.tg_auto_stake_var,
-            width=80,
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(anchor=tk.W, padx=10)
-
-        ctk.CTkCheckBox(
-            config_frame,
-            text="Piazza automaticamente",
-            variable=self.app.tg_auto_bet_var,
-            fg_color=COLORS["back"],
-            hover_color=COLORS["back_hover"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(5, 0))
-
-        ctk.CTkCheckBox(
-            config_frame,
-            text="Richiedi conferma (solo se auto OFF)",
-            variable=self.app.tg_confirm_var,
-            fg_color=COLORS["back"],
-            hover_color=COLORS["back_hover"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10)
-
-        auth_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
-        auth_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
-
-        ctk.CTkLabel(
-            auth_frame,
-            text="Codice:",
-            text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT)
-        ctk.CTkEntry(
-            auth_frame,
-            textvariable=self.app.tg_code_var,
-            width=70,
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(side=tk.LEFT, padx=4)
-
-        ctk.CTkLabel(
-            auth_frame,
-            text="2FA:",
-            text_color=COLORS["text_secondary"],
-        ).pack(side=tk.LEFT, padx=(10, 0))
-        ctk.CTkEntry(
-            auth_frame,
-            textvariable=self.app.tg_2fa_var,
-            width=80,
-            show="*",
-            fg_color=COLORS["bg_card"],
-            border_color=COLORS["border"],
-        ).pack(side=tk.LEFT, padx=4)
-
-        ctk.CTkButton(
-            auth_frame,
-            text="Invia Codice",
-            command=self.app.telegram_controller.send_code,
-            fg_color=COLORS["button_secondary"],
-            hover_color=COLORS["bg_hover"],
-            corner_radius=6,
-            width=90,
-        ).pack(side=tk.LEFT, padx=5)
-
-        ctk.CTkButton(
-            auth_frame,
-            text="Verifica",
-            command=self.app.telegram_controller.verify_code,
-            fg_color=COLORS["button_primary"],
-            hover_color=COLORS["back_hover"],
-            corner_radius=6,
-            width=70,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            auth_frame,
-            text="Reset Sessione",
-            command=self.app.telegram_controller.reset_session,
-            fg_color=COLORS["button_danger"],
-            hover_color="#c62828",
-            corner_radius=6,
-            width=100,
-        ).pack(side=tk.LEFT, padx=5)
-
-        self.app.tg_status_label = ctk.CTkLabel(
-            config_frame,
-            text=f"Stato: {getattr(self.app, 'telegram_status', 'STOPPED')}",
-            text_color=COLORS["text_secondary"],
-        )
-        self.app.tg_status_label.pack(anchor=tk.W, padx=10, pady=5)
-
-        btn_frame = ctk.CTkFrame(config_frame, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        ctk.CTkButton(
-            btn_frame,
-            text="Salva",
-            command=self.app.telegram_controller.save_settings,
-            fg_color=COLORS["button_primary"],
-            hover_color=COLORS["back_hover"],
-            corner_radius=6,
-            width=80,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            btn_frame,
-            text="Avvia Listener",
-            command=self.app._start_telegram_listener,
-            fg_color=COLORS["button_success"],
-            hover_color="#4caf50",
-            corner_radius=6,
-            width=100,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            btn_frame,
-            text="Ferma",
-            command=self.app._stop_telegram_listener,
-            fg_color=COLORS["button_danger"],
-            hover_color="#c62828",
-            corner_radius=6,
-            width=70,
-        ).pack(side=tk.LEFT, padx=2)
-
-        chats_frame = ctk.CTkFrame(
-            left_frame,
-            fg_color=COLORS["bg_panel"],
-            corner_radius=8,
-        )
-        chats_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
-
-        ctk.CTkLabel(
-            chats_frame,
-            text="Chat Monitorate",
-            font=FONTS["heading"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
-
-        chat_btn_frame = ctk.CTkFrame(chats_frame, fg_color="transparent")
-        chat_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-
-        ctk.CTkButton(
-            chat_btn_frame,
-            text="Rimuovi",
-            command=self.app._remove_telegram_chat,
-            fg_color=COLORS["button_danger"],
-            hover_color="#c62828",
-            corner_radius=6,
-            width=80,
-        ).pack(side=tk.LEFT, padx=2)
-
-        self.app.tg_chats_tree = ttk.Treeview(
-            chats_frame,
-            columns=("name", "enabled"),
-            show="headings",
-            height=4,
-        )
-        self.app.tg_chats_tree.heading("name", text="Nome Chat")
-        self.app.tg_chats_tree.heading("enabled", text="Attivo")
-        self.app.tg_chats_tree.column("name", width=220)
-        self.app.tg_chats_tree.column("enabled", width=60)
-        self.app.tg_chats_tree.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        if hasattr(self.app, "_refresh_telegram_chats_tree"):
-            self.app._refresh_telegram_chats_tree()
-
-        available_frame = ctk.CTkFrame(
-            left_frame,
-            fg_color=COLORS["bg_panel"],
-            corner_radius=8,
-        )
-        available_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
-
-        ctk.CTkLabel(
-            available_frame,
-            text="Chat Disponibili da Telegram",
-            font=FONTS["heading"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
-
-        avail_btn_frame = ctk.CTkFrame(available_frame, fg_color="transparent")
-        avail_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-
-        ctk.CTkButton(
-            avail_btn_frame,
-            text="Carica/Aggiorna Chat",
-            command=self.app.telegram_controller.load_dialogs,
-            fg_color=COLORS["button_primary"],
-            hover_color=COLORS["back_hover"],
-            corner_radius=6,
-            width=140,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            avail_btn_frame,
-            text="Aggiungi Selezionate",
-            command=self.app._add_selected_available_chats,
-            fg_color=COLORS["button_success"],
-            hover_color="#4caf50",
-            corner_radius=6,
-            width=140,
-        ).pack(side=tk.LEFT, padx=2)
-
-        self.app.tg_available_status = ctk.CTkLabel(
-            avail_btn_frame,
-            text="",
-            text_color=COLORS["text_secondary"],
-        )
-        self.app.tg_available_status.pack(side=tk.RIGHT, padx=5)
-
-        avail_tree_container = ctk.CTkFrame(available_frame, fg_color="transparent")
-        avail_tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-
-        self.app.tg_available_tree = ttk.Treeview(
-            avail_tree_container,
-            columns=("select", "type", "name"),
-            show="headings",
-            height=8,
-            selectmode="extended",
-        )
-        self.app.tg_available_tree.heading("select", text="")
-        self.app.tg_available_tree.heading("type", text="Tipo")
-        self.app.tg_available_tree.heading("name", text="Nome")
-        self.app.tg_available_tree.column("select", width=30)
-        self.app.tg_available_tree.column("type", width=60)
-        self.app.tg_available_tree.column("name", width=220)
-
-        avail_scroll = ttk.Scrollbar(
-            avail_tree_container,
-            orient=tk.VERTICAL,
-            command=self.app.tg_available_tree.yview,
-        )
-        self.app.tg_available_tree.configure(yscrollcommand=avail_scroll.set)
-        self.app.tg_available_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        avail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.app.available_chats_data = []
-
-        rules_frame = ctk.CTkFrame(
-            left_frame,
-            fg_color=COLORS["bg_panel"],
-            corner_radius=8,
-        )
-        rules_frame.pack(fill=tk.X, pady=(0, 5), padx=5)
-
-        ctk.CTkLabel(
-            rules_frame,
-            text="Regole di Parsing",
-            font=FONTS["heading"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
-
-        ctk.CTkLabel(
-            rules_frame,
-            text="Definisci pattern regex per riconoscere i segnali",
-            font=("Segoe UI", 8),
-            text_color=COLORS["text_tertiary"],
-        ).pack(anchor=tk.W, padx=10)
-
-        rules_btn_frame = ctk.CTkFrame(rules_frame, fg_color="transparent")
-        rules_btn_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
-
-        ctk.CTkButton(
-            rules_btn_frame,
-            text="Aggiungi",
-            command=self.app._add_signal_pattern,
-            fg_color=COLORS["button_success"],
-            hover_color="#4caf50",
-            corner_radius=6,
-            width=80,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            rules_btn_frame,
-            text="Modifica",
-            command=self.app._edit_signal_pattern,
-            fg_color=COLORS["button_primary"],
-            hover_color=COLORS["back_hover"],
-            corner_radius=6,
-            width=80,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            rules_btn_frame,
-            text="Elimina",
-            command=self.app._delete_signal_pattern,
-            fg_color=COLORS["button_danger"],
-            hover_color="#c62828",
-            corner_radius=6,
-            width=80,
-        ).pack(side=tk.LEFT, padx=2)
-
-        ctk.CTkButton(
-            rules_btn_frame,
-            text="Attiva/Disattiva",
-            command=self.app._toggle_signal_pattern,
-            fg_color=COLORS["button_secondary"],
-            hover_color=COLORS["bg_hover"],
-            corner_radius=6,
-            width=110,
-        ).pack(side=tk.LEFT, padx=2)
-
-        rules_tree_container = ctk.CTkFrame(rules_frame, fg_color="transparent")
-        rules_tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-
-        self.app.rules_tree = ttk.Treeview(
-            rules_tree_container,
-            columns=("enabled", "name", "market", "pattern"),
-            show="headings",
-            height=6,
-        )
-        self.app.rules_tree.heading("enabled", text="ON")
-        self.app.rules_tree.heading("name", text="Nome")
-        self.app.rules_tree.heading("market", text="Mercato")
-        self.app.rules_tree.heading("pattern", text="Pattern")
-        self.app.rules_tree.column("enabled", width=40)
-        self.app.rules_tree.column("name", width=120)
-        self.app.rules_tree.column("market", width=100)
-        self.app.rules_tree.column("pattern", width=180)
-
-        rules_scroll = ttk.Scrollbar(
-            rules_tree_container,
-            orient=tk.VERTICAL,
-            command=self.app.rules_tree.yview,
-        )
-        self.app.rules_tree.configure(yscrollcommand=rules_scroll.set)
-        self.app.rules_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        rules_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        if hasattr(self.app, "_refresh_rules_tree"):
-            self.app._refresh_rules_tree()
-
-        signals_frame = ctk.CTkFrame(
-            right_frame,
-            fg_color=COLORS["bg_panel"],
-            corner_radius=8,
-        )
-        signals_frame.pack(fill=tk.BOTH, expand=True)
-
-        ctk.CTkLabel(
-            signals_frame,
-            text="Segnali Ricevuti",
-            font=FONTS["heading"],
-            text_color=COLORS["text_primary"],
-        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
-
-        signals_tree_container = ctk.CTkFrame(signals_frame, fg_color="transparent")
-        signals_tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-
-        self.app.tg_signals_tree = ttk.Treeview(
-            signals_tree_container,
-            columns=("data", "selezione", "tipo", "quota", "stake", "stato"),
-            show="headings",
-            height=15,
-        )
-        self.app.tg_signals_tree.heading("data", text="Data")
-        self.app.tg_signals_tree.heading("selezione", text="Selezione")
-        self.app.tg_signals_tree.heading("tipo", text="Tipo")
-        self.app.tg_signals_tree.heading("quota", text="Quota")
-        self.app.tg_signals_tree.heading("stake", text="Stake")
-        self.app.tg_signals_tree.heading("stato", text="Stato")
-        self.app.tg_signals_tree.column("data", width=110)
-        self.app.tg_signals_tree.column("selezione", width=180)
-        self.app.tg_signals_tree.column("tipo", width=60)
-        self.app.tg_signals_tree.column("quota", width=60)
-        self.app.tg_signals_tree.column("stake", width=60)
-        self.app.tg_signals_tree.column("stato", width=100)
-
-        self.app.tg_signals_tree.tag_configure("success", foreground=COLORS["success"])
-        self.app.tg_signals_tree.tag_configure("failed", foreground=COLORS["loss"])
-
-        scrollbar = ttk.Scrollbar(
-            signals_tree_container,
-            orient=tk.VERTICAL,
-            command=self.app.tg_signals_tree.yview,
-        )
-        self.app.tg_signals_tree.configure(yscrollcommand=scrollbar.set)
-        self.app.tg_signals_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        ctk.CTkButton(
-            signals_frame,
-            text="Aggiorna Segnali",
-            command=self.app._refresh_telegram_signals_tree,
-            fg_color=COLORS["button_primary"],
-            hover_color=COLORS["back_hover"],
-            corner_radius=6,
-        ).pack(pady=10)
-
-        if hasattr(self.app, "_refresh_telegram_signals_tree"):
-            self.app._refresh_telegram_signals_tree()
-EOF
-
-FIX_WHITESPACE
-
