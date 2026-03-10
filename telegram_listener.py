@@ -47,6 +47,8 @@ class TelegramListener:
         self.message_callback: Optional[Callable] = None
         self.status_callback: Optional[Callable] = None
 
+        self.db = None
+        self.custom_patterns = []
         self.signal_patterns = self._default_patterns()
 
     def _default_patterns(self) -> Dict:
@@ -81,7 +83,13 @@ class TelegramListener:
         """Reload custom patterns from database."""
         if hasattr(self, "db") and self.db:
             try:
-                self.custom_patterns = self.db.get_signal_patterns(enabled_only=True)
+                try:
+                    self.custom_patterns = self.db.get_signal_patterns(enabled_only=True)
+                except TypeError:
+                    patterns = self.db.get_signal_patterns()
+                    self.custom_patterns = [
+                        p for p in (patterns or []) if p.get("enabled", False)
+                    ]
             except Exception as e:
                 print(f"Error loading custom patterns: {e}")
                 self.custom_patterns = []
@@ -105,11 +113,64 @@ class TelegramListener:
 
     def parse_signal(self, text: str) -> Optional[Dict]:
         """
-        Parse a message text to extract betting signal.
+        Parse message text for betting signals.
 
-        Returns dict with keys: event, side, selection, market_type, odds, stake, raw_text
-        or None if no valid signal found.
+        Supporta:
+        - formato MASTER SIGNAL (copy trading)
+        - formato legacy
         """
+
+        # ============================
+        # 1) MASTER SIGNAL FORMAT
+        # ============================
+
+        if "MASTER SIGNAL" in text.upper():
+
+            def extract(field):
+                match = re.search(rf"{field}\s*:\s*(.+)", text, re.IGNORECASE)
+                return match.group(1).strip() if match else None
+
+            try:
+                event = extract("event_name")
+                market = extract("market_name")
+                selection = extract("selection")
+                action = extract("action")
+                price = extract("master_price")
+                market_id = extract("market_id")
+                selection_id = extract("selection_id")
+
+                if not market_id or not selection_id:
+                    return None
+
+                signal = {
+                    "raw_text": text,
+                    "timestamp": datetime.now().isoformat(),
+                    "event": event,
+                    "league": None,
+                    "side": action.upper() if action else "BACK",
+                    "selection": selection,
+                    "market_type": "MATCH_ODDS",
+                    "odds": float(price) if price else None,
+                    "stake": None,
+                    "score_home": None,
+                    "score_away": None,
+                    "over_line": None,
+                    "minute": None,
+                    "cashout_type": None,
+                    "market_id": str(market_id),
+                    "selection_id": int(selection_id),
+                    "market_name": market,
+                    "source": "MASTER_SIGNAL",
+                }
+                return signal
+
+            except Exception:
+                return None
+
+        # ============================
+        # 2) CUSTOM PATTERNS FROM DB
+        # ============================
+
         signal = {
             "raw_text": text,
             "timestamp": datetime.now().isoformat(),
@@ -125,6 +186,10 @@ class TelegramListener:
             "over_line": None,
             "minute": None,
             "cashout_type": None,
+            "market_id": None,
+            "selection_id": None,
+            "market_name": None,
+            "source": "LEGACY",
         }
 
         custom_patterns = getattr(self, "custom_patterns", [])
@@ -154,13 +219,13 @@ class TelegramListener:
                 min_minute = cp.get("min_minute")
                 max_minute = cp.get("max_minute")
                 if (
-                    min_minute
+                    min_minute is not None
                     and signal["minute"] is not None
                     and signal["minute"] < min_minute
                 ):
                     continue
                 if (
-                    max_minute
+                    max_minute is not None
                     and signal["minute"] is not None
                     and signal["minute"] > max_minute
                 ):
@@ -198,22 +263,38 @@ class TelegramListener:
                 else:
                     signal["selection"] = cp.get("name", "Custom Pattern")
 
+                signal["source"] = "CUSTOM_PATTERN"
                 return signal
             except re.error:
                 continue
 
+        # ============================
+        # 3) CASHOUT SIGNAL
+        # ============================
+
         if re.search(self.signal_patterns["cashout_all"], text, re.IGNORECASE):
-            signal["market_type"] = "CASHOUT"
-            signal["cashout_type"] = "ALL"
-            return signal
+            return {
+                "market_type": "CASHOUT",
+                "cashout_type": "ALL",
+                "raw_text": text,
+                "timestamp": datetime.now().isoformat(),
+                "source": "LEGACY",
+            }
 
         if re.search(self.signal_patterns["cashout"], text, re.IGNORECASE):
-            signal["market_type"] = "CASHOUT"
-            signal["cashout_type"] = "SINGLE"
             event_match = re.search(self.signal_patterns["event"], text)
-            if event_match:
-                signal["event"] = event_match.group(1).strip()
-            return signal
+            return {
+                "market_type": "CASHOUT",
+                "cashout_type": "SINGLE",
+                "raw_text": text,
+                "timestamp": datetime.now().isoformat(),
+                "event": event_match.group(1).strip() if event_match else None,
+                "source": "LEGACY",
+            }
+
+        # ============================
+        # 4) LEGACY SIGNALS
+        # ============================
 
         event_match = re.search(self.signal_patterns["event"], text)
         if event_match:
@@ -289,7 +370,9 @@ class TelegramListener:
                 )
             else:
                 session_path = os.path.join(
-                    os.environ.get("APPDATA", "."), "Pickfair", "telegram_session"
+                    os.environ.get("APPDATA", "."),
+                    "Pickfair",
+                    "telegram_session",
                 )
                 self.client = TelegramClient(session_path, self.api_id, self.api_hash)
 
@@ -386,7 +469,7 @@ class TelegramListener:
                     self.client.disconnect(), self.loop
                 )
                 future.result(timeout=5)
-            except:
+            except Exception:
                 pass
 
         if self.status_callback:
@@ -445,4 +528,3 @@ class SignalQueue:
         """Clear all signals."""
         with self.lock:
             self.queue.clear()
-
