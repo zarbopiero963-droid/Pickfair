@@ -1,25 +1,26 @@
-""" Dutching Engine per Betfair Exchange. Calcolo stake ottimali per profitto uniforme su multiple selezioni. Compatibile con chiamate legacy/tests:
+"""
+Dutching Engine per Betfair Exchange.
+Calcolo stake ottimali per profitto uniforme su multiple selezioni.
+Compatibile con chiamate legacy/tests:
+- calculate_dutching_stakes
+- calculate_mixed_dutching
+- calculate_ai_mixed_stakes
+- calculate_ai_mixed_dutching
+- dynamic_cashout_single
+- validate_selections
+"""
 
-calculate_dutching_stakes
-
-calculate_mixed_dutching
-
-calculate_ai_mixed_stakes
-
-calculate_ai_mixed_dutching
-
-dynamic_cashout_single
-
-validate_selections """
-
-
-import logging from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, getcontext from typing import Dict, List, Tuple
+import logging
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, getcontext
+from typing import Dict, List, Tuple
 
 getcontext().prec = 12
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
-MIN_STAKE = Decimal("0.10") STEP = Decimal("0.01") MAX_WIN = Decimal("10000.00")
+MIN_STAKE = Decimal("0.10")
+STEP = Decimal("0.01")
+MAX_WIN = Decimal("10000.00")
 
 def _to_decimal(value, default: str = "0") -> Decimal: if value is None: return Decimal(default) try: return Decimal(str(value)) except (InvalidOperation, TypeError, ValueError): return Decimal(default)
 
