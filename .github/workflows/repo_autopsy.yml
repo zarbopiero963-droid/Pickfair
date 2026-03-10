@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -19,7 +20,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system UI dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
@@ -32,43 +33,21 @@ jobs:
             pip install -r requirements.txt
           fi
 
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-          else
-            pip install pytest pytest-cov coverage[toml] pytest-asyncio pytest-mock ruff mypy
-          fi
+          pip install -r requirements-dev.txt
 
-      - name: Static Analysis (Ruff)
+      - name: Static Analysis (RUFF)
         run: |
-          echo "===================================="
-          echo "STATIC ANALYSIS - RUFF"
-          echo "===================================="
+          echo "STATIC ANALYSIS"
+          ruff check .
 
-          if ruff check .; then
-            echo "🟢 RUFF OK - nessun problema trovato"
-          else
-            echo "🔴 RUFF FAILED - problemi nel codice"
-            exit 1
-          fi
-
-      - name: Type Checking (Mypy)
+      - name: Type Checking (MYPY)
         run: |
-          echo "===================================="
-          echo "TYPE CHECK - MYPY"
-          echo "===================================="
+          echo "TYPE CHECK"
+          mypy . --ignore-missing-imports
 
-          if mypy . --ignore-missing-imports; then
-            echo "🟢 MYPY OK - tipi validi"
-          else
-            echo "🔴 MYPY FAILED - errori di tipo"
-            exit 1
-          fi
-
-      - name: Run tests with strict coverage
+      - name: Run tests
         run: |
-          echo "===================================="
-          echo "STARTING PYTEST EXECUTION"
-          echo "===================================="
+          echo "RUNNING TESTS"
 
           xvfb-run -a pytest \
             -vv \
@@ -80,40 +59,20 @@ jobs:
             --cov-report=json \
             --cov-fail-under=90
 
-          echo "===================================="
-          echo "PYTEST COMPLETED"
-          echo "===================================="
-          echo "🟢 TESTS OK"
-
-      - name: Print coverage files
+      - name: Coverage Gate
         run: |
-          echo "===================================="
-          echo "COVERAGE FILES"
-          echo "===================================="
-
-          ls -la
-
-          if [ -f coverage.json ]; then
-            echo "🟢 coverage.json trovato"
-            head -n 200 coverage.json
-          else
-            echo "🔴 coverage.json NON trovato"
-            exit 1
-          fi
-
-      - name: Enforce 100% per critical file
-        run: |
-          echo "===================================="
-          echo "CRITICAL COVERAGE GATE"
-          echo "===================================="
-
           python .github/scripts/check_per_file_coverage.py
 
-      - name: Upload coverage artifacts
+      - name: Repo Autopsy Report
+        run: |
+          python .github/scripts/repo_autopsy.py
+
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
+          name: repo-autopsy-report
           path: |
             coverage.xml
             coverage.json
+            repo_autopsy_report.json
