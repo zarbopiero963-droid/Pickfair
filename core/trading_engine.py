@@ -11,6 +11,7 @@ Micro-stake:
 - in caso di errore: rollback con CANCEL totale del residuo
 - in caso di crash: auto-cleanup degli stub al riavvio
 """
+
 __all__ = ["TradingEngine"]
 
 import json
@@ -78,17 +79,26 @@ class TradingEngine:
     def _safe_sum_matched(self, reports):
         total = 0.0
         for report in reports or []:
-            total += float(self._resp_get(report, "sizeMatched", self._resp_get(report, "size_matched", 0)) or 0)
+            total += float(
+                self._resp_get(
+                    report,
+                    "sizeMatched",
+                    self._resp_get(report, "size_matched", 0),
+                )
+                or 0
+            )
         return total
 
     def _extract_order_price(self, order):
         if not isinstance(order, dict):
             return 0.0
+
         if "priceSize" in order and isinstance(order["priceSize"], dict):
             try:
                 return float(order["priceSize"].get("price", 0) or 0)
             except Exception:
                 return 0.0
+
         try:
             return float(order.get("price", 0) or 0)
         except Exception:
@@ -97,28 +107,35 @@ class TradingEngine:
     def _extract_order_remaining_size(self, order):
         if not isinstance(order, dict):
             return 0.0
+
         for key in ("sizeRemaining", "remainingSize", "size_left", "size"):
             if key in order:
                 try:
                     return float(order.get(key, 0) or 0)
                 except Exception:
                     pass
+
         if "priceSize" in order and isinstance(order["priceSize"], dict):
             try:
                 return float(order["priceSize"].get("size", 0) or 0)
             except Exception:
                 pass
+
         return 0.0
 
     def _is_stub_micro_order(self, order):
         price = self._extract_order_price(order)
         remaining = self._extract_order_remaining_size(order)
+
         if remaining <= 0:
             return False
+
         return abs(price - 1.01) < 0.0001 or abs(price - 1000.0) < 0.0001
 
     def _cancel_stub_orders(self, client, market_id, recovered_reports):
-        stub_orders = [o for o in (recovered_reports or []) if self._is_stub_micro_order(o)]
+        stub_orders = [
+            order for order in (recovered_reports or []) if self._is_stub_micro_order(order)
+        ]
         if not stub_orders:
             return False
 
@@ -138,10 +155,18 @@ class TradingEngine:
         )
 
         try:
-            self._call_cancel_orders(client=client, market_id=market_id, instructions=instructions)
+            self._call_cancel_orders(
+                client=client,
+                market_id=market_id,
+                instructions=instructions,
+            )
             return True
         except Exception as e:
-            logger.error("[Recovery] Cleanup stub fallito su market_id=%s: %s", market_id, e)
+            logger.error(
+                "[Recovery] Cleanup stub fallito su market_id=%s: %s",
+                market_id,
+                e,
+            )
             return False
 
     # =========================================================
@@ -171,7 +196,16 @@ class TradingEngine:
         raw = getattr(client, "client", None)
         return raw if raw is not None else client
 
-    def _call_place_bet(self, client, market_id, selection_id, side, price, size, customer_ref):
+    def _call_place_bet(
+        self,
+        client,
+        market_id,
+        selection_id,
+        side,
+        price,
+        size,
+        customer_ref,
+    ):
         if hasattr(client, "place_bet"):
             return client.place_bet(
                 market_id=market_id,
@@ -207,7 +241,11 @@ class TradingEngine:
 
     def _call_place_orders(self, client, market_id, instructions, customer_ref):
         if hasattr(client, "place_orders"):
-            return client.place_orders(market_id, instructions, customer_ref=customer_ref)
+            return client.place_orders(
+                market_id,
+                instructions,
+                customer_ref=customer_ref,
+            )
 
         raw = self._wrapper_or_raw_client(client)
         if hasattr(raw, "betting") and hasattr(raw.betting, "place_orders"):
@@ -224,11 +262,17 @@ class TradingEngine:
             try:
                 return client.cancel_orders(market_id, instructions)
             except TypeError:
-                return client.cancel_orders(market_id=market_id, instructions=instructions)
+                return client.cancel_orders(
+                    market_id=market_id,
+                    instructions=instructions,
+                )
 
         raw = self._wrapper_or_raw_client(client)
         if hasattr(raw, "betting") and hasattr(raw.betting, "cancel_orders"):
-            return raw.betting.cancel_orders(market_id=market_id, instructions=instructions)
+            return raw.betting.cancel_orders(
+                market_id=market_id,
+                instructions=instructions,
+            )
 
         raise AttributeError("Client non supporta cancel_orders")
 
@@ -237,11 +281,17 @@ class TradingEngine:
             try:
                 return client.replace_orders(market_id, instructions)
             except TypeError:
-                return client.replace_orders(market_id=market_id, instructions=instructions)
+                return client.replace_orders(
+                    market_id=market_id,
+                    instructions=instructions,
+                )
 
         raw = self._wrapper_or_raw_client(client)
         if hasattr(raw, "betting") and hasattr(raw.betting, "replace_orders"):
-            return raw.betting.replace_orders(market_id=market_id, instructions=instructions)
+            return raw.betting.replace_orders(
+                market_id=market_id,
+                instructions=instructions,
+            )
 
         raise AttributeError("Client non supporta replace_orders")
 
@@ -281,7 +331,16 @@ class TradingEngine:
             "newPrice": float(new_price),
         }
 
-    def _execute_micro_stake(self, client, market_id, selection_id, side, price, stake, customer_ref):
+    def _execute_micro_stake(
+        self,
+        client,
+        market_id,
+        selection_id,
+        side,
+        price,
+        stake,
+        customer_ref,
+    ):
         requested_stake = float(stake)
         if requested_stake < self.MICRO_MIN_STAKE:
             raise ValueError(f"Stake micro troppo basso: {requested_stake}")
@@ -302,8 +361,11 @@ class TradingEngine:
             size=stub_size,
             customer_ref=customer_ref,
         )
+
         if self._response_status(place_resp) != "SUCCESS":
-            raise RuntimeError(f"Micro-stake step PLACE fallito: {self._response_status(place_resp)}")
+            raise RuntimeError(
+                f"Micro-stake step PLACE fallito: {self._response_status(place_resp)}"
+            )
 
         place_reports = self._response_instruction_reports(place_resp)
         if not place_reports:
@@ -314,16 +376,25 @@ class TradingEngine:
         matched_now = self._safe_sum_matched(place_reports)
 
         if matched_now > 0:
-            raise RuntimeError(f"Micro-stake stub già abbinato ({matched_now}) - abort")
+            raise RuntimeError(
+                f"Micro-stake stub già abbinato ({matched_now}) - abort"
+            )
 
         try:
             cancel_resp = self._call_cancel_orders(
                 client=client,
                 market_id=market_id,
-                instructions=[self._build_cancel_instruction(bet_id, size_reduction=size_reduction)],
+                instructions=[
+                    self._build_cancel_instruction(
+                        bet_id,
+                        size_reduction=size_reduction,
+                    )
+                ],
             )
             if self._response_status(cancel_resp) != "SUCCESS":
-                raise RuntimeError(f"Micro-stake step CANCEL fallito: {self._response_status(cancel_resp)}")
+                raise RuntimeError(
+                    f"Micro-stake step CANCEL fallito: {self._response_status(cancel_resp)}"
+                )
 
             replace_resp = self._call_replace_orders(
                 client=client,
@@ -331,9 +402,12 @@ class TradingEngine:
                 instructions=[self._build_replace_instruction(bet_id, new_price=price)],
             )
             if self._response_status(replace_resp) != "SUCCESS":
-                raise RuntimeError(f"Micro-stake step REPLACE fallito: {self._response_status(replace_resp)}")
+                raise RuntimeError(
+                    f"Micro-stake step REPLACE fallito: {self._response_status(replace_resp)}"
+                )
 
             reports = self._response_instruction_reports(replace_resp) or place_reports
+
             return {
                 "status": "SUCCESS",
                 "instructionReports": reports,
@@ -371,7 +445,10 @@ class TradingEngine:
             if not client:
                 return
 
-            logger.warning("[Recovery] Trovate %s saghe pendenti post-crash.", len(pending))
+            logger.warning(
+                "[Recovery] Trovate %s saghe pendenti post-crash.",
+                len(pending),
+            )
 
             for saga in pending:
                 customer_ref = saga["customer_ref"]
@@ -383,22 +460,40 @@ class TradingEngine:
                 except Exception:
                     payload = {}
 
-                is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                is_recovered, recovered_reports = self._reconcile_orders(
+                    client,
+                    market_id,
+                    customer_ref,
+                )
 
                 if not is_recovered:
                     self.db.mark_saga_failed(customer_ref)
-                    logger.warning("[Recovery] Saga %s marcata fallita.", customer_ref)
+                    logger.warning(
+                        "[Recovery] Saga %s marcata fallita.",
+                        customer_ref,
+                    )
                     continue
 
-                cleaned_stub = self._cancel_stub_orders(client, market_id, recovered_reports)
+                cleaned_stub = self._cancel_stub_orders(
+                    client,
+                    market_id,
+                    recovered_reports,
+                )
                 if cleaned_stub:
-                    _, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    _, recovered_reports = self._reconcile_orders(
+                        client,
+                        market_id,
+                        customer_ref,
+                    )
 
                 self.db.mark_saga_reconciled(customer_ref)
 
                 if "results" in payload:
                     matched = self._safe_sum_matched(recovered_reports)
-                    requested_size = sum(float(r.get("stake", 0) or 0) for r in payload.get("results", []))
+                    requested_size = sum(
+                        float(r.get("stake", 0) or 0)
+                        for r in payload.get("results", [])
+                    )
                     status = self._compute_order_status(matched, requested_size)
 
                     self.db.save_bet(
@@ -466,24 +561,31 @@ class TradingEngine:
                 except TypeError:
                     orders = client.get_current_orders()
 
-                current_orders = orders.get("currentOrders", []) or orders.get("current_orders", []) or []
+                current_orders = (
+                    orders.get("currentOrders", [])
+                    or orders.get("current_orders", [])
+                    or []
+                )
                 matched_orders = orders.get("matched", []) or []
                 unmatched_orders = orders.get("unmatched", []) or []
 
                 all_orders = current_orders + matched_orders + unmatched_orders
 
                 recovered = [
-                    o for o in all_orders
+                    order
+                    for order in all_orders
                     if (
-                        o.get("customerOrderRef") == customer_ref
-                        or o.get("customerRef") == customer_ref
+                        order.get("customerOrderRef") == customer_ref
+                        or order.get("customerRef") == customer_ref
                     )
-                    and str(o.get("marketId")) == str(market_id)
+                    and str(order.get("marketId")) == str(market_id)
                 ]
+
                 if recovered:
                     return True, recovered
             except Exception:
                 continue
+
         return False, []
 
     # =========================================================
@@ -510,7 +612,9 @@ class TradingEngine:
 
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+                    v_balance = float(
+                        sim_settings.get("virtual_balance", 0.0) or 0.0
+                    )
                     liability = stake * (price - 1) if bet_type == "LAY" else stake
 
                     if v_balance >= liability:
@@ -540,14 +644,22 @@ class TradingEngine:
                             },
                         )
                     else:
-                        self.bus.publish("QUICK_BET_FAILED", "Saldo virtuale insufficiente")
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            "Saldo virtuale insufficiente",
+                        )
                     return
 
                 client = self.client_getter()
                 if not client:
                     raise Exception("Client non connesso")
 
-                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                self.db.create_pending_saga(
+                    customer_ref,
+                    market_id,
+                    selection_id,
+                    payload,
+                )
 
                 try:
                     if self._needs_micro_stake(stake):
@@ -626,10 +738,18 @@ class TradingEngine:
                             potential_profit=0.0,
                             status="FAILED",
                         )
-                        self.bus.publish("QUICK_BET_FAILED", f"Stato API: {self._response_status(result)}")
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            f"Stato API: {self._response_status(result)}",
+                        )
 
                 except Exception as e:
-                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client,
+                        market_id,
+                        customer_ref,
+                    )
+
                     if is_recovered:
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = self._safe_sum_matched(recovered_reports)
@@ -686,9 +806,15 @@ class TradingEngine:
                         if isinstance(e, PermanentError):
                             self.bus.publish(
                                 "SAFE_MODE_TRIGGER",
-                                {"reason": "Circuit Breaker", "details": str(e)},
+                                {
+                                    "reason": "Circuit Breaker",
+                                    "details": str(e),
+                                },
                             )
-                        self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            f"Errore Rete: {str(e)}",
+                        )
             finally:
                 self._release_lock(customer_ref)
 
@@ -715,11 +841,15 @@ class TradingEngine:
                 sim_mode = bool(payload.get("simulation_mode", False))
                 total_stake = float(payload["total_stake"])
                 use_best_price = bool(payload.get("use_best_price", False))
-                requested_size = sum(float(r.get("stake", 0) or 0) for r in results)
+                requested_size = sum(
+                    float(r.get("stake", 0) or 0) for r in results
+                )
 
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+                    v_balance = float(
+                        sim_settings.get("virtual_balance", 0.0) or 0.0
+                    )
 
                     total_risk = (
                         sum(
@@ -754,7 +884,10 @@ class TradingEngine:
                             },
                         )
                     else:
-                        self.bus.publish("DUTCHING_FAILED", "Saldo virtuale insufficiente")
+                        self.bus.publish(
+                            "DUTCHING_FAILED",
+                            "Saldo virtuale insufficiente",
+                        )
                     return
 
                 client = self.client_getter()
@@ -776,15 +909,28 @@ class TradingEngine:
                                 ex = runner.get("ex", {})
                                 if bet_type == "BACK":
                                     avail = ex.get("availableToBack", [])
-                                    best_price_map[sel_id] = avail[0].get("price", 1.01) if avail else 1.01
+                                    best_price_map[sel_id] = (
+                                        avail[0].get("price", 1.01)
+                                        if avail
+                                        else 1.01
+                                    )
                                 else:
                                     avail = ex.get("availableToLay", [])
-                                    best_price_map[sel_id] = avail[0].get("price", 1000.0) if avail else 1000.0
+                                    best_price_map[sel_id] = (
+                                        avail[0].get("price", 1000.0)
+                                        if avail
+                                        else 1000.0
+                                    )
 
                     for r in results:
                         side = str(r.get("side", bet_type)).upper()
                         size = float(r.get("stake", 0) or 0)
-                        target_price = float(best_price_map.get(r["selectionId"], r.get("price", 0.0)))
+                        target_price = float(
+                            best_price_map.get(
+                                r["selectionId"],
+                                r.get("price", 0.0),
+                            )
+                        )
 
                         if self._needs_micro_stake(size):
                             micro_result = self._execute_micro_stake(
@@ -796,7 +942,9 @@ class TradingEngine:
                                 stake=size,
                                 customer_ref=customer_ref,
                             )
-                            micro_reports.extend(self._response_instruction_reports(micro_result))
+                            micro_reports.extend(
+                                self._response_instruction_reports(micro_result)
+                            )
                         else:
                             normal_instructions.append(
                                 self._build_limit_instruction(
@@ -809,6 +957,7 @@ class TradingEngine:
 
                     normal_reports = []
                     normal_status = "SUCCESS"
+
                     if normal_instructions:
                         normal_result = self._call_place_orders(
                             client=client,
@@ -817,7 +966,9 @@ class TradingEngine:
                             customer_ref=customer_ref,
                         )
                         normal_status = self._response_status(normal_result)
-                        normal_reports = self._response_instruction_reports(normal_result)
+                        normal_reports = self._response_instruction_reports(
+                            normal_result
+                        )
 
                     all_reports = normal_reports + micro_reports
 
@@ -857,10 +1008,18 @@ class TradingEngine:
                             potential_profit=0.0,
                             status="FAILED",
                         )
-                        self.bus.publish("DUTCHING_FAILED", f"Stato API: {normal_status}")
+                        self.bus.publish(
+                            "DUTCHING_FAILED",
+                            f"Stato API: {normal_status}",
+                        )
 
                 except Exception as e:
-                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client,
+                        market_id,
+                        customer_ref,
+                    )
+
                     if is_recovered:
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = self._safe_sum_matched(recovered_reports)
@@ -901,9 +1060,15 @@ class TradingEngine:
                         if isinstance(e, PermanentError):
                             self.bus.publish(
                                 "SAFE_MODE_TRIGGER",
-                                {"reason": "Circuit Breaker", "details": str(e)},
+                                {
+                                    "reason": "Circuit Breaker",
+                                    "details": str(e),
+                                },
                             )
-                        self.bus.publish("DUTCHING_FAILED", f"Errore Rete: {str(e)}")
+                        self.bus.publish(
+                            "DUTCHING_FAILED",
+                            f"Errore Rete: {str(e)}",
+                        )
             finally:
                 self._release_lock(customer_ref)
 
@@ -935,7 +1100,12 @@ class TradingEngine:
                 price = float(payload["price"])
                 green_up = float(payload["green_up"])
 
-                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                self.db.create_pending_saga(
+                    customer_ref,
+                    market_id,
+                    selection_id,
+                    payload,
+                )
 
                 try:
                     if self._needs_micro_stake(stake):
@@ -999,10 +1169,18 @@ class TradingEngine:
                         )
                     else:
                         self.db.mark_saga_failed(customer_ref)
-                        self.bus.publish("CASHOUT_FAILED", f"Stato API: {self._response_status(result)}")
+                        self.bus.publish(
+                            "CASHOUT_FAILED",
+                            f"Stato API: {self._response_status(result)}",
+                        )
 
                 except Exception as e:
-                    is_recovered, recovered_reports = self._reconcile_orders(client, market_id, customer_ref)
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client,
+                        market_id,
+                        customer_ref,
+                    )
+
                     if is_recovered:
                         self.db.mark_saga_reconciled(customer_ref)
                         matched = self._safe_sum_matched(recovered_reports)
@@ -1040,7 +1218,10 @@ class TradingEngine:
                                     "details": str(e),
                                 },
                             )
-                        self.bus.publish("CASHOUT_FAILED", f"Errore Rete: {str(e)}")
+                        self.bus.publish(
+                            "CASHOUT_FAILED",
+                            f"Errore Rete: {str(e)}",
+                        )
             finally:
                 self._release_lock(customer_ref)
 
