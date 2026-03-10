@@ -5,6 +5,7 @@ HEDGE-FUND STABLE:
 - Adaptive Rate Limiting
 - No-blocking Queue
 - EventBus integration per MASTER copy-trading
+- Database logging outbox
 """
 
 import asyncio
@@ -31,6 +32,7 @@ class QueuedMessage:
     text: str
     max_retries: int = 3
     callback: Optional[Callable] = None
+    message_type: str = "GENERIC"
 
 
 class AdaptiveRateLimiter:
@@ -80,9 +82,17 @@ class AdaptiveRateLimiter:
 
 
 class TelegramSender:
-    def __init__(self, client, base_delay: float = 0.5, event_bus=None, default_chat_id: Optional[str] = None):
+    def __init__(
+        self,
+        client,
+        base_delay: float = 0.5,
+        event_bus=None,
+        default_chat_id: Optional[str] = None,
+        db=None,
+    ):
         self.client = client
         self.bus = event_bus
+        self.db = db
         self.default_chat_id = str(default_chat_id) if default_chat_id not in (None, "") else None
 
         self.rate_limiter = AdaptiveRateLimiter(base_delay)
@@ -100,6 +110,26 @@ class TelegramSender:
             self.bus.subscribe("CASHOUT_SUCCESS", self._on_cashout_success)
 
     # =========================================================
+    # DB LOGGING
+    # =========================================================
+
+    def _db_log(self, chat_id, message_type, text, status, message_id=None, error=None, flood_wait=0):
+        if not self.db:
+            return
+        try:
+            self.db.save_telegram_outbox_log(
+                chat_id=chat_id,
+                message_type=message_type,
+                text=text,
+                status=status,
+                message_id=message_id,
+                error=error,
+                flood_wait=flood_wait,
+            )
+        except Exception as e:
+            logger.error("[TG_SENDER] DB log error: %s", e)
+
+    # =========================================================
     # LOW-LEVEL SEND
     # =========================================================
 
@@ -108,6 +138,7 @@ class TelegramSender:
         chat_id: str,
         text: str,
         max_retries: int = 3,
+        message_type: str = "GENERIC",
     ) -> SendResult:
         result = SendResult()
 
@@ -123,6 +154,16 @@ class TelegramSender:
 
                 self.rate_limiter.record_success()
                 self._messages_sent += 1
+
+                self._db_log(
+                    chat_id=chat_id,
+                    message_type=message_type,
+                    text=text,
+                    status="SENT",
+                    message_id=result.message_id,
+                    error=None,
+                    flood_wait=0,
+                )
                 return result
 
             except Exception as e:
@@ -139,6 +180,16 @@ class TelegramSender:
 
                     if attempt >= max_retries - 1:
                         result.error = f"FloodWait ({wait_seconds}s) max retries reached."
+                        self._messages_failed += 1
+                        self._db_log(
+                            chat_id=chat_id,
+                            message_type=message_type,
+                            text=text,
+                            status="FAILED",
+                            message_id=None,
+                            error=result.error,
+                            flood_wait=wait_seconds,
+                        )
                         break
 
                     safe_wait = min(wait_seconds, 15)
@@ -157,8 +208,18 @@ class TelegramSender:
 
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
+                else:
+                    self._messages_failed += 1
+                    self._db_log(
+                        chat_id=chat_id,
+                        message_type=message_type,
+                        text=text,
+                        status="FAILED",
+                        message_id=None,
+                        error=result.error,
+                        flood_wait=0,
+                    )
 
-        self._messages_failed += 1
         return result
 
     def send_message_sync(
@@ -166,11 +227,12 @@ class TelegramSender:
         chat_id: str,
         text: str,
         max_retries: int = 3,
+        message_type: str = "GENERIC",
     ) -> SendResult:
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(
-                self.send_message(chat_id, text, max_retries)
+                self.send_message(chat_id, text, max_retries, message_type)
             )
         finally:
             loop.close()
@@ -181,15 +243,27 @@ class TelegramSender:
         text: str,
         max_retries: int = 3,
         callback: Optional[Callable] = None,
+        message_type: str = "GENERIC",
     ):
         msg = QueuedMessage(
             chat_id=str(chat_id),
             text=text,
             max_retries=max_retries,
             callback=callback,
+            message_type=message_type,
         )
         self._queue.put(msg)
         self._messages_queued += 1
+
+        self._db_log(
+            chat_id=chat_id,
+            message_type=message_type,
+            text=text,
+            status="QUEUED",
+            message_id=None,
+            error=None,
+            flood_wait=0,
+        )
 
         if not self._running:
             self.start_worker()
@@ -199,15 +273,18 @@ class TelegramSender:
         text: str,
         max_retries: int = 3,
         callback: Optional[Callable] = None,
+        message_type: str = "GENERIC",
     ):
         if not self.default_chat_id:
             logger.warning("[TG_SENDER] Nessun default_chat_id configurato.")
             return
+
         self.queue_message(
             chat_id=self.default_chat_id,
             text=text,
             max_retries=max_retries,
             callback=callback,
+            message_type=message_type,
         )
 
     def start_worker(self):
@@ -238,7 +315,12 @@ class TelegramSender:
                 msg = self._queue.get(timeout=1)
 
                 result = loop.run_until_complete(
-                    self.send_message(msg.chat_id, msg.text, msg.max_retries)
+                    self.send_message(
+                        msg.chat_id,
+                        msg.text,
+                        msg.max_retries,
+                        msg.message_type,
+                    )
                 )
 
                 if msg.callback:
@@ -356,7 +438,7 @@ class TelegramSender:
             market_name=market_name,
             status=status,
         )
-        self.queue_default_message(text)
+        self.queue_default_message(text, message_type="MASTER_SIGNAL_SINGLE")
 
     def _on_dutching_success(self, data: Dict):
         if data.get("sim", False):
@@ -365,7 +447,7 @@ class TelegramSender:
             return
 
         text = self._format_dutching_signal(data)
-        self.queue_default_message(text)
+        self.queue_default_message(text, message_type="MASTER_SIGNAL_DUTCHING")
 
     def _on_cashout_success(self, data: Dict):
         if not self.default_chat_id:
@@ -379,7 +461,7 @@ class TelegramSender:
             f"green_up: {green:.2f}\n"
             f"status: {status}"
         )
-        self.queue_default_message(text)
+        self.queue_default_message(text, message_type="MASTER_CASHOUT")
 
     # =========================================================
     # STATS
@@ -413,6 +495,7 @@ def get_telegram_sender(
     base_delay: float = 0.5,
     event_bus=None,
     default_chat_id: Optional[str] = None,
+    db=None,
 ) -> Optional[TelegramSender]:
     global _global_sender
     if _global_sender is None and client is not None:
@@ -421,6 +504,7 @@ def get_telegram_sender(
             base_delay=base_delay,
             event_bus=event_bus,
             default_chat_id=default_chat_id,
+            db=db,
         )
     return _global_sender
 
@@ -430,6 +514,7 @@ def init_telegram_sender(
     base_delay: float = 0.5,
     event_bus=None,
     default_chat_id: Optional[str] = None,
+    db=None,
 ) -> TelegramSender:
     global _global_sender
     _global_sender = TelegramSender(
@@ -437,5 +522,6 @@ def init_telegram_sender(
         base_delay=base_delay,
         event_bus=event_bus,
         default_chat_id=default_chat_id,
+        db=db,
     )
     return _global_sender
