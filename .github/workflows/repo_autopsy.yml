@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -39,32 +40,32 @@ jobs:
             pip install -r requirements.txt
           fi
 
-          pip install -r requirements-dev.txt
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            pip install pytest pytest-cov pytest-asyncio pytest-mock coverage[toml] ruff mypy mutmut
+          fi
 
       - name: Static Analysis (RUFF)
         run: |
           echo "==============================="
-          echo "STATIC ANALYSIS START"
+          echo "STATIC ANALYSIS"
           echo "==============================="
           ruff check .
-          echo "==============================="
-          echo "STATIC ANALYSIS OK"
-          echo "==============================="
+          echo "🟢 RUFF OK"
 
       - name: Type Checking (MYPY)
         run: |
           echo "==============================="
-          echo "TYPE CHECK START"
+          echo "TYPE CHECK"
           echo "==============================="
           mypy . --ignore-missing-imports
-          echo "==============================="
-          echo "TYPE CHECK OK"
-          echo "==============================="
+          echo "🟢 MYPY OK"
 
       - name: Run tests with strict coverage
         run: |
           echo "==============================="
-          echo "STARTING PYTEST EXECUTION"
+          echo "STARTING PYTEST"
           echo "==============================="
 
           xvfb-run -a pytest \
@@ -77,49 +78,37 @@ jobs:
             --cov-report=json \
             --cov-fail-under=90
 
-          echo "==============================="
-          echo "PYTEST COMPLETED"
-          echo "==============================="
+          echo "🟢 TESTS OK"
 
-      - name: Print coverage debug
+      - name: Coverage debug
         if: always()
         run: |
           echo "==============================="
           echo "COVERAGE DEBUG"
           echo "==============================="
+
           ls -la
+
           if [ -f coverage.json ]; then
+            echo "coverage.json trovato"
             python - <<'PY'
 import json
 from pathlib import Path
-p = Path("coverage.json")
-data = json.loads(p.read_text(encoding="utf-8"))
-print("coverage.json trovato")
-print("numero file nel report:", len(data.get("files", {})))
-for i, k in enumerate(sorted(data.get("files", {}).keys())[:30], start=1):
-    print(f"{i:02d}. {k}")
+data=json.loads(Path("coverage.json").read_text())
+print("FILES IN COVERAGE:",len(data.get("files",{})))
+for i,f in enumerate(sorted(data.get("files",{}))[:30],1):
+    print(i,f)
 PY
           else
-            echo "coverage.json NON trovato"
+            echo "❌ coverage.json non trovato"
             exit 1
-          fi
 
-      - name: Enforce 100% per critical files
+      - name: Critical Coverage Gate
         run: |
           echo "==============================="
-          echo "CRITICAL COVERAGE GATE"
+          echo "CRITICAL FILE COVERAGE CHECK"
           echo "==============================="
           python .github/scripts/check_per_file_coverage.py
-
-      - name: Repo Autopsy Report + Graphs
-        run: |
-          echo "==============================="
-          echo "REPO AUTOPSY START"
-          echo "==============================="
-          python .github/scripts/repo_autopsy.py
-          echo "==============================="
-          echo "REPO AUTOPSY END"
-          echo "==============================="
 
       - name: Mutation Testing
         run: |
@@ -127,11 +116,9 @@ PY
           echo "MUTATION TESTING"
           echo "==============================="
           mutmut run || true
-          echo "==============================="
           echo "MUTATION TESTING FINISHED"
-          echo "==============================="
 
-      - name: Upload reports and graphs
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -139,9 +126,4 @@ PY
           path: |
             coverage.xml
             coverage.json
-            repo_autopsy_report.json
-            repo_file_graph.dot
-            repo_call_graph.dot
-            repo_file_graph.svg
-            repo_call_graph.svg
             .mutmut-cache
