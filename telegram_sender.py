@@ -525,3 +525,4 @@ def init_telegram_sender(
         db=db,
     )
     return _global_sender
+

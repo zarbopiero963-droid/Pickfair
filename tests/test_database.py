@@ -81,3 +81,4 @@ def test_db_simulation_and_outbox(db):
     rows = db.get_telegram_outbox_log()
     assert len(rows) == 1
     assert rows[0]["status"] == "SENT"
+

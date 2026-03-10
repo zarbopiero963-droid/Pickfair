@@ -62,3 +62,4 @@ def test_custom_patterns_tolerances(listener):
     assert res["action"] == "LAY"
     assert res["price"] == 3.0
     assert res["source"] == "CUSTOM_PATTERN"
+

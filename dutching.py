@@ -272,3 +272,4 @@ return results, float(round_step(min_profit)), float(total_weight * 100)
 def calculate_ai_mixed_stakes( selections: List[Dict], amount: float = None, commission: float = 4.5, total_stake: float = None, **kwargs, ) -> Tuple[List[Dict], float, float]: if amount is None: amount = total_stake if amount is None: amount = kwargs.get("stake", 0.0) return calculate_mixed_dutching(selections, amount, commission)
 
 def calculate_ai_mixed_dutching( selections: List[Dict], amount: float, commission: float = 4.5, **kwargs, ) -> Tuple[List[Dict], float, float]: return calculate_mixed_dutching(selections, amount, commission)
+

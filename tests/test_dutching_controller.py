@@ -2,7 +2,7 @@ import pytest
 from controllers.dutching_controller import DutchingController
 
 class DummyBus:
-    def publish(self, event, payload): 
+    def publish(self, event, payload):
         self.last_event = event
         self.last_payload = payload
 
@@ -53,3 +53,4 @@ def test_dutching_controller_float_casting(ctrl):
         dry_run=True
     )
     assert True # Se arriva qui, il cast è andato a buon fine
+

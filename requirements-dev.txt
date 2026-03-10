@@ -9,3 +9,4 @@ mypy>=1.11.0
 
 mutmut>=2.4.4
 networkx>=3.3
+

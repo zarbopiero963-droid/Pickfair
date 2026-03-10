@@ -1,4 +1,3 @@
-CREATE_FILE .github/workflows/repo_forensics.yml name: Repo Forensics Ultra Gate
 on: workflow_dispatch: push: branches: [ main, master, develop ] paths: - ".py" - ".github/workflows/repo_forensics.yml" - ".github/scripts/" - "tests/**" - "requirements*.txt" - "pytest.ini" - ".coveragerc"
 jobs: forensics: runs-on: ubuntu-latest
 env:
@@ -478,27 +477,27 @@ cycles_json = OUT_DIR / "dependency_cycles.json"
 
 html = f"""<!DOCTYPE html>
 �
-Repo Autopsy Interactive body {{ font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }} h1,h2 {{ color:#7ee787; }} .card {{ background:#1b1b1b; border:1px solid #333; padding:16px; margin-bottom:16px; border-radius:10px; }} a {{ color:#58a6ff; }} pre {{ white-space: pre-wrap; word-break: break-word; }} .ok {{ color:#3fb950; }} .fail {{ color:#f85149; }}
+Repo Autopsy Interactive body {{ font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }} h1,h2 {{ color:#7ee787; }} .card {{ background:#1b1b1b; border:1px solid #333; padding:16px; margin-bottom:16px; border-radius:10px; }} a {{ color:#58a6ff; }} pre {{ white-space: pre-wrap; word-break: break-word; }} .ok {{ color:#3fb950; }} .fail {{ color:#f85149; }} 
 Repo Autopsy Interactive
 
 �
 Artifacts
-autopsy_summary.jsoncentrality_ranking.jsondependency_cycles.jsonimport_edges.csvcall_edges.csvclass_edges.csvimport_graph.pngcall_graph.pngclass_graph.png
+autopsy_summary.jsoncentrality_ranking.jsondependency_cycles.jsonimport_edges.csvcall_edges.csvclass_edges.csvimport_graph.pngcall_graph.pngclass_graph.png 
 
 �
 Summary
-loading...
+loading... 
 
 �
 Top Central Files
-loading...
+loading... 
 
 �
 Dependency Cycles
-loading...
+loading... 
 
 �
-async function loadText(path, elementId) {{ try {{ const r = await fetch(path); const t = await r.text(); document.getElementById(elementId).textContent = t; }} catch (e) {{ document.getElementById(elementId).textContent = "Errore caricamento: " + e; }} }} loadText("autopsy_summary.json", "summary"); loadText("centrality_ranking.json", "centrality"); loadText("dependency_cycles.json", "cycles");
+async function loadText(path, elementId) {{ try {{ const r = await fetch(path); const t = await r.text(); document.getElementById(elementId).textContent = t; }} catch (e) {{ document.getElementById(elementId).textContent = "Errore caricamento: " + e; }} }} loadText("autopsy_summary.json", "summary"); loadText("centrality_ranking.json", "centrality"); loadText("dependency_cycles.json", "cycles"); 
 �
 """ (OUT_DIR / "repo_autopsy.html").write_text(html, encoding="utf-8") print("✅ HTML interattivo generato: autopsy/repo_autopsy.html") return 0
 if name == "main": raise SystemExit(main())
@@ -563,4 +562,3 @@ for _ in range(200):
 assert len(parsed) == 200
 assert all(r["market_id"] == "1.123" for r in parsed)
 REPLACE_FILE requirements-dev.txt pytest>=7.4.0 pytest-cov>=4.1.0 pytest-asyncio>=0.21.1 pytest-mock>=3.11.1 coverage[toml]>=7.3.0 networkx>=3.2 pydot>=2.0.0 mutmut>=3.0.1
-

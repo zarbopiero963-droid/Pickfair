@@ -469,3 +469,4 @@ class TelegramModule:
                     values=(date_str, sel, action, price, stake, status),
                     tags=(tag,) if tag else (),
                 )
+
