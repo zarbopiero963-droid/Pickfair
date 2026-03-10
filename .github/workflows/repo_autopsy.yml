@@ -1,149 +1,163 @@
+name: Repo Autopsy
 
-on: workflow_dispatch: push: branches: - main - master - develop paths: - "**/*.py" - ".github/workflows/repo_autopsy.yml"
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - "**/*.py"
+      - ".github/workflows/repo_autopsy.yml"
 
-jobs: autopsy: runs-on: ubuntu-latest env: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+jobs:
+  autopsy:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-  - name: Install deps
-    run: |
-      python -m pip install --upgrade pip
-      pip install networkx pydot pyvis
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install networkx pydot pyvis
 
-  - name: Build repo autopsy
-    run: |
-      mkdir -p artifacts
-      python - <<'PY'
-      import ast
-      import json
-      import os
-      from collections import Counter, defaultdict
+      - name: Build repo autopsy
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import ast
+          import json
+          import os
+          from collections import Counter, defaultdict
 
-      py_files = []
-      for base, _, files in os.walk("."):
-          if any(x in base for x in [".git", ".venv", "venv", "__pycache__", "artifacts"]):
-              continue
-          for name in files:
-              if name.endswith(".py"):
-                  py_files.append(os.path.join(base, name).replace("\\", "/"))
+          py_files = []
+          for base, _, files in os.walk("."):
+              if any(x in base for x in [".git", ".venv", "venv", "__pycache__", "artifacts"]):
+                  continue
+              for name in files:
+                  if name.endswith(".py"):
+                      py_files.append(os.path.join(base, name).replace("\\", "/"))
 
-      imports_map = defaultdict(list)
-      calls_map = defaultdict(list)
-      class_map = defaultdict(list)
-      func_map = defaultdict(list)
-      dependency_edges = []
-      centrality = Counter()
+          imports_map = defaultdict(list)
+          calls_map = defaultdict(list)
+          class_map = defaultdict(list)
+          func_map = defaultdict(list)
+          dependency_edges = []
+          centrality = Counter()
 
-      for path in sorted(py_files):
-          try:
-              with open(path, "r", encoding="utf-8") as f:
-                  source = f.read()
-              tree = ast.parse(source, filename=path)
-          except Exception as e:
-              imports_map[path].append(f"PARSE_ERROR: {e}")
-              continue
+          for path in sorted(py_files):
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      source = f.read()
+                  tree = ast.parse(source, filename=path)
+              except Exception as e:
+                  imports_map[path].append(f"PARSE_ERROR: {e}")
+                  continue
 
-          for node in ast.walk(tree):
-              if isinstance(node, ast.Import):
-                  for alias in node.names:
-                      imports_map[path].append(alias.name)
-                      dependency_edges.append((path, alias.name))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          imports_map[path].append(alias.name)
+                          dependency_edges.append((path, alias.name))
+                          centrality[path] += 1
+                          centrality[alias.name] += 1
+                  elif isinstance(node, ast.ImportFrom):
+                      mod = node.module or ""
+                      imports_map[path].append(mod)
+                      dependency_edges.append((path, mod))
                       centrality[path] += 1
-                      centrality[alias.name] += 1
-              elif isinstance(node, ast.ImportFrom):
-                  mod = node.module or ""
-                  imports_map[path].append(mod)
-                  dependency_edges.append((path, mod))
-                  centrality[path] += 1
-                  centrality[mod] += 1
-              elif isinstance(node, ast.ClassDef):
-                  class_map[path].append(node.name)
-              elif isinstance(node, ast.FunctionDef):
-                  func_map[path].append(node.name)
-              elif isinstance(node, ast.AsyncFunctionDef):
-                  func_map[path].append(node.name)
-              elif isinstance(node, ast.Call):
-                  call_name = None
-                  if isinstance(node.func, ast.Name):
-                      call_name = node.func.id
-                  elif isinstance(node.func, ast.Attribute):
-                      call_name = node.func.attr
-                  if call_name:
-                      calls_map[path].append(call_name)
+                      centrality[mod] += 1
+                  elif isinstance(node, ast.ClassDef):
+                      class_map[path].append(node.name)
+                  elif isinstance(node, ast.FunctionDef):
+                      func_map[path].append(node.name)
+                  elif isinstance(node, ast.AsyncFunctionDef):
+                      func_map[path].append(node.name)
+                  elif isinstance(node, ast.Call):
+                      call_name = None
+                      if isinstance(node.func, ast.Name):
+                          call_name = node.func.id
+                      elif isinstance(node.func, ast.Attribute):
+                          call_name = node.func.attr
+                      if call_name:
+                          calls_map[path].append(call_name)
 
-      ranking = [{"node": node, "score": score} for node, score in centrality.most_common()]
+          ranking = [{"node": node, "score": score} for node, score in centrality.most_common()]
 
-      summary = {
-          "python_files": sorted(py_files),
-          "imports_map": dict(sorted(imports_map.items())),
-          "calls_map": dict(sorted(calls_map.items())),
-          "class_map": dict(sorted(class_map.items())),
-          "func_map": dict(sorted(func_map.items())),
-          "dependency_edges": dependency_edges,
-          "centrality_ranking": ranking,
-          "cycles": [],
-      }
+          summary = {
+              "python_files": sorted(py_files),
+              "imports_map": dict(sorted(imports_map.items())),
+              "calls_map": dict(sorted(calls_map.items())),
+              "class_map": dict(sorted(class_map.items())),
+              "func_map": dict(sorted(func_map.items())),
+              "dependency_edges": dependency_edges,
+              "centrality_ranking": ranking,
+              "cycles": [],
+          }
 
-      with open("artifacts/autopsy_summary.json", "w", encoding="utf-8") as f:
-          json.dump(summary, f, indent=2, ensure_ascii=False)
+          with open("artifacts/autopsy_summary.json", "w", encoding="utf-8") as f:
+              json.dump(summary, f, indent=2, ensure_ascii=False)
 
-      with open("artifacts/dependency_edges.csv", "w", encoding="utf-8") as f:
-          f.write("source,target\n")
-          for src, dst in dependency_edges:
-              f.write(f"\"{src}\",\"{str(dst)}\"\n")
+          with open("artifacts/dependency_edges.csv", "w", encoding="utf-8") as f:
+              f.write("source,target\n")
+              for src, dst in dependency_edges:
+                  f.write(f"\"{src}\",\"{str(dst)}\"\n")
 
-      with open("artifacts/centrality_ranking.txt", "w", encoding="utf-8") as f:
-          for row in ranking:
-              f.write(f"{row['score']:>5}  {row['node']}\n")
+          with open("artifacts/centrality_ranking.txt", "w", encoding="utf-8") as f:
+              for row in ranking:
+                  f.write(f"{row['score']:>5}  {row['node']}\n")
 
-      with open("artifacts/repo_graph.dot", "w", encoding="utf-8") as f:
-          f.write("digraph repo {\n")
-          for src, dst in dependency_edges:
-              s = src.replace('"', "'")
-              d = str(dst).replace('"', "'")
-              f.write(f"  \"{s}\" -> \"{d}\";\n")
-          f.write("}\n")
+          with open("artifacts/repo_graph.dot", "w", encoding="utf-8") as f:
+              f.write("digraph repo {\n")
+              for src, dst in dependency_edges:
+                  s = src.replace('"', "'")
+                  d = str(dst).replace('"', "'")
+                  f.write(f"  \"{s}\" -> \"{d}\";\n")
+              f.write("}\n")
 
-      html_lines = [
-          "<html><head><meta charset='utf-8'><title>Repo Autopsy</title></head><body>",
-          "<h1>Repo Autopsy</h1>",
-          "<h2>Top central nodes</h2><pre>",
-      ]
-      for row in ranking[:100]:
-          html_lines.append(f"{row['score']:>5}  {row['node']}")
-      html_lines.append("</pre>")
-      html_lines.append("<h2>Python files</h2><pre>")
-      for path in sorted(py_files):
-          html_lines.append(path)
-      html_lines.append("</pre></body></html>")
+          html_lines = [
+              "<html><head><meta charset='utf-8'><title>Repo Autopsy</title></head><body>",
+              "<h1>Repo Autopsy</h1>",
+              "<h2>Top central nodes</h2><pre>",
+          ]
+          for row in ranking[:100]:
+              html_lines.append(f"{row['score']:>5}  {row['node']}")
+          html_lines.append("</pre>")
+          html_lines.append("<h2>Python files</h2><pre>")
+          for path in sorted(py_files):
+              html_lines.append(path)
+          html_lines.append("</pre></body></html>")
 
-      with open("artifacts/repo_graph.html", "w", encoding="utf-8") as f:
-          f.write("\n".join(html_lines))
+          with open("artifacts/repo_graph.html", "w", encoding="utf-8") as f:
+              f.write("\n".join(html_lines))
 
-      print("[OK] artifacts/autopsy_summary.json")
-      print("[OK] artifacts/dependency_edges.csv")
-      print("[OK] artifacts/centrality_ranking.txt")
-      print("[OK] artifacts/repo_graph.dot")
-      print("[OK] artifacts/repo_graph.html")
-      PY
+          print("[OK] artifacts/autopsy_summary.json")
+          print("[OK] artifacts/dependency_edges.csv")
+          print("[OK] artifacts/centrality_ranking.txt")
+          print("[OK] artifacts/repo_graph.dot")
+          print("[OK] artifacts/repo_graph.html")
+          PY
 
-  - name: Show artifacts list
-    run: |
-      echo "==============================="
-      echo "AUTOPSY ARTIFACTS"
-      echo "==============================="
-      ls -la artifacts
+      - name: Show artifacts list
+        run: |
+          echo "==============================="
+          echo "AUTOPSY ARTIFACTS"
+          echo "==============================="
+          ls -la artifacts
 
-  - name: Upload repo autopsy artifacts
-    uses: actions/upload-artifact@v4
-    with:
-      name: repo-autopsy
-      if-no-files-found: error
-      path: artifacts/*
+      - name: Upload repo autopsy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-autopsy
+          if-no-files-found: error
+          path: artifacts/*
