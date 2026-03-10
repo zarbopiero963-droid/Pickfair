@@ -1,0 +1,20 @@
+[run]
+branch = True
+source = .
+omit =
+    tests/*
+    venv/*
+    .venv/*
+    .github/*
+    setup.py
+    build.py
+
+[report]
+skip_empty = True
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError
+    except ImportError
+    def __repr__
