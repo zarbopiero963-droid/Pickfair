@@ -57,7 +57,8 @@ class TelegramModule:
                 on_signal=lambda sig: self.bus.publish("TELEGRAM_SIGNAL", sig),
                 on_message=None,
                 on_status=lambda st, msg: self.bus.publish(
-                    "TELEGRAM_STATUS", {"status": st, "message": msg}
+                    "TELEGRAM_STATUS",
+                    {"status": st, "message": msg},
                 ),
             )
 
@@ -92,16 +93,20 @@ class TelegramModule:
             messagebox.showinfo("Info", "Telegram Listener fermato")
 
     def _handle_telegram_signal(self, signal):
-        """Riceve il segnale dal listener e lo processa in modo sicuro nel main thread."""
-
+        """
+        Riceve il segnale dal listener e lo processa nel main thread.
+        Forced execution attiva di default:
+        - BACK -> 1.01
+        - LAY  -> 1000.0
+        """
         def safe_process_signal():
-            action = str(signal.get("action", "BACK")).upper()
+            action = str(signal.get("action", "BACK")).upper().strip()
             selection_id = signal.get("selection_id")
             market_id = signal.get("market_id")
             selection_name = signal.get("selection", str(selection_id))
 
             try:
-                price = float(signal.get("price", 2.0))
+                original_price = float(signal.get("price", 2.0))
             except Exception:
                 logger.error("[TelegramModule] Segnale ignorato: price non valido.")
                 if hasattr(self.db, "save_received_signal"):
@@ -124,7 +129,7 @@ class TelegramModule:
                 self.db.save_received_signal(
                     selection=selection_name,
                     action=action,
-                    price=price,
+                    price=original_price,
                     stake=stake,
                     status="RECEIVED",
                 )
@@ -147,15 +152,15 @@ class TelegramModule:
                         f"Segnale ricevuto:\n"
                         f"{selection_name}\n"
                         f"Tipo: {action}\n"
-                        f"Quota: {price}\n\n"
-                        f"Piazzare la scommessa?"
+                        f"Quota Master: {original_price:.2f}\n\n"
+                        f"Piazzare a MERCATO (miglior prezzo disponibile)?"
                     )
                     if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
                         if hasattr(self.db, "save_received_signal"):
                             self.db.save_received_signal(
                                 selection=selection_name,
                                 action=action,
-                                price=price,
+                                price=original_price,
                                 stake=stake,
                                 status="IGNORED",
                             )
@@ -166,7 +171,7 @@ class TelegramModule:
                         self.db.save_received_signal(
                             selection=selection_name,
                             action=action,
-                            price=price,
+                            price=original_price,
                             stake=stake,
                             status="IGNORED",
                         )
@@ -181,12 +186,15 @@ class TelegramModule:
                     self.db.save_received_signal(
                         selection=selection_name,
                         action=action,
-                        price=price,
+                        price=original_price,
                         stake=stake,
                         status="ERROR",
                     )
                 self._refresh_telegram_signals_tree()
                 return
+
+            # Forced execution: market-style order
+            forced_price = 1.01 if action == "BACK" else 1000.0
 
             try:
                 payload = {
@@ -197,10 +205,12 @@ class TelegramModule:
                     "selection_id": int(selection_id),
                     "runner_name": selection_name,
                     "bet_type": action,
-                    "price": price,
+                    "price": forced_price,
                     "stake": stake,
                     "simulation_mode": getattr(self, "simulation_mode", False),
                     "source": "TELEGRAM",
+                    "master_price": original_price,
+                    "forced_execution": True,
                 }
             except Exception as e:
                 logger.error(
@@ -211,7 +221,7 @@ class TelegramModule:
                     self.db.save_received_signal(
                         selection=selection_name,
                         action=action,
-                        price=price,
+                        price=original_price,
                         stake=stake,
                         status="ERROR",
                     )
@@ -219,7 +229,7 @@ class TelegramModule:
                 return
 
             logger.info(
-                "[TelegramModule] Inoltro segnale all'OMS via RiskGate: %s",
+                "[TelegramModule] Inoltro segnale all'OMS via RiskGate (MARKET ORDER): %s",
                 payload,
             )
             self.bus.publish("REQ_QUICK_BET", payload)
@@ -228,7 +238,7 @@ class TelegramModule:
                 self.db.save_received_signal(
                     selection=selection_name,
                     action=action,
-                    price=price,
+                    price=original_price,
                     stake=stake,
                     status="SUBMITTED",
                 )
