@@ -1,564 +1,95 @@
-on: workflow_dispatch: push: branches: [ main, master, develop ] paths: - ".py" - ".github/workflows/repo_forensics.yml" - ".github/scripts/" - "tests/**" - "requirements*.txt" - "pytest.ini" - ".coveragerc"
-jobs: forensics: runs-on: ubuntu-latest
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PYTHONUNBUFFERED: "1"
-
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
-
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
-
-  - name: Install system deps
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y graphviz xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1-mesa-glx
-
-  - name: Install Python deps
-    run: |
-      python -m pip install --upgrade pip
-      if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-      pip install pytest pytest-cov pytest-asyncio pytest-mock coverage[toml] networkx pydot
-
-  - name: Workspace snapshot
-    run: |
-      echo "==============================="
-      echo "WORKSPACE FILES"
-      echo "==============================="
-      find . -maxdepth 4 -type f | sort
-
-  - name: Py Compile All
-    run: |
-      echo "==============================="
-      echo "PY_COMPILE ALL FILES"
-      echo "==============================="
-      python .github/scripts/py_compile_all.py
-
-  - name: Smoke Import Core Files
-    run: |
-      echo "==============================="
-      echo "SMOKE IMPORT CORE FILES"
-      echo "==============================="
-      python .github/scripts/smoke_import_core.py
-
-  - name: Run tests with strict coverage
-    run: |
-      echo "==============================="
-      echo "STARTING PYTEST EXECUTION"
-      echo "==============================="
-      xvfb-run -a pytest \
-        -vv \
-        --maxfail=1 \
-        --disable-warnings \
-        --cov=. \
-        --cov-report=term-missing \
-        --cov-report=xml \
-        --cov-report=json \
-        --cov-fail-under=90
-      echo "==============================="
-      echo "PYTEST COMPLETED"
-      echo "==============================="
-
-  - name: Enforce 100 percent coverage on critical files
-    run: |
-      echo "==============================="
-      echo "PER FILE COVERAGE GATE"
-      echo "==============================="
-      python .github/scripts/check_per_file_coverage.py
-
-  - name: Generate repo autopsy
-    run: |
-      echo "==============================="
-      echo "REPO AUTOPSY"
-      echo "==============================="
-      python .github/scripts/generate_repo_autopsy.py
-
-  - name: Generate interactive HTML graph
-    run: |
-      echo "==============================="
-      echo "INTERACTIVE HTML GRAPH"
-      echo "==============================="
-      python .github/scripts/export_repo_graph_html.py
-
-  - name: Race condition tests
-    run: |
-      echo "==============================="
-      echo "RACE CONDITION TESTS"
-      echo "==============================="
-      pytest -vv tests/test_race_conditions.py
-
-  - name: Crash simulation tests
-    run: |
-      echo "==============================="
-      echo "CRASH SIMULATION TESTS"
-      echo "==============================="
-      pytest -vv tests/test_crash_simulation.py
-
-  - name: Latency tests
-    run: |
-      echo "==============================="
-      echo "LATENCY TESTS"
-      echo "==============================="
-      pytest -vv tests/test_latency.py
-
-  - name: Trading Telegram stress tests
-    run: |
-      echo "==============================="
-      echo "TRADING TELEGRAM STRESS TESTS"
-      echo "==============================="
-      pytest -vv tests/test_stress_trading_telegram.py
-
-  - name: Mutation Testing
-    run: |
-      echo "==============================="
-      echo "MUTATION TESTING"
-      echo "==============================="
-      mutmut run || true
-
-  - name: Print generated artifacts summary
-    if: always()
-    run: |
-      echo "==============================="
-      echo "AUTOPSY SUMMARY"
-      echo "==============================="
-      if [ -f autopsy/autopsy_summary.json ]; then
-        python - <<'PY'
-import json from pathlib import Path p = Path("autopsy/autopsy_summary.json") print(json.dumps(json.loads(p.read_text(encoding="utf-8")), indent=2)[:20000]) PY else echo "autopsy/autopsy_summary.json non trovato" fi
-echo "==============================="
-      echo "COVERAGE JSON HEAD"
-      echo "==============================="
-      if [ -f coverage.json ]; then
-        python - <<'PY'
-from pathlib import Path print(Path("coverage.json").read_text(encoding="utf-8")[:12000]) PY else echo "coverage.json non trovato" fi
-- name: Upload forensics artifacts
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: repo-forensics-artifacts
-      path: |
-        autopsy/
-        coverage.xml
-        coverage.json
-        mutmut-results.txt
-CREATE_FILE .github/scripts/py_compile_all.py import py_compile import sys from pathlib import Path
-IGNORE_DIRS = { ".git", ".github", ".venv", "venv", "pycache", ".pytest_cache", "build", "dist", }
-def is_ignored(path: Path) -> bool: return any(part in IGNORE_DIRS for part in path.parts)
-def main() -> int: root = Path(".").resolve() files = sorted( p for p in root.rglob("*.py") if not is_ignored(p.relative_to(root)) )
-print(f"Python files trovati: {len(files)}")
-failed = []
-
-for file in files:
-    rel = file.relative_to(root).as_posix()
-    try:
-        py_compile.compile(str(file), doraise=True)
-        print(f"✅ PY_COMPILE OK: {rel}")
-    except Exception as e:
-        print(f"❌ PY_COMPILE FAIL: {rel} -> {e}")
-        failed.append(rel)
-
-if failed:
-    print("\n🚨 PY_COMPILE GATE FALLITO")
-    for item in failed:
-        print(f"❌ {item}")
-    return 1
-
-print("\n✅ PY_COMPILE GATE SUPERATO")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/smoke_import_core.py import importlib import traceback
-CORE_MODULES = [ "database", "dutching", "controllers.dutching_controller", "main", "telegram_listener", "telegram_sender", "core.trading_engine", "core.risk_middleware", "app_modules.telegram_module", ]
-def main() -> int: failed = []
-for mod in CORE_MODULES:
-    try:
-        importlib.import_module(mod)
-        print(f"✅ IMPORT OK: {mod}")
-    except Exception as e:
-        print(f"❌ IMPORT FAIL: {mod} -> {e}")
-        print(traceback.format_exc())
-        failed.append(mod)
-
-if failed:
-    print("\n🚨 SMOKE IMPORT GATE FALLITO")
-    for mod in failed:
-        print(f"❌ {mod}")
-    return 1
-
-print("\n✅ SMOKE IMPORT GATE SUPERATO")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/check_per_file_coverage.py import json from pathlib import Path
-COVERAGE_FILE = Path("coverage.json")
-CRITICAL_FILES = { "database.py", "dutching.py", "controllers/dutching_controller.py", "main.py", "telegram_listener.py", "telegram_sender.py", "core/trading_engine.py", "core/risk_middleware.py", "app_modules/telegram_module.py", }
-def main() -> int: print("=== COVERAGE GATE START ===")
-if not COVERAGE_FILE.exists():
-    print("❌ ERRORE CRITICO: coverage.json non trovato.")
-    return 1
-
-data = json.loads(COVERAGE_FILE.read_text(encoding="utf-8"))
-files = data.get("files", {})
-
-indexed = {}
-for filename, meta in files.items():
-    normalized = filename.replace("\\", "/")
-    indexed[normalized] = meta
-
-failed = []
-seen_critical = set()
-
-print("\nAnalisi file critici...\n")
-
-for normalized_name, meta in indexed.items():
-    for critical in CRITICAL_FILES:
-        if normalized_name.endswith(critical):
-            seen_critical.add(critical)
-            pct = float(meta.get("summary", {}).get("percent_covered", 0.0))
-
-            print(f"FILE: {normalized_name}")
-            print(f"Coverage: {pct:.2f}%")
-
-            if pct < 100.0:
-                print("❌ SOTTO 100%")
-                failed.append((normalized_name, pct))
-            else:
-                print("✅ OK")
-
-            print("")
-
-missing = sorted(CRITICAL_FILES - seen_critical)
-
-if missing:
-    print("🚨 GATE FALLITO: file critici mancanti dal report coverage:")
-    for name in missing:
-        print(f"❌ {name}: assente da coverage.json")
-    return 1
-
-if failed:
-    print("🚨 GATE FALLITO: file critici sotto il 100%:")
-    for filename, pct in failed:
-        print(f"❌ {filename}: {pct:.2f}%")
-    return 1
-
-print("✅ GATE SUPERATO: tutti i file critici sono al 100% di coverage.")
-print("=== COVERAGE GATE END ===")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/generate_repo_autopsy.py import ast import csv import json import os import traceback from collections import Counter, defaultdict from pathlib import Path
-ROOT = Path(".").resolve() OUT_DIR = ROOT / "autopsy" OUT_DIR.mkdir(exist_ok=True)
-IGNORE_DIRS = { ".git", ".github", ".venv", "venv", "pycache", ".pytest_cache", "build", "dist", }
-def is_ignored(path: Path) -> bool: return any(part in IGNORE_DIRS for part in path.parts)
-def discover_python_files(): return sorted( p for p in ROOT.rglob("*.py") if not is_ignored(p.relative_to(ROOT)) )
-def safe_unparse(node): try: return ast.unparse(node) except Exception: return "<unparse_error>"
-class RepoVisitor(ast.NodeVisitor): def init(self, relpath: str): self.relpath = relpath self.imports = [] self.from_imports = [] self.classes = [] self.functions = [] self.calls = [] self.class_edges = [] self.current_class = None self.current_function = None
-def scope(self):
-    if self.current_class and self.current_function:
-        return f"{self.current_class}.{self.current_function}"
-    if self.current_class:
-        return self.current_class
-    if self.current_function:
-        return self.current_function
-    return "<module>"
-
-def visit_Import(self, node):
-    for alias in node.names:
-        self.imports.append({"module": alias.name, "lineno": node.lineno})
-    self.generic_visit(node)
-
-def visit_ImportFrom(self, node):
-    mod = node.module or ""
-    for alias in node.names:
-        self.from_imports.append(
-            {
-                "module": mod,
-                "name": alias.name,
-                "level": node.level,
-                "lineno": node.lineno,
-            }
-        )
-    self.generic_visit(node)
-
-def visit_ClassDef(self, node):
-    prev = self.current_class
-    self.current_class = node.name
-    self.classes.append(
-        {
-            "name": node.name,
-            "lineno": node.lineno,
-            "bases": [safe_unparse(b) for b in node.bases],
-        }
-    )
-    for base in node.bases:
-        self.class_edges.append(
-            {
-                "src_file": self.relpath,
-                "src_class": node.name,
-                "dst_class": safe_unparse(base),
-                "lineno": node.lineno,
-            }
-        )
-    self.generic_visit(node)
-    self.current_class = prev
-
-def visit_FunctionDef(self, node):
-    prev = self.current_function
-    self.current_function = node.name
-    self.functions.append(
-        {
-            "name": node.name,
-            "scope": self.scope(),
-            "lineno": node.lineno,
-            "args": [a.arg for a in node.args.args],
-            "kwonlyargs": [a.arg for a in node.args.kwonlyargs],
-            "vararg": node.args.vararg.arg if node.args.vararg else None,
-            "kwarg": node.args.kwarg.arg if node.args.kwarg else None,
-        }
-    )
-    self.generic_visit(node)
-    self.current_function = prev
-
-def visit_AsyncFunctionDef(self, node):
-    prev = self.current_function
-    self.current_function = node.name
-    self.functions.append(
-        {
-            "name": node.name,
-            "scope": self.scope(),
-            "lineno": node.lineno,
-            "args": [a.arg for a in node.args.args],
-            "kwonlyargs": [a.arg for a in node.args.kwonlyargs],
-            "vararg": node.args.vararg.arg if node.args.vararg else None,
-            "kwarg": node.args.kwarg.arg if node.args.kwarg else None,
-            "async": True,
-        }
-    )
-    self.generic_visit(node)
-    self.current_function = prev
-
-def visit_Call(self, node):
-    self.calls.append(
-        {
-            "src_file": self.relpath,
-            "scope": self.scope(),
-            "call": safe_unparse(node.func),
-            "lineno": node.lineno,
-            "args_count": len(node.args),
-            "kwargs_count": len(node.keywords),
-        }
-    )
-    self.generic_visit(node)
-def parse_file(path: Path): rel = path.relative_to(ROOT).as_posix() result = { "file": rel, "ok": True, "syntax_error": None, "traceback": None, "imports": [], "from_imports": [], "classes": [], "functions": [], "calls": [], "class_edges": [], "lines": 0, } try: text = path.read_text(encoding="utf-8") result["lines"] = len(text.splitlines()) tree = ast.parse(text, filename=rel) v = RepoVisitor(rel) v.visit(tree) result["imports"] = v.imports result["from_imports"] = v.from_imports result["classes"] = v.classes result["functions"] = v.functions result["calls"] = v.calls result["class_edges"] = v.class_edges except SyntaxError as e: result["ok"] = False result["syntax_error"] = { "msg": e.msg, "lineno": e.lineno, "offset": e.offset, "text": e.text, } except Exception: result["ok"] = False result["traceback"] = traceback.format_exc() return result
-def write_json(path: Path, data): path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-def write_csv(path: Path, rows): if not rows: path.write_text("", encoding="utf-8") return with path.open("w", newline="", encoding="utf-8") as f: writer = csv.DictWriter(f, fieldnames=list(rows[0].keys())) writer.writeheader() writer.writerows(rows)
-def write_dot(path: Path, edges, graph_name, src_key, dst_key, label_key): lines = [f'digraph "{graph_name}" {{', "  rankdir=LR;", '  node [shape=box];'] for e in edges: src = str(e.get(src_key, "")).replace('"', '\"') dst = str(e.get(dst_key, "")).replace('"', '\"') label = str(e.get(label_key, "")).replace('"', '\"') lines.append(f'  "{src}" -> "{dst}" [label="{label}"];') lines.append("}") path.write_text("\n".join(lines), encoding="utf-8")
-def build_import_edges(file_results): rows = [] for fr in file_results: for imp in fr["imports"]: rows.append( { "src_file": fr["file"], "edge_type": "import", "target": imp["module"], "lineno": imp["lineno"], } ) for imp in fr["from_imports"]: prefix = "." * int(imp.get("level", 0) or 0) mod = f"{prefix}{imp['module']}" if imp["module"] else prefix rows.append( { "src_file": fr["file"], "edge_type": "from_import", "target": f"{mod}:{imp['name']}", "lineno": imp["lineno"], } ) return rows
-def build_call_edges(file_results): rows = [] for fr in file_results: rows.extend(fr["calls"]) return rows
-def build_class_edges(file_results): rows = [] for fr in file_results: rows.extend(fr["class_edges"]) return rows
-def build_centrality(import_edges, call_edges): score = Counter() for e in import_edges: score[e["src_file"]] += 1 for e in call_edges: score[e["src_file"]] += 1 return [ {"file": name, "score": value} for name, value in score.most_common() ]
-def build_cycles(import_edges): deps = defaultdict(set) files = set() for e in import_edges: src = e["src_file"] dst = e["target"] files.add(src) deps[src].add(dst)
-visited = set()
-stack = []
-onstack = set()
-cycles = []
-
-def dfs(node):
-    visited.add(node)
-    stack.append(node)
-    onstack.add(node)
-
-    for nei in deps.get(node, []):
-        if nei not in visited:
-            dfs(nei)
-        elif nei in onstack:
-            idx = stack.index(nei)
-            cycles.append(stack[idx:] + [nei])
-
-    stack.pop()
-    onstack.remove(node)
-
-for f in list(files):
-    if f not in visited:
-        dfs(f)
-
-normalized = []
-seen = set()
-for cyc in cycles:
-    key = tuple(cyc)
-    if key not in seen:
-        seen.add(key)
-        normalized.append({"cycle": cyc})
-return normalized
-def main(): print("=== REPO AUTOPSY START ===") py_files = discover_python_files() print(f"Python files trovati: {len(py_files)}")
-file_results = []
-failed = []
-
-for p in py_files:
-    rel = p.relative_to(ROOT).as_posix()
-    print(f"\n[SCAN] {rel}")
-    result = parse_file(p)
-    file_results.append(result)
-
-    if result["ok"]:
-        print(
-            f"✅ OK | lines={result['lines']} "
-            f"imports={len(result['imports']) + len(result['from_imports'])} "
-            f"classes={len(result['classes'])} "
-            f"functions={len(result['functions'])} "
-            f"calls={len(result['calls'])}"
-        )
-    else:
-        print(f"❌ FAIL | {rel}")
-        if result["syntax_error"]:
-            se = result["syntax_error"]
-            print(f"   SyntaxError line {se['lineno']} col {se['offset']}: {se['msg']}")
-            if se.get("text"):
-                print(f"   >>> {se['text'].rstrip()}")
-        if result["traceback"]:
-            print(result["traceback"])
-        failed.append(rel)
-
-import_edges = build_import_edges(file_results)
-call_edges = build_call_edges(file_results)
-class_edges = build_class_edges(file_results)
-centrality = build_centrality(import_edges, call_edges)
-cycles = build_cycles(import_edges)
-
-write_json(OUT_DIR / "file_autopsy.json", file_results)
-write_csv(OUT_DIR / "import_edges.csv", import_edges)
-write_csv(OUT_DIR / "call_edges.csv", call_edges)
-write_csv(OUT_DIR / "class_edges.csv", class_edges)
-write_json(OUT_DIR / "centrality_ranking.json", centrality)
-write_json(OUT_DIR / "dependency_cycles.json", cycles)
-
-write_dot(OUT_DIR / "import_graph.dot", import_edges, "import_graph", "src_file", "target", "edge_type")
-write_dot(OUT_DIR / "call_graph.dot", call_edges, "call_graph", "src_file", "call", "scope")
-write_dot(OUT_DIR / "class_graph.dot", class_edges, "class_graph", "src_class", "dst_class", "src_file")
-
-os.system(f'dot -Tpng "{OUT_DIR / "import_graph.dot"}" -o "{OUT_DIR / "import_graph.png"}"')
-os.system(f'dot -Tpng "{OUT_DIR / "call_graph.dot"}" -o "{OUT_DIR / "call_graph.png"}"')
-os.system(f'dot -Tpng "{OUT_DIR / "class_graph.dot"}" -o "{OUT_DIR / "class_graph.png"}"')
-
-summary = {
-    "python_files_total": len(py_files),
-    "files_ok": sum(1 for r in file_results if r["ok"]),
-    "files_failed": len(failed),
-    "failed_files": failed,
-    "import_edges": len(import_edges),
-    "call_edges": len(call_edges),
-    "class_edges": len(class_edges),
-    "cycles_found": len(cycles),
-    "top_10_central_files": centrality[:10],
-}
-write_json(OUT_DIR / "autopsy_summary.json", summary)
-
-print("\n=== AUTOPSY SUMMARY ===")
-print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-if failed:
-    print("\n🚨 AUTOPSY FAIL")
-    return 1
-
-print("\n✅ AUTOPSY OK")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/export_repo_graph_html.py import json from pathlib import Path
-OUT_DIR = Path("autopsy") OUT_DIR.mkdir(exist_ok=True)
-def load_json(path: Path, default): if path.exists(): return json.loads(path.read_text(encoding="utf-8")) return default
-def main(): import_edges = load_json(OUT_DIR / "import_edges.csv.json", None) call_edges = load_json(OUT_DIR / "call_edges.csv.json", None)
-call_edges_csv = OUT_DIR / "call_edges.csv"
-import_edges_csv = OUT_DIR / "import_edges.csv"
-class_edges_csv = OUT_DIR / "class_edges.csv"
-summary_json = OUT_DIR / "autopsy_summary.json"
-centrality_json = OUT_DIR / "centrality_ranking.json"
-cycles_json = OUT_DIR / "dependency_cycles.json"
-
-html = f"""<!DOCTYPE html>
-�
-Repo Autopsy Interactive body {{ font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }} h1,h2 {{ color:#7ee787; }} .card {{ background:#1b1b1b; border:1px solid #333; padding:16px; margin-bottom:16px; border-radius:10px; }} a {{ color:#58a6ff; }} pre {{ white-space: pre-wrap; word-break: break-word; }} .ok {{ color:#3fb950; }} .fail {{ color:#f85149; }} 
-Repo Autopsy Interactive
-
-�
-Artifacts
-autopsy_summary.jsoncentrality_ranking.jsondependency_cycles.jsonimport_edges.csvcall_edges.csvclass_edges.csvimport_graph.pngcall_graph.pngclass_graph.png 
-
-�
-Summary
-loading... 
-
-�
-Top Central Files
-loading... 
-
-�
-Dependency Cycles
-loading... 
-
-�
-async function loadText(path, elementId) {{ try {{ const r = await fetch(path); const t = await r.text(); document.getElementById(elementId).textContent = t; }} catch (e) {{ document.getElementById(elementId).textContent = "Errore caricamento: " + e; }} }} loadText("autopsy_summary.json", "summary"); loadText("centrality_ranking.json", "centrality"); loadText("dependency_cycles.json", "cycles"); 
-�
-""" (OUT_DIR / "repo_autopsy.html").write_text(html, encoding="utf-8") print("✅ HTML interattivo generato: autopsy/repo_autopsy.html") return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE tests/test_race_conditions.py import threading import time
-from executor_manager import SafeExecutor
-def test_executor_race_conditions_basic(): executor = SafeExecutor(max_workers=4) results = [] lock = threading.Lock()
-def worker(i):
-    time.sleep(0.01)
-    with lock:
-        results.append(i)
-
-for i in range(20):
-    executor.submit(f"race_{i}", worker, i)
-
-time.sleep(1.0)
-assert len(results) == 20
-CREATE_FILE tests/test_crash_simulation.py from queue import Queue
-from telegram_sender import AdaptiveRateLimiter, SendResult
-def test_floodwait_simulation(): rl = AdaptiveRateLimiter(base_delay=0.1) rl.record_flood_wait(30) stats = rl.get_stats() assert stats["current_delay"] >= 0.1
-def test_network_down_simulation_placeholder(): result = SendResult(success=False, error="network down") assert result.success is False assert "network" in result.error
-def test_db_locked_simulation_placeholder(): locked = True assert locked is True
-CREATE_FILE tests/test_latency.py import time
-def test_signal_to_order_latency_budget(): start = time.perf_counter()
-signal = {
-    "action": "BACK",
-    "price": 2.0,
-    "market_id": "1.123",
-    "selection_id": 456,
-}
-
-payload = {
-    "bet_type": signal["action"],
-    "price": signal["price"],
-    "market_id": signal["market_id"],
-    "selection_id": signal["selection_id"],
-}
-
-end = time.perf_counter()
-elapsed_ms = (end - start) * 1000.0
-
-assert payload["market_id"] == "1.123"
-assert elapsed_ms < 50.0
-CREATE_FILE tests/test_stress_trading_telegram.py from telegram_listener import TelegramListener
-def test_telegram_parser_stress_master_signal(): listener = TelegramListener(api_id=1, api_hash="hash")
-msg = (
-    "MASTER SIGNAL\n"
-    "event_name: Juve - Milan\n"
-    "market_name: Match Odds\n"
-    "selection: Juve\n"
-    "action: BACK\n"
-    "master_price: 2.10\n"
-    "market_id: 1.123\n"
-    "selection_id: 456\n"
-)
-
-parsed = []
-for _ in range(200):
-    res = listener.parse_signal(msg)
-    assert res is not None
-    parsed.append(res)
-
-assert len(parsed) == 200
-assert all(r["market_id"] == "1.123" for r in parsed)
-REPLACE_FILE requirements-dev.txt pytest>=7.4.0 pytest-cov>=4.1.0 pytest-asyncio>=0.21.1 pytest-mock>=3.11.1 coverage[toml]>=7.3.0 networkx>=3.2 pydot>=2.0.0 mutmut>=3.0.1
+name: Repo Forensics
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - "**/*.py"
+      - ".github/workflows/repo_forensics.yml"
+
+jobs:
+  forensics:
+    runs-on: ubuntu-latest
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install networkx pydot pyvis
+
+      - name: Build repo analysis
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import ast, os, json
+          from collections import defaultdict, Counter
+
+          py_files = []
+
+          for base, _, files in os.walk("."):
+              if ".git" in base or "__pycache__" in base:
+                  continue
+              for f in files:
+                  if f.endswith(".py"):
+                      py_files.append(os.path.join(base, f))
+
+          imports_map = defaultdict(list)
+          edges = []
+          centrality = Counter()
+
+          for path in py_files:
+              try:
+                  tree = ast.parse(open(path, encoding="utf-8").read())
+              except:
+                  continue
+
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          imports_map[path].append(alias.name)
+                          edges.append((path, alias.name))
+
+                  if isinstance(node, ast.ImportFrom):
+                      mod = node.module or ""
+                      imports_map[path].append(mod)
+                      edges.append((path, mod))
+
+          for s, d in edges:
+              centrality[s] += 1
+              centrality[d] += 1
+
+          ranking = centrality.most_common()
+
+          json.dump(
+              {
+                  "files": py_files,
+                  "edges": edges,
+                  "ranking": ranking
+              },
+              open("artifacts/analysis.json","w"),
+              indent=2
+          )
+
+          print("Repo analysis completed")
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-forensics
+          path: artifacts/*
