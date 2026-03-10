@@ -1,566 +1,464 @@
-CREATE_FILE .github/workflows/repo_forensics.yml name: Repo Forensics Ultra Gate
-on: workflow_dispatch: push: branches: [ main, master, develop ] paths: - ".py" - ".github/workflows/repo_forensics.yml" - ".github/scripts/" - "tests/**" - "requirements*.txt" - "pytest.ini" - ".coveragerc"
-jobs: forensics: runs-on: ubuntu-latest
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PYTHONUNBUFFERED: "1"
+CREATE_FILE tests/test_core_trading_engine_real.py import json
 
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+from core.trading_engine import TradingEngine
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+class DummyBus: def init(self): self.subscribers = {} self.events = []
 
-  - name: Install system deps
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y graphviz xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1-mesa-glx
+def subscribe(self, event_name, handler):
+    self.subscribers.setdefault(event_name, []).append(handler)
 
-  - name: Install Python deps
-    run: |
-      python -m pip install --upgrade pip
-      if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-      pip install pytest pytest-cov pytest-asyncio pytest-mock coverage[toml] networkx pydot
+def publish(self, event_name, payload):
+    self.events.append((event_name, payload))
+    for handler in self.subscribers.get(event_name, []):
+        handler(payload)
 
-  - name: Workspace snapshot
-    run: |
-      echo "==============================="
-      echo "WORKSPACE FILES"
-      echo "==============================="
-      find . -maxdepth 4 -type f | sort
+class DummyExecutor: def submit(self, name, fn): return fn()
 
-  - name: Py Compile All
-    run: |
-      echo "==============================="
-      echo "PY_COMPILE ALL FILES"
-      echo "==============================="
-      python .github/scripts/py_compile_all.py
+class DummyDB: def init(self): self.pending_sagas = [] self.saved_bets = [] self.saved_cashouts = [] self.sim_settings = {"virtual_balance": 1000.0} self.sim_saved = [] self.sim_balance_updates = []
 
-  - name: Smoke Import Core Files
-    run: |
-      echo "==============================="
-      echo "SMOKE IMPORT CORE FILES"
-      echo "==============================="
-      python .github/scripts/smoke_import_core.py
+def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
+    self.pending_sagas.append(
+        {
+            "customer_ref": customer_ref,
+            "market_id": market_id,
+            "selection_id": selection_id,
+            "raw_payload": json.dumps(payload),
+            "status": "PENDING",
+        }
+    )
 
-  - name: Run tests with strict coverage
-    run: |
-      echo "==============================="
-      echo "STARTING PYTEST EXECUTION"
-      echo "==============================="
-      xvfb-run -a pytest \
-        -vv \
-        --maxfail=1 \
-        --disable-warnings \
-        --cov=. \
-        --cov-report=term-missing \
-        --cov-report=xml \
-        --cov-report=json \
-        --cov-fail-under=90
-      echo "==============================="
-      echo "PYTEST COMPLETED"
-      echo "==============================="
+def get_pending_sagas(self):
+    return [x for x in self.pending_sagas if x["status"] == "PENDING"]
 
-  - name: Enforce 100 percent coverage on critical files
-    run: |
-      echo "==============================="
-      echo "PER FILE COVERAGE GATE"
-      echo "==============================="
-      python .github/scripts/check_per_file_coverage.py
+def mark_saga_reconciled(self, customer_ref):
+    for saga in self.pending_sagas:
+        if saga["customer_ref"] == customer_ref:
+            saga["status"] = "RECONCILED"
 
-  - name: Generate repo autopsy
-    run: |
-      echo "==============================="
-      echo "REPO AUTOPSY"
-      echo "==============================="
-      python .github/scripts/generate_repo_autopsy.py
+def mark_saga_failed(self, customer_ref):
+    for saga in self.pending_sagas:
+        if saga["customer_ref"] == customer_ref:
+            saga["status"] = "FAILED"
 
-  - name: Generate interactive HTML graph
-    run: |
-      echo "==============================="
-      echo "INTERACTIVE HTML GRAPH"
-      echo "==============================="
-      python .github/scripts/export_repo_graph_html.py
+def save_bet(
+    self,
+    event_name,
+    market_id,
+    market_name,
+    bet_type,
+    selections,
+    total_stake,
+    potential_profit,
+    status,
+):
+    self.saved_bets.append(
+        {
+            "event_name": event_name,
+            "market_id": market_id,
+            "market_name": market_name,
+            "bet_type": bet_type,
+            "selections": selections,
+            "total_stake": total_stake,
+            "potential_profit": potential_profit,
+            "status": status,
+        }
+    )
 
-  - name: Race condition tests
-    run: |
-      echo "==============================="
-      echo "RACE CONDITION TESTS"
-      echo "==============================="
-      pytest -vv tests/test_race_conditions.py
+def save_cashout_transaction(self, **kwargs):
+    self.saved_cashouts.append(kwargs)
 
-  - name: Crash simulation tests
-    run: |
-      echo "==============================="
-      echo "CRASH SIMULATION TESTS"
-      echo "==============================="
-      pytest -vv tests/test_crash_simulation.py
+def get_simulation_settings(self):
+    return dict(self.sim_settings)
 
-  - name: Latency tests
-    run: |
-      echo "==============================="
-      echo "LATENCY TESTS"
-      echo "==============================="
-      pytest -vv tests/test_latency.py
+def save_simulation_bet(self, **kwargs):
+    self.sim_saved.append(kwargs)
 
-  - name: Trading Telegram stress tests
-    run: |
-      echo "==============================="
-      echo "TRADING TELEGRAM STRESS TESTS"
-      echo "==============================="
-      pytest -vv tests/test_stress_trading_telegram.py
+def increment_simulation_bet_count(self, new_balance):
+    self.sim_balance_updates.append(new_balance)
+    self.sim_settings["virtual_balance"] = new_balance
 
-  - name: Mutation Testing
-    run: |
-      echo "==============================="
-      echo "MUTATION TESTING"
-      echo "==============================="
-      mutmut run || true
+class DummyClient: def init(self): self.place_bet_calls = [] self.place_orders_calls = [] self.cancel_orders_calls = [] self.replace_orders_calls = [] self.get_current_orders_calls = [] self.market_book = { "runners": [ { "selectionId": 11, "ex": { "availableToBack": [{"price": 2.2, "size": 50}], "availableToLay": [{"price": 2.24, "size": 40}], }, }, { "selectionId": 22, "ex": { "availableToBack": [{"price": 3.1, "size": 30}], "availableToLay": [{"price": 3.15, "size": 25}], }, }, ] }
 
-  - name: Print generated artifacts summary
-    if: always()
-    run: |
-      echo "==============================="
-      echo "AUTOPSY SUMMARY"
-      echo "==============================="
-      if [ -f autopsy/autopsy_summary.json ]; then
-        python - <<'PY'
-import json from pathlib import Path p = Path("autopsy/autopsy_summary.json") print(json.dumps(json.loads(p.read_text(encoding="utf-8")), indent=2)[:20000]) PY else echo "autopsy/autopsy_summary.json non trovato" fi
-echo "==============================="
-      echo "COVERAGE JSON HEAD"
-      echo "==============================="
-      if [ -f coverage.json ]; then
-        python - <<'PY'
-from pathlib import Path print(Path("coverage.json").read_text(encoding="utf-8")[:12000]) PY else echo "coverage.json non trovato" fi
-- name: Upload forensics artifacts
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: repo-forensics-artifacts
-      path: |
-        autopsy/
-        coverage.xml
-        coverage.json
-        mutmut-results.txt
-CREATE_FILE .github/scripts/py_compile_all.py import py_compile import sys from pathlib import Path
-IGNORE_DIRS = { ".git", ".github", ".venv", "venv", "pycache", ".pytest_cache", "build", "dist", }
-def is_ignored(path: Path) -> bool: return any(part in IGNORE_DIRS for part in path.parts)
-def main() -> int: root = Path(".").resolve() files = sorted( p for p in root.rglob("*.py") if not is_ignored(p.relative_to(root)) )
-print(f"Python files trovati: {len(files)}")
-failed = []
-
-for file in files:
-    rel = file.relative_to(root).as_posix()
-    try:
-        py_compile.compile(str(file), doraise=True)
-        print(f"✅ PY_COMPILE OK: {rel}")
-    except Exception as e:
-        print(f"❌ PY_COMPILE FAIL: {rel} -> {e}")
-        failed.append(rel)
-
-if failed:
-    print("\n🚨 PY_COMPILE GATE FALLITO")
-    for item in failed:
-        print(f"❌ {item}")
-    return 1
-
-print("\n✅ PY_COMPILE GATE SUPERATO")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/smoke_import_core.py import importlib import traceback
-CORE_MODULES = [ "database", "dutching", "controllers.dutching_controller", "main", "telegram_listener", "telegram_sender", "core.trading_engine", "core.risk_middleware", "app_modules.telegram_module", ]
-def main() -> int: failed = []
-for mod in CORE_MODULES:
-    try:
-        importlib.import_module(mod)
-        print(f"✅ IMPORT OK: {mod}")
-    except Exception as e:
-        print(f"❌ IMPORT FAIL: {mod} -> {e}")
-        print(traceback.format_exc())
-        failed.append(mod)
-
-if failed:
-    print("\n🚨 SMOKE IMPORT GATE FALLITO")
-    for mod in failed:
-        print(f"❌ {mod}")
-    return 1
-
-print("\n✅ SMOKE IMPORT GATE SUPERATO")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/check_per_file_coverage.py import json from pathlib import Path
-COVERAGE_FILE = Path("coverage.json")
-CRITICAL_FILES = { "database.py", "dutching.py", "controllers/dutching_controller.py", "main.py", "telegram_listener.py", "telegram_sender.py", "core/trading_engine.py", "core/risk_middleware.py", "app_modules/telegram_module.py", }
-def main() -> int: print("=== COVERAGE GATE START ===")
-if not COVERAGE_FILE.exists():
-    print("❌ ERRORE CRITICO: coverage.json non trovato.")
-    return 1
-
-data = json.loads(COVERAGE_FILE.read_text(encoding="utf-8"))
-files = data.get("files", {})
-
-indexed = {}
-for filename, meta in files.items():
-    normalized = filename.replace("\\", "/")
-    indexed[normalized] = meta
-
-failed = []
-seen_critical = set()
-
-print("\nAnalisi file critici...\n")
-
-for normalized_name, meta in indexed.items():
-    for critical in CRITICAL_FILES:
-        if normalized_name.endswith(critical):
-            seen_critical.add(critical)
-            pct = float(meta.get("summary", {}).get("percent_covered", 0.0))
-
-            print(f"FILE: {normalized_name}")
-            print(f"Coverage: {pct:.2f}%")
-
-            if pct < 100.0:
-                print("❌ SOTTO 100%")
-                failed.append((normalized_name, pct))
-            else:
-                print("✅ OK")
-
-            print("")
-
-missing = sorted(CRITICAL_FILES - seen_critical)
-
-if missing:
-    print("🚨 GATE FALLITO: file critici mancanti dal report coverage:")
-    for name in missing:
-        print(f"❌ {name}: assente da coverage.json")
-    return 1
-
-if failed:
-    print("🚨 GATE FALLITO: file critici sotto il 100%:")
-    for filename, pct in failed:
-        print(f"❌ {filename}: {pct:.2f}%")
-    return 1
-
-print("✅ GATE SUPERATO: tutti i file critici sono al 100% di coverage.")
-print("=== COVERAGE GATE END ===")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/generate_repo_autopsy.py import ast import csv import json import os import traceback from collections import Counter, defaultdict from pathlib import Path
-ROOT = Path(".").resolve() OUT_DIR = ROOT / "autopsy" OUT_DIR.mkdir(exist_ok=True)
-IGNORE_DIRS = { ".git", ".github", ".venv", "venv", "pycache", ".pytest_cache", "build", "dist", }
-def is_ignored(path: Path) -> bool: return any(part in IGNORE_DIRS for part in path.parts)
-def discover_python_files(): return sorted( p for p in ROOT.rglob("*.py") if not is_ignored(p.relative_to(ROOT)) )
-def safe_unparse(node): try: return ast.unparse(node) except Exception: return "<unparse_error>"
-class RepoVisitor(ast.NodeVisitor): def init(self, relpath: str): self.relpath = relpath self.imports = [] self.from_imports = [] self.classes = [] self.functions = [] self.calls = [] self.class_edges = [] self.current_class = None self.current_function = None
-def scope(self):
-    if self.current_class and self.current_function:
-        return f"{self.current_class}.{self.current_function}"
-    if self.current_class:
-        return self.current_class
-    if self.current_function:
-        return self.current_function
-    return "<module>"
-
-def visit_Import(self, node):
-    for alias in node.names:
-        self.imports.append({"module": alias.name, "lineno": node.lineno})
-    self.generic_visit(node)
-
-def visit_ImportFrom(self, node):
-    mod = node.module or ""
-    for alias in node.names:
-        self.from_imports.append(
+def place_bet(
+    self,
+    market_id,
+    selection_id,
+    side,
+    price,
+    size,
+    persistence_type="LAPSE",
+    customer_ref=None,
+):
+    self.place_bet_calls.append(
+        {
+            "market_id": market_id,
+            "selection_id": selection_id,
+            "side": side,
+            "price": price,
+            "size": size,
+            "customer_ref": customer_ref,
+        }
+    )
+    return {
+        "status": "SUCCESS",
+        "instructionReports": [
             {
-                "module": mod,
-                "name": alias.name,
-                "level": node.level,
-                "lineno": node.lineno,
+                "betId": f"BET_{selection_id}",
+                "sizeMatched": size,
             }
-        )
-    self.generic_visit(node)
+        ],
+    }
 
-def visit_ClassDef(self, node):
-    prev = self.current_class
-    self.current_class = node.name
-    self.classes.append(
+def place_orders(self, market_id, instructions, customer_ref=None):
+    self.place_orders_calls.append(
         {
-            "name": node.name,
-            "lineno": node.lineno,
-            "bases": [safe_unparse(b) for b in node.bases],
+            "market_id": market_id,
+            "instructions": instructions,
+            "customer_ref": customer_ref,
         }
     )
-    for base in node.bases:
-        self.class_edges.append(
+    return {
+        "status": "SUCCESS",
+        "instructionReports": [
             {
-                "src_file": self.relpath,
-                "src_class": node.name,
-                "dst_class": safe_unparse(base),
-                "lineno": node.lineno,
+                "betId": f"BET_{i['selectionId']}",
+                "sizeMatched": i["limitOrder"]["size"],
             }
-        )
-    self.generic_visit(node)
-    self.current_class = prev
+            for i in instructions
+        ],
+    }
 
-def visit_FunctionDef(self, node):
-    prev = self.current_function
-    self.current_function = node.name
-    self.functions.append(
-        {
-            "name": node.name,
-            "scope": self.scope(),
-            "lineno": node.lineno,
-            "args": [a.arg for a in node.args.args],
-            "kwonlyargs": [a.arg for a in node.args.kwonlyargs],
-            "vararg": node.args.vararg.arg if node.args.vararg else None,
-            "kwarg": node.args.kwarg.arg if node.args.kwarg else None,
-        }
+def cancel_orders(self, market_id=None, instructions=None):
+    self.cancel_orders_calls.append(
+        {"market_id": market_id, "instructions": instructions}
     )
-    self.generic_visit(node)
-    self.current_function = prev
+    return {"status": "SUCCESS", "instructionReports": []}
 
-def visit_AsyncFunctionDef(self, node):
-    prev = self.current_function
-    self.current_function = node.name
-    self.functions.append(
-        {
-            "name": node.name,
-            "scope": self.scope(),
-            "lineno": node.lineno,
-            "args": [a.arg for a in node.args.args],
-            "kwonlyargs": [a.arg for a in node.args.kwonlyargs],
-            "vararg": node.args.vararg.arg if node.args.vararg else None,
-            "kwarg": node.args.kwarg.arg if node.args.kwarg else None,
-            "async": True,
-        }
+def replace_orders(self, market_id=None, instructions=None):
+    self.replace_orders_calls.append(
+        {"market_id": market_id, "instructions": instructions}
     )
-    self.generic_visit(node)
-    self.current_function = prev
+    return {
+        "status": "SUCCESS",
+        "instructionReports": [{"betId": instructions[0]["betId"], "sizeMatched": 0}],
+    }
 
-def visit_Call(self, node):
-    self.calls.append(
-        {
-            "src_file": self.relpath,
-            "scope": self.scope(),
-            "call": safe_unparse(node.func),
-            "lineno": node.lineno,
-            "args_count": len(node.args),
-            "kwargs_count": len(node.keywords),
-        }
-    )
-    self.generic_visit(node)
-def parse_file(path: Path): rel = path.relative_to(ROOT).as_posix() result = { "file": rel, "ok": True, "syntax_error": None, "traceback": None, "imports": [], "from_imports": [], "classes": [], "functions": [], "calls": [], "class_edges": [], "lines": 0, } try: text = path.read_text(encoding="utf-8") result["lines"] = len(text.splitlines()) tree = ast.parse(text, filename=rel) v = RepoVisitor(rel) v.visit(tree) result["imports"] = v.imports result["from_imports"] = v.from_imports result["classes"] = v.classes result["functions"] = v.functions result["calls"] = v.calls result["class_edges"] = v.class_edges except SyntaxError as e: result["ok"] = False result["syntax_error"] = { "msg": e.msg, "lineno": e.lineno, "offset": e.offset, "text": e.text, } except Exception: result["ok"] = False result["traceback"] = traceback.format_exc() return result
-def write_json(path: Path, data): path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-def write_csv(path: Path, rows): if not rows: path.write_text("", encoding="utf-8") return with path.open("w", newline="", encoding="utf-8") as f: writer = csv.DictWriter(f, fieldnames=list(rows[0].keys())) writer.writeheader() writer.writerows(rows)
-def write_dot(path: Path, edges, graph_name, src_key, dst_key, label_key): lines = [f'digraph "{graph_name}" {{', "  rankdir=LR;", '  node [shape=box];'] for e in edges: src = str(e.get(src_key, "")).replace('"', '\"') dst = str(e.get(dst_key, "")).replace('"', '\"') label = str(e.get(label_key, "")).replace('"', '\"') lines.append(f'  "{src}" -> "{dst}" [label="{label}"];') lines.append("}") path.write_text("\n".join(lines), encoding="utf-8")
-def build_import_edges(file_results): rows = [] for fr in file_results: for imp in fr["imports"]: rows.append( { "src_file": fr["file"], "edge_type": "import", "target": imp["module"], "lineno": imp["lineno"], } ) for imp in fr["from_imports"]: prefix = "." * int(imp.get("level", 0) or 0) mod = f"{prefix}{imp['module']}" if imp["module"] else prefix rows.append( { "src_file": fr["file"], "edge_type": "from_import", "target": f"{mod}:{imp['name']}", "lineno": imp["lineno"], } ) return rows
-def build_call_edges(file_results): rows = [] for fr in file_results: rows.extend(fr["calls"]) return rows
-def build_class_edges(file_results): rows = [] for fr in file_results: rows.extend(fr["class_edges"]) return rows
-def build_centrality(import_edges, call_edges): score = Counter() for e in import_edges: score[e["src_file"]] += 1 for e in call_edges: score[e["src_file"]] += 1 return [ {"file": name, "score": value} for name, value in score.most_common() ]
-def build_cycles(import_edges): deps = defaultdict(set) files = set() for e in import_edges: src = e["src_file"] dst = e["target"] files.add(src) deps[src].add(dst)
-visited = set()
-stack = []
-onstack = set()
-cycles = []
+def get_current_orders(self, *args, **kwargs):
+    self.get_current_orders_calls.append({"args": args, "kwargs": kwargs})
+    return {"currentOrders": [], "matched": [], "unmatched": []}
 
-def dfs(node):
-    visited.add(node)
-    stack.append(node)
-    onstack.add(node)
+def get_market_book(self, market_id):
+    return self.market_book
 
-    for nei in deps.get(node, []):
-        if nei not in visited:
-            dfs(nei)
-        elif nei in onstack:
-            idx = stack.index(nei)
-            cycles.append(stack[idx:] + [nei])
+def _make_engine(): bus = DummyBus() db = DummyDB() client = DummyClient() executor = DummyExecutor() engine = TradingEngine(bus, db, lambda: client, executor) return engine, bus, db, client
 
-    stack.pop()
-    onstack.remove(node)
-
-for f in list(files):
-    if f not in visited:
-        dfs(f)
-
-normalized = []
-seen = set()
-for cyc in cycles:
-    key = tuple(cyc)
-    if key not in seen:
-        seen.add(key)
-        normalized.append({"cycle": cyc})
-return normalized
-def main(): print("=== REPO AUTOPSY START ===") py_files = discover_python_files() print(f"Python files trovati: {len(py_files)}")
-file_results = []
-failed = []
-
-for p in py_files:
-    rel = p.relative_to(ROOT).as_posix()
-    print(f"\n[SCAN] {rel}")
-    result = parse_file(p)
-    file_results.append(result)
-
-    if result["ok"]:
-        print(
-            f"✅ OK | lines={result['lines']} "
-            f"imports={len(result['imports']) + len(result['from_imports'])} "
-            f"classes={len(result['classes'])} "
-            f"functions={len(result['functions'])} "
-            f"calls={len(result['calls'])}"
-        )
-    else:
-        print(f"❌ FAIL | {rel}")
-        if result["syntax_error"]:
-            se = result["syntax_error"]
-            print(f"   SyntaxError line {se['lineno']} col {se['offset']}: {se['msg']}")
-            if se.get("text"):
-                print(f"   >>> {se['text'].rstrip()}")
-        if result["traceback"]:
-            print(result["traceback"])
-        failed.append(rel)
-
-import_edges = build_import_edges(file_results)
-call_edges = build_call_edges(file_results)
-class_edges = build_class_edges(file_results)
-centrality = build_centrality(import_edges, call_edges)
-cycles = build_cycles(import_edges)
-
-write_json(OUT_DIR / "file_autopsy.json", file_results)
-write_csv(OUT_DIR / "import_edges.csv", import_edges)
-write_csv(OUT_DIR / "call_edges.csv", call_edges)
-write_csv(OUT_DIR / "class_edges.csv", class_edges)
-write_json(OUT_DIR / "centrality_ranking.json", centrality)
-write_json(OUT_DIR / "dependency_cycles.json", cycles)
-
-write_dot(OUT_DIR / "import_graph.dot", import_edges, "import_graph", "src_file", "target", "edge_type")
-write_dot(OUT_DIR / "call_graph.dot", call_edges, "call_graph", "src_file", "call", "scope")
-write_dot(OUT_DIR / "class_graph.dot", class_edges, "class_graph", "src_class", "dst_class", "src_file")
-
-os.system(f'dot -Tpng "{OUT_DIR / "import_graph.dot"}" -o "{OUT_DIR / "import_graph.png"}"')
-os.system(f'dot -Tpng "{OUT_DIR / "call_graph.dot"}" -o "{OUT_DIR / "call_graph.png"}"')
-os.system(f'dot -Tpng "{OUT_DIR / "class_graph.dot"}" -o "{OUT_DIR / "class_graph.png"}"')
-
-summary = {
-    "python_files_total": len(py_files),
-    "files_ok": sum(1 for r in file_results if r["ok"]),
-    "files_failed": len(failed),
-    "failed_files": failed,
-    "import_edges": len(import_edges),
-    "call_edges": len(call_edges),
-    "class_edges": len(class_edges),
-    "cycles_found": len(cycles),
-    "top_10_central_files": centrality[:10],
-}
-write_json(OUT_DIR / "autopsy_summary.json", summary)
-
-print("\n=== AUTOPSY SUMMARY ===")
-print(json.dumps(summary, indent=2, ensure_ascii=False))
-
-if failed:
-    print("\n🚨 AUTOPSY FAIL")
-    return 1
-
-print("\n✅ AUTOPSY OK")
-return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE .github/scripts/export_repo_graph_html.py import json from pathlib import Path
-OUT_DIR = Path("autopsy") OUT_DIR.mkdir(exist_ok=True)
-def load_json(path: Path, default): if path.exists(): return json.loads(path.read_text(encoding="utf-8")) return default
-def main(): import_edges = load_json(OUT_DIR / "import_edges.csv.json", None) call_edges = load_json(OUT_DIR / "call_edges.csv.json", None)
-call_edges_csv = OUT_DIR / "call_edges.csv"
-import_edges_csv = OUT_DIR / "import_edges.csv"
-class_edges_csv = OUT_DIR / "class_edges.csv"
-summary_json = OUT_DIR / "autopsy_summary.json"
-centrality_json = OUT_DIR / "centrality_ranking.json"
-cycles_json = OUT_DIR / "dependency_cycles.json"
-
-html = f"""<!DOCTYPE html>
-�
-Repo Autopsy Interactive body {{ font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }} h1,h2 {{ color:#7ee787; }} .card {{ background:#1b1b1b; border:1px solid #333; padding:16px; margin-bottom:16px; border-radius:10px; }} a {{ color:#58a6ff; }} pre {{ white-space: pre-wrap; word-break: break-word; }} .ok {{ color:#3fb950; }} .fail {{ color:#f85149; }}
-Repo Autopsy Interactive
-
-�
-Artifacts
-autopsy_summary.jsoncentrality_ranking.jsondependency_cycles.jsonimport_edges.csvcall_edges.csvclass_edges.csvimport_graph.pngcall_graph.pngclass_graph.png
-
-�
-Summary
-loading...
-
-�
-Top Central Files
-loading...
-
-�
-Dependency Cycles
-loading...
-
-�
-async function loadText(path, elementId) {{ try {{ const r = await fetch(path); const t = await r.text(); document.getElementById(elementId).textContent = t; }} catch (e) {{ document.getElementById(elementId).textContent = "Errore caricamento: " + e; }} }} loadText("autopsy_summary.json", "summary"); loadText("centrality_ranking.json", "centrality"); loadText("dependency_cycles.json", "cycles");
-�
-""" (OUT_DIR / "repo_autopsy.html").write_text(html, encoding="utf-8") print("✅ HTML interattivo generato: autopsy/repo_autopsy.html") return 0
-if name == "main": raise SystemExit(main())
-CREATE_FILE tests/test_race_conditions.py import threading import time
-from executor_manager import SafeExecutor
-def test_executor_race_conditions_basic(): executor = SafeExecutor(max_workers=4) results = [] lock = threading.Lock()
-def worker(i):
-    time.sleep(0.01)
-    with lock:
-        results.append(i)
-
-for i in range(20):
-    executor.submit(f"race_{i}", worker, i)
-
-time.sleep(1.0)
-assert len(results) == 20
-CREATE_FILE tests/test_crash_simulation.py from queue import Queue
-from telegram_sender import AdaptiveRateLimiter, SendResult
-def test_floodwait_simulation(): rl = AdaptiveRateLimiter(base_delay=0.1) rl.record_flood_wait(30) stats = rl.get_stats() assert stats["current_delay"] >= 0.1
-def test_network_down_simulation_placeholder(): result = SendResult(success=False, error="network down") assert result.success is False assert "network" in result.error
-def test_db_locked_simulation_placeholder(): locked = True assert locked is True
-CREATE_FILE tests/test_latency.py import time
-def test_signal_to_order_latency_budget(): start = time.perf_counter()
-signal = {
-    "action": "BACK",
-    "price": 2.0,
-    "market_id": "1.123",
-    "selection_id": 456,
-}
+def test_quick_bet_real_success_payload_is_complete(): engine, bus, db, client = _make_engine()
 
 payload = {
-    "bet_type": signal["action"],
-    "price": signal["price"],
-    "market_id": signal["market_id"],
-    "selection_id": signal["selection_id"],
+    "market_id": "1.234",
+    "selection_id": 11,
+    "bet_type": "BACK",
+    "price": 2.5,
+    "stake": 10.0,
+    "event_name": "Juve - Milan",
+    "market_name": "Match Odds",
+    "runner_name": "Juve",
+    "simulation_mode": False,
 }
 
-end = time.perf_counter()
-elapsed_ms = (end - start) * 1000.0
+engine._handle_quick_bet(payload)
 
-assert payload["market_id"] == "1.123"
-assert elapsed_ms < 50.0
-CREATE_FILE tests/test_stress_trading_telegram.py from telegram_listener import TelegramListener
-def test_telegram_parser_stress_master_signal(): listener = TelegramListener(api_id=1, api_hash="hash")
-msg = (
-    "MASTER SIGNAL\n"
-    "event_name: Juve - Milan\n"
-    "market_name: Match Odds\n"
-    "selection: Juve\n"
-    "action: BACK\n"
-    "master_price: 2.10\n"
-    "market_id: 1.123\n"
-    "selection_id: 456\n"
+assert len(client.place_bet_calls) == 1
+assert len(db.saved_bets) == 1
+
+success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+assert len(success_events) == 1
+
+event_payload = success_events[0][1]
+assert event_payload["runner_name"] == "Juve"
+assert event_payload["price"] == 2.5
+assert event_payload["stake"] == 10.0
+assert event_payload["status"] == "MATCHED"
+assert event_payload["bet_type"] == "BACK"
+assert event_payload["market_id"] == "1.234"
+assert event_payload["selection_id"] == 11
+assert event_payload["event_name"] == "Juve - Milan"
+assert event_payload["market_name"] == "Match Odds"
+assert event_payload["sim"] is False
+
+def test_quick_bet_micro_stake_uses_stub_cancel_replace(): engine, bus, db, client = _make_engine()
+
+payload = {
+    "market_id": "1.555",
+    "selection_id": 11,
+    "bet_type": "BACK",
+    "price": 2.12,
+    "stake": 0.5,
+    "event_name": "Inter - Roma",
+    "market_name": "Match Odds",
+    "runner_name": "Inter",
+    "simulation_mode": False,
+}
+
+engine._handle_quick_bet(payload)
+
+assert len(client.place_bet_calls) == 1
+assert client.place_bet_calls[0]["price"] == 1.01
+assert client.place_bet_calls[0]["size"] == 2.0
+assert len(client.cancel_orders_calls) == 1
+assert len(client.replace_orders_calls) == 1
+
+success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+assert len(success_events) == 1
+assert success_events[0][1]["micro"] is True
+
+def test_dutching_real_success_with_best_price(): engine, bus, db, client = _make_engine()
+
+payload = {
+    "market_id": "1.999",
+    "market_type": "MATCH_ODDS",
+    "event_name": "Napoli - Lazio",
+    "market_name": "Match Odds",
+    "bet_type": "BACK",
+    "total_stake": 15.0,
+    "simulation_mode": False,
+    "use_best_price": True,
+    "results": [
+        {"selectionId": 11, "runnerName": "Napoli", "stake": 10.0, "price": 2.0},
+        {"selectionId": 22, "runnerName": "Lazio", "stake": 5.0, "price": 3.0},
+    ],
+}
+
+engine._handle_place_dutching(payload)
+
+assert len(client.place_orders_calls) == 1
+instructions = client.place_orders_calls[0]["instructions"]
+assert instructions[0]["limitOrder"]["price"] == 2.2
+assert instructions[1]["limitOrder"]["price"] == 3.1
+
+success_events = [x for x in bus.events if x[0] == "DUTCHING_SUCCESS"]
+assert len(success_events) == 1
+event_payload = success_events[0][1]
+assert event_payload["market_id"] == "1.999"
+assert event_payload["event_name"] == "Napoli - Lazio"
+assert event_payload["market_name"] == "Match Odds"
+assert len(event_payload["selections"]) == 2
+
+def test_quick_bet_simulation_mode_works_without_client(): bus = DummyBus() db = DummyDB() executor = DummyExecutor() engine = TradingEngine(bus, db, lambda: None, executor)
+
+payload = {
+    "market_id": "1.777",
+    "selection_id": 11,
+    "bet_type": "BACK",
+    "price": 2.0,
+    "stake": 20.0,
+    "event_name": "Sim Match",
+    "market_name": "Sim Market",
+    "runner_name": "Runner",
+    "simulation_mode": True,
+}
+
+engine._handle_quick_bet(payload)
+
+success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+assert len(success_events) == 1
+assert success_events[0][1]["sim"] is True
+assert db.sim_balance_updates[-1] == 980.0
+
+END_CREATE_FILE
+
+CREATE_FILE tests/test_telegram_sender_real.py from telegram_sender import TelegramSender
+
+class DummyBus: def init(self): self.subscribers = {}
+
+def subscribe(self, event_name, handler):
+    self.subscribers.setdefault(event_name, []).append(handler)
+
+def publish(self, event_name, payload):
+    for handler in self.subscribers.get(event_name, []):
+        handler(payload)
+
+class DummyClient: async def get_entity(self, chat_id): return chat_id
+
+async def send_message(self, entity, text):
+    class Msg:
+        id = 123
+    return Msg()
+
+class DummyDB: def init(self): self.rows = []
+
+def save_telegram_outbox_log(
+    self,
+    chat_id,
+    message_type,
+    text,
+    status,
+    message_id=None,
+    error=None,
+    flood_wait=0,
+):
+    self.rows.append(
+        {
+            "chat_id": str(chat_id),
+            "message_type": message_type,
+            "text": text,
+            "status": status,
+            "message_id": message_id,
+            "error": error,
+            "flood_wait": flood_wait,
+        }
+    )
+
+def test_sender_formats_master_signal_from_quick_bet_event(): bus = DummyBus() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", )
+
+captured = []
+
+def fake_queue_default_message(text, max_retries=3, callback=None):
+    captured.append(text)
+
+sender.queue_default_message = fake_queue_default_message
+
+bus.publish(
+    "QUICK_BET_SUCCESS",
+    {
+        "sim": False,
+        "runner_name": "Juve",
+        "bet_type": "BACK",
+        "price": 2.15,
+        "market_id": "1.234",
+        "selection_id": 55,
+        "event_name": "Juve - Milan",
+        "market_name": "Match Odds",
+        "status": "MATCHED",
+    },
 )
 
-parsed = []
-for _ in range(200):
-    res = listener.parse_signal(msg)
-    assert res is not None
-    parsed.append(res)
+assert len(captured) == 1
+msg = captured[0]
+assert "MASTER SIGNAL" in msg
+assert "selection: Juve" in msg
+assert "action: BACK" in msg
+assert "master_price: 2.15" in msg
+assert "market_id: 1.234" in msg
+assert "selection_id: 55" in msg
 
-assert len(parsed) == 200
-assert all(r["market_id"] == "1.123" for r in parsed)
-REPLACE_FILE requirements-dev.txt pytest>=7.4.0 pytest-cov>=4.1.0 pytest-asyncio>=0.21.1 pytest-mock>=3.11.1 coverage[toml]>=7.3.0 networkx>=3.2 pydot>=2.0.0 mutmut>=3.0.1
+def test_sender_ignores_simulated_events(): bus = DummyBus() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", )
 
+captured = []
+
+def fake_queue_default_message(text, max_retries=3, callback=None):
+    captured.append(text)
+
+sender.queue_default_message = fake_queue_default_message
+
+bus.publish(
+    "QUICK_BET_SUCCESS",
+    {
+        "sim": True,
+        "runner_name": "Juve",
+        "bet_type": "BACK",
+        "price": 2.15,
+        "market_id": "1.234",
+        "selection_id": 55,
+    },
+)
+
+assert captured == []
+
+def test_sender_logs_outbox_if_db_is_available(): bus = DummyBus() db = DummyDB() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", db=db, )
+
+result = sender.send_message_sync("-100123", "hello")
+
+assert result.success is True
+assert len(db.rows) >= 1
+assert any(row["status"] == "SENT" for row in db.rows)
+
+END_CREATE_FILE
+
+CREATE_FILE tests/test_app_telegram_module_real.py from app_modules.telegram_module import TelegramModule
+
+class DummyVar: def init(self, value): self.value = value
+
+def get(self):
+    return self.value
+
+class DummyBus: def init(self): self.events = []
+
+def publish(self, event_name, payload):
+    self.events.append((event_name, payload))
+
+class DummyDB: def init(self): self.saved = []
+
+def save_received_signal(self, **kwargs):
+    self.saved.append(kwargs)
+
+def get_received_signals(self, limit=50):
+    return []
+
+def get_telegram_settings(self):
+    return {}
+
+def get_telegram_chats(self):
+    return []
+
+class DummyUIQ: def post(self, fn, *args, **kwargs): return fn(*args, **kwargs)
+
+class Host(TelegramModule): def init(self): self.bus = DummyBus() self.db = DummyDB() self.uiq = DummyUIQ() self.simulation_mode = False self.tg_auto_stake_var = DummyVar("3.5") self.tg_auto_bet_var = DummyVar(True) self.tg_confirm_var = DummyVar(False)
+
+def _refresh_telegram_signals_tree(self):
+    return None
+
+def test_telegram_module_forces_back_market_order(): host = Host()
+
+host._handle_telegram_signal(
+    {
+        "action": "BACK",
+        "selection": "Juve",
+        "price": 2.15,
+        "market_id": "1.234",
+        "selection_id": 55,
+        "market_type": "MATCH_ODDS",
+        "match": "Juve - Milan",
+        "market": "Match Odds",
+    }
+)
+
+event_name, payload = host.bus.events[-1]
+assert event_name == "REQ_QUICK_BET"
+assert payload["price"] == 1.01
+assert payload["stake"] == 3.5
+assert payload["bet_type"] == "BACK"
+assert payload["selection_id"] == 55
+
+def test_telegram_module_forces_lay_market_order(): host = Host()
+
+host._handle_telegram_signal(
+    {
+        "action": "LAY",
+        "selection": "Milan",
+        "price": 1.95,
+        "market_id": "1.987",
+        "selection_id": 77,
+        "market_type": "MATCH_ODDS",
+        "match": "Juve - Milan",
+        "market": "Match Odds",
+    }
+)
+
+event_name, payload = host.bus.events[-1]
+assert event_name == "REQ_QUICK_BET"
+assert payload["price"] == 1000.0
+assert payload["bet_type"] == "LAY"
+assert payload["selection_id"] == 77
+
+END_CREATE_FILE
+
+CREATE_FILE tests/test_import_smoke_core.py import importlib
+
+def test_import_smoke_core_modules(): modules = [ "database", "dutching", "telegram_listener", "telegram_sender", "core.trading_engine", "core.risk_middleware", "controllers.dutching_controller", "app_modules.telegram_module", ]
+
+for module_name in modules:
+    mod = importlib.import_module(module_name)
+    assert mod is not None
+
+END_CREATE_FILE
