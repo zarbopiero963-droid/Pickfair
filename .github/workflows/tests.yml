@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout code
@@ -22,7 +24,7 @@ jobs:
       - name: Install system UI deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
+          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1-mesa-glx
 
       - name: Install Python deps
         run: |
@@ -31,8 +33,22 @@ jobs:
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
           else
-            pip install pytest pytest-cov coverage[toml] pytest-asyncio pytest-mock
+            pip install pytest pytest-cov coverage[toml] pytest-asyncio pytest-mock mutmut
           fi
+
+      - name: Workspace diagnostics
+        run: |
+          echo "==============================="
+          echo "WORKSPACE FILES BEFORE TESTS"
+          echo "==============================="
+          ls -la
+          echo ""
+          echo "==============================="
+          echo "WORKFLOW FILES"
+          echo "==============================="
+          ls -la .github || true
+          ls -la .github/workflows || true
+          ls -la .github/scripts || true
 
       - name: Run tests with strict coverage
         run: |
@@ -54,25 +70,53 @@ jobs:
           echo "PYTEST COMPLETED"
           echo "==============================="
 
-      - name: Print coverage files
+      - name: Coverage diagnostics
         if: always()
         run: |
           echo "==============================="
-          echo "WORKSPACE FILES"
+          echo "WORKSPACE FILES AFTER TESTS"
           echo "==============================="
           ls -la
+          echo ""
           echo "==============================="
-          echo "COVERAGE.JSON HEAD"
+          echo "COVERAGE.XML EXISTS?"
           echo "==============================="
+          test -f coverage.xml && echo "coverage.xml PRESENTE" || echo "coverage.xml ASSENTE"
+          echo ""
+          echo "==============================="
+          echo "COVERAGE.JSON EXISTS?"
+          echo "==============================="
+          test -f coverage.json && echo "coverage.json PRESENTE" || echo "coverage.json ASSENTE"
+          echo ""
           if [ -f coverage.json ]; then
-            head -n 200 coverage.json
-          else
-            echo "coverage.json non trovato"
+            echo "==============================="
+            echo "COVERAGE.JSON HEAD"
+            echo "==============================="
+            python - <<'PY'
+import json
+from pathlib import Path
+
+p = Path("coverage.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+print(json.dumps({
+    "meta": data.get("meta", {}),
+    "files_count": len(data.get("files", {})),
+    "sample_files": list(data.get("files", {}).keys())[:10],
+}, indent=2))
+PY
           fi
 
-      - name: Enforce 100% per file on Critical Core
+      - name: Enforce 100% per critical files
         run: |
           python .github/scripts/check_per_file_coverage.py
+
+      - name: Mutation Testing
+        if: always()
+        run: |
+          echo "==============================="
+          echo "MUTATION TESTING"
+          echo "==============================="
+          mutmut run || true
 
       - name: Upload coverage artifacts
         if: always()
@@ -82,3 +126,4 @@ jobs:
           path: |
             coverage.xml
             coverage.json
+          if-no-files-found: warn
