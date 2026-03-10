@@ -2,14 +2,6 @@ name: Repo Forensics
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-      - develop
-    paths:
-      - "**/*.py"
-      - ".github/workflows/repo_forensics.yml"
 
 jobs:
   forensics:
@@ -19,77 +11,89 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Core system forensics
         run: |
-          python -m pip install --upgrade pip
-          pip install networkx pydot pyvis
-
-      - name: Build repo analysis
-        run: |
-          mkdir -p artifacts
           python - <<'PY'
-          import ast, os, json
-          from collections import defaultdict, Counter
+          import ast
+          import os
 
-          py_files = []
+          CORE_FILES=[
+              "database.py",
+              "dutching.py",
+              "controllers/dutching_controller.py",
+              "main.py",
+              "telegram_listener.py",
+              "telegram_sender.py",
+              "core/trading_engine.py",
+              "core/risk_middleware.py",
+              "app_modules/telegram_module.py",
+          ]
 
-          for base, _, files in os.walk("."):
-              if ".git" in base or "__pycache__" in base:
+          print("="*80)
+          print("CORE FORENSICS START")
+          print("="*80)
+
+          for path in CORE_FILES:
+
+              if not os.path.exists(path):
+                  print("\nMISSING FILE:",path)
                   continue
-              for f in files:
-                  if f.endswith(".py"):
-                      py_files.append(os.path.join(base, f))
 
-          imports_map = defaultdict(list)
-          edges = []
-          centrality = Counter()
+              print("\nFILE:",path)
+              print("-"*80)
 
-          for path in py_files:
               try:
-                  tree = ast.parse(open(path, encoding="utf-8").read())
-              except:
+                  tree=ast.parse(open(path,encoding="utf-8").read())
+              except Exception as e:
+                  print("PARSE ERROR:",e)
                   continue
+
+              imports=[]
+              classes=[]
+              functions=[]
+              calls=[]
 
               for node in ast.walk(tree):
-                  if isinstance(node, ast.Import):
+
+                  if isinstance(node,ast.Import):
                       for alias in node.names:
-                          imports_map[path].append(alias.name)
-                          edges.append((path, alias.name))
+                          imports.append(alias.name)
 
-                  if isinstance(node, ast.ImportFrom):
-                      mod = node.module or ""
-                      imports_map[path].append(mod)
-                      edges.append((path, mod))
+                  elif isinstance(node,ast.ImportFrom):
+                      imports.append(node.module or "")
 
-          for s, d in edges:
-              centrality[s] += 1
-              centrality[d] += 1
+                  elif isinstance(node,ast.ClassDef):
+                      classes.append(node.name)
 
-          ranking = centrality.most_common()
+                  elif isinstance(node,ast.FunctionDef):
+                      functions.append(node.name)
 
-          json.dump(
-              {
-                  "files": py_files,
-                  "edges": edges,
-                  "ranking": ranking
-              },
-              open("artifacts/analysis.json","w"),
-              indent=2
-          )
+                  elif isinstance(node,ast.AsyncFunctionDef):
+                      functions.append(node.name)
 
-          print("Repo analysis completed")
+                  elif isinstance(node,ast.Call):
+
+                      if isinstance(node.func,ast.Name):
+                          calls.append(node.func.id)
+
+                      elif isinstance(node.func,ast.Attribute):
+                          calls.append(node.func.attr)
+
+              print("Classes:",classes)
+              print("Functions:",functions)
+              print("Imports:",imports[:60])
+              print("Calls:",calls[:120])
+
+          print("\n"+"="*80)
+          print("CORE FORENSICS END")
+          print("="*80)
+
           PY
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: repo-forensics
-          path: artifacts/*
