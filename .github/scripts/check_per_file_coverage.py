@@ -10,15 +10,15 @@ CRITICAL_FILES = {
     "controllers/dutching_controller.py",
 }
 
+def main():
 
-def main() -> int:
-    print("=== COVERAGE GATE START ===")
+    print("CRITICAL COVERAGE CHECK")
 
     if not COVERAGE_FILE.exists():
-        print("🔴 ERRORE CRITICO: coverage.json non trovato.")
+        print("ERROR: coverage.json not found")
         return 1
 
-    data = json.loads(COVERAGE_FILE.read_text(encoding="utf-8"))
+    data = json.loads(COVERAGE_FILE.read_text())
     files = data.get("files", {})
 
     indexed = {}
@@ -26,45 +26,44 @@ def main() -> int:
         normalized = filename.replace("\\", "/")
         indexed[normalized] = meta
 
+    seen = set()
     failed = []
-    seen_critical = set()
 
-    print("\nAnalisi file critici...\n")
+    for file_path, meta in indexed.items():
 
-    for normalized_name, meta in indexed.items():
         for critical in CRITICAL_FILES:
-            if normalized_name.endswith(critical):
-                seen_critical.add(critical)
 
-                pct = float(meta.get("summary", {}).get("percent_covered", 0.0))
+            if file_path.endswith(critical):
 
-                print(f"FILE: {normalized_name}")
-                print(f"Coverage: {pct:.2f}%")
+                seen.add(critical)
 
-                if pct < 100.0:
-                    print("🔴 SOTTO 100%")
-                    failed.append((normalized_name, pct))
-                else:
-                    print("🟢 OK")
+                pct = float(meta["summary"]["percent_covered"])
 
                 print("")
+                print("FILE:", file_path)
+                print("COVERAGE:", f"{pct:.2f}%")
 
-    missing = sorted(CRITICAL_FILES - seen_critical)
+                if pct < 100.0:
+                    print("FAIL BELOW 100")
+                    failed.append((file_path, pct))
+                else:
+                    print("OK")
+
+    missing = CRITICAL_FILES - seen
 
     if missing:
-        print("🔴 GATE FALLITO: file critici mancanti dal report coverage:")
-        for name in missing:
-            print(f"❌ {name}: assente da coverage.json")
+        print("ERROR missing files in coverage report")
+        for m in missing:
+            print(m)
         return 1
 
     if failed:
-        print("🔴 GATE FALLITO: file critici sotto il 100%:")
-        for filename, pct in failed:
-            print(f"❌ {filename}: {pct:.2f}%")
+        print("ERROR insufficient coverage")
+        for f, pct in failed:
+            print(f"{f} -> {pct:.2f}%")
         return 1
 
-    print("🟢 GATE SUPERATO: tutti i file critici sono al 100% di coverage.")
-    print("=== COVERAGE GATE END ===")
+    print("ALL CRITICAL FILES AT 100% COVERAGE")
 
     return 0
 
