@@ -6,27 +6,11 @@ omit =
     .venv/*
     venv/*
     .github/*
-    setup.py
-    build.py
 
 [report]
 show_missing = True
 skip_empty = True
-precision = 2
+
 exclude_lines =
     pragma: no cover
     if __name__ == "__main__":
-    raise NotImplementedError
-    except ImportError:
-    except ModuleNotFoundError:
-    pass
-    return NotImplemented
-
-[html]
-directory = htmlcov
-
-[xml]
-output = coverage.xml
-
-[json]
-output = coverage.json
