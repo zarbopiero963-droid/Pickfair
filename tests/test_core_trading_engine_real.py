@@ -1,4 +1,3 @@
-CREATE_FILE tests/test_core_trading_engine_real.py import json
 
 from core.trading_engine import TradingEngine
 
