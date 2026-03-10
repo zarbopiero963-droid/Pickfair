@@ -52,25 +52,12 @@ class PickfairApp(
     MonitoringModule,
 ):
     def __init__(self):
-        # 1. UI Window Setup (CustomTkinter)
         self._init_window()
-
-        # 2. Core Infrastructure (DB, Bus, Executor)
         self._bootstrap_core()
-
-        # 3. Order Management System (OMS & AI)
         self._bootstrap_oms()
-
-        # 4. Plugins & Integrations (Telegram, Goal Engine)
         self._bootstrap_plugins()
-
-        # 5. UI Components & Layout
         self._bootstrap_ui()
-
-        # 6. Event Wiring (Centralizzato)
         self._wire_events()
-
-        # 7. Start Background Services
         self._start_services()
 
     # ==========================================
@@ -131,7 +118,6 @@ class PickfairApp(
         if hasattr(self, "db") and self.db:
             self.shutdown_mgr.register("database", self.db.close, priority=4)
 
-        # Global States
         self.client = None
         self.current_event = None
         self.current_market = None
@@ -149,7 +135,6 @@ class PickfairApp(
         self.simulation_mode = False
         self.safe_mode_active = False
 
-        # Telegram follower / master
         self.telegram_listener = None
         self.telegram_signal_queue = None
         self.telegram_controller = None
@@ -185,12 +170,10 @@ class PickfairApp(
         self._pending_tree_update = False
 
     def _bootstrap_plugins(self):
-        # --- TELEGRAM FOLLOWER ---
         self.telegram_listener = None
         self.telegram_signal_queue = SignalQueue()
         self.telegram_controller = TelegramController(self)
 
-        # Chat master opzionale per invio segnali
         settings = {}
         try:
             settings = self.db.get_telegram_settings() or {}
@@ -203,7 +186,6 @@ class PickfairApp(
             or getattr(self, "telegram_master_chat_id", None)
         )
 
-        # --- GOAL ENGINE ---
         self.api_football = APIFootballClient(api_key="INSERISCI_TUA_API_KEY_QUI")
         self.goal_engine = GoalEnginePro(
             api_client=self.api_football,
@@ -217,7 +199,6 @@ class PickfairApp(
         self.goal_engine.set_low_request_mode(True)
         self.shutdown_mgr.register("goal_engine", self.goal_engine.stop, priority=5)
 
-        # --- PLUGIN MANAGER ---
         from plugin_manager import PluginManager
 
         self.plugin_manager = PluginManager(self)
@@ -249,12 +230,8 @@ class PickfairApp(
             self._configure_styles()
 
     def _wire_events(self):
-        """Centralizza tutto il wiring dell'EventBus per renderlo facilmente leggibile."""
-
-        # 1. Safe Mode / Emergenze
         self.bus.subscribe("SAFE_MODE_TRIGGER", self._on_safe_mode_trigger)
 
-        # 2. Telegram follower
         if hasattr(self, "_handle_telegram_signal"):
             self.bus.subscribe("TELEGRAM_SIGNAL", self._handle_telegram_signal)
 
@@ -269,11 +246,9 @@ class PickfairApp(
                 ),
             )
 
-        # 3. Market Data Stream (Tick e WoM)
         self.bus.subscribe("MARKET_TICK", self._buffer_market_tick)
         self.bus.subscribe("MARKET_TICK", self._feed_wom)
 
-        # 4. OMS Callbacks UI
         if hasattr(self, "_on_engine_success"):
             self.bus.subscribe(
                 "QUICK_BET_SUCCESS",
@@ -306,11 +281,6 @@ class PickfairApp(
                 lambda e: self.uiq.post(self._on_cashout_failed, e),
             )
 
-        # 5. Telegram master sender (compatibile con telegram_sender.py attuale)
-        self.bus.subscribe("QUICK_BET_SUCCESS", self._publish_master_quick_bet)
-        self.bus.subscribe("DUTCHING_SUCCESS", self._publish_master_dutching)
-        self.bus.subscribe("CASHOUT_SUCCESS", self._publish_master_cashout)
-
     def _start_services(self):
         self.goal_engine.start()
 
@@ -333,7 +303,6 @@ class PickfairApp(
     # ==========================================
 
     def _feed_wom(self, payload):
-        """Alimenta l'Intelligenza Artificiale isolando la logica dal costruttore."""
         if not hasattr(self, "wom_engine") or not self.wom_engine:
             return
 
@@ -538,11 +507,9 @@ class PickfairApp(
 
         tg_client = None
 
-        # Prima prova: listener già connesso
         if getattr(self, "telegram_listener", None) and getattr(self.telegram_listener, "client", None):
             tg_client = self.telegram_listener.client
 
-        # Fallback: sender globale esistente
         if tg_client is None:
             existing = get_telegram_sender()
             if existing is not None:
@@ -553,7 +520,13 @@ class PickfairApp(
             return None
 
         try:
-            self.telegram_sender = init_telegram_sender(tg_client, base_delay=0.5)
+            self.telegram_sender = init_telegram_sender(
+                client=tg_client,
+                base_delay=0.5,
+                event_bus=self.bus,
+                default_chat_id=self.telegram_master_chat_id,
+                db=self.db,
+            )
             self.shutdown_mgr.register(
                 "telegram_sender",
                 self.telegram_sender.stop_worker,
@@ -564,94 +537,6 @@ class PickfairApp(
             self.logger.error("Impossibile inizializzare TelegramSender: %s", e)
             self.telegram_sender = None
             return None
-
-    def _queue_master_message(self, text):
-        sender = self._ensure_telegram_sender()
-        if not sender or not self.telegram_master_chat_id:
-            return
-
-        try:
-            sender.queue_message(str(self.telegram_master_chat_id), text)
-        except Exception as e:
-            self.logger.error("Errore queue Telegram master: %s", e)
-
-    def _publish_master_quick_bet(self, data):
-        """
-        Pubblica il segnale master solo per eseguiti reali.
-        Richiede che chi genera QUICK_BET_SUCCESS includa almeno:
-        runner_name, price, side/bet_type, market_id, selection_id.
-        """
-        try:
-            if not isinstance(data, dict):
-                return
-            if data.get("sim", False):
-                return
-
-            runner_name = data.get("runner_name") or data.get("selection") or "Unknown"
-            action = data.get("bet_type") or data.get("side") or "BACK"
-            price = float(data.get("price", 0.0) or 0.0)
-            market_id = data.get("market_id", "")
-            selection_id = data.get("selection_id", "")
-            event_name = data.get("event_name", "")
-            market_name = data.get("market_name", "")
-
-            if not market_id or not selection_id:
-                return
-
-            text = (
-                "MASTER SIGNAL\n"
-                f"event_name: {event_name}\n"
-                f"market_name: {market_name}\n"
-                f"selection: {runner_name}\n"
-                f"action: {str(action).upper()}\n"
-                f"master_price: {price:.2f}\n"
-                f"market_id: {market_id}\n"
-                f"selection_id: {selection_id}"
-            )
-            self._queue_master_message(text)
-        except Exception as e:
-            self.logger.error("Errore publish master quick bet: %s", e)
-
-    def _publish_master_dutching(self, data):
-        try:
-            if not isinstance(data, dict):
-                return
-            if data.get("sim", False):
-                return
-
-            text = (
-                "MASTER SIGNAL\n"
-                "event_name: DUTCHING\n"
-                "market_name: DUTCHING\n"
-                "selection: MULTIPLE\n"
-                "action: BACK\n"
-                "master_price: 0.00\n"
-                "market_id: DUTCHING\n"
-                "selection_id: 0"
-            )
-            self._queue_master_message(text)
-        except Exception as e:
-            self.logger.error("Errore publish master dutching: %s", e)
-
-    def _publish_master_cashout(self, data):
-        try:
-            if not isinstance(data, dict):
-                return
-
-            green_up = float(data.get("green_up", 0.0) or 0.0)
-            text = (
-                "MASTER SIGNAL\n"
-                "event_name: CASHOUT\n"
-                "market_name: CASHOUT\n"
-                "selection: CASHOUT\n"
-                "action: CASHOUT\n"
-                f"master_price: {green_up:.2f}\n"
-                "market_id: CASHOUT\n"
-                "selection_id: 0"
-            )
-            self._queue_master_message(text)
-        except Exception as e:
-            self.logger.error("Errore publish master cashout: %s", e)
 
 
 if __name__ == "__main__":
