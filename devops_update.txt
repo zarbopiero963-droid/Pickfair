@@ -1,163 +1,8 @@
-CREATE_FILE .github/workflows/tests.yml name: Full Test & Coverage Gate
+CREATE_FILE .github/workflows/repo_autopsy.yml name: Repo Autopsy
 
-on: push: branches: - main - master - develop pull_request: branches: - main - master - develop
+on: workflow_dispatch: push: branches: - main - master - develop paths: - "**/*.py" - ".github/workflows/repo_autopsy.yml"
 
-jobs: test: runs-on: ubuntu-latest env: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
-
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
-
-  - name: Install system UI deps
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
-
-  - name: Install Python deps
-    run: |
-      python -m pip install --upgrade pip
-      if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      if [ -f requirements-dev.txt ]; then
-        pip install -r requirements-dev.txt
-      else
-        pip install pytest pytest-cov coverage[toml] pytest-asyncio pytest-mock mutmut
-      fi
-
-  - name: Compile all Python files
-    run: |
-      echo "==============================="
-      echo "PY_COMPILE ALL FILES"
-      echo "==============================="
-      python - <<'PY'
-      import os
-      import py_compile
-      import sys
-
-      failed = []
-      for root, _, files in os.walk("."):
-          if ".git" in root or ".venv" in root or "venv" in root or "__pycache__" in root:
-              continue
-          for name in files:
-              if name.endswith(".py"):
-                  path = os.path.join(root, name)
-                  try:
-                      py_compile.compile(path, doraise=True)
-                      print(f"[OK] {path}")
-                  except Exception as e:
-                      print(f"[FAIL] {path} -> {e}")
-                      failed.append(path)
-
-      if failed:
-          print("\nFILES WITH SYNTAX ERRORS:")
-          for f in failed:
-              print(f" - {f}")
-          sys.exit(1)
-      PY
-
-  - name: Import smoke test for core modules
-    run: |
-      echo "==============================="
-      echo "IMPORT SMOKE TEST"
-      echo "==============================="
-      python - <<'PY'
-      import importlib
-      import sys
-
-      modules = [
-          "database",
-          "dutching",
-          "telegram_listener",
-          "telegram_sender",
-          "core.trading_engine",
-          "core.risk_middleware",
-          "controllers.dutching_controller",
-          "app_modules.telegram_module",
-          "main",
-      ]
-
-      failed = []
-      for module_name in modules:
-          try:
-              importlib.import_module(module_name)
-              print(f"[OK] {module_name}")
-          except Exception as e:
-              print(f"[FAIL] {module_name} -> {e}")
-              failed.append(module_name)
-
-      if failed:
-          print("\nMODULES FAILED TO IMPORT:")
-          for m in failed:
-              print(f" - {m}")
-          sys.exit(1)
-      PY
-
-  - name: Run tests with strict coverage
-    run: |
-      echo "==============================="
-      echo "STARTING PYTEST EXECUTION"
-      echo "==============================="
-
-      xvfb-run -a pytest \
-        -vv \
-        --maxfail=1 \
-        --disable-warnings \
-        --cov=. \
-        --cov-report=term-missing \
-        --cov-report=xml \
-        --cov-report=json \
-        --cov-fail-under=90
-
-      echo "==============================="
-      echo "PYTEST COMPLETED"
-      echo "==============================="
-
-  - name: Mutation Testing
-    run: |
-      echo "==============================="
-      echo "MUTATION TESTING"
-      echo "==============================="
-      mutmut run || true
-
-  - name: Print workspace and coverage debug
-    if: always()
-    run: |
-      echo "==============================="
-      echo "WORKSPACE FILES"
-      echo "==============================="
-      ls -la
-      echo "==============================="
-      echo "COVERAGE.JSON HEAD"
-      echo "==============================="
-      if [ -f coverage.json ]; then
-        head -n 200 coverage.json
-      else
-        echo "coverage.json non trovato"
-      fi
-
-  - name: Enforce 100% per critical files
-    run: |
-      python .github/scripts/check_per_file_coverage.py
-
-  - name: Upload coverage artifacts
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: coverage-reports
-      if-no-files-found: warn
-      path: |
-        coverage.xml
-        coverage.json
-
-CREATE_FILE .github/workflows/repo_forensics.yml name: Repo Forensics
-
-on: workflow_dispatch: push: branches: - main - master - develop paths: - "**/*.py" - ".github/workflows/repo_forensics.yml"
-
-jobs: forensics: runs-on: ubuntu-latest env: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+jobs: autopsy: runs-on: ubuntu-latest env: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 steps:
   - name: Checkout code
@@ -168,25 +13,23 @@ steps:
     with:
       python-version: "3.11"
 
-  - name: Install graph deps
+  - name: Install deps
     run: |
       python -m pip install --upgrade pip
       pip install networkx pydot pyvis
 
-  - name: Build repo forensics
+  - name: Build repo autopsy
     run: |
       mkdir -p artifacts
       python - <<'PY'
       import ast
       import json
       import os
-      from collections import defaultdict, Counter
+      from collections import Counter, defaultdict
 
-      root = "."
       py_files = []
-
-      for base, dirs, files in os.walk(root):
-          if ".git" in base or ".venv" in base or "venv" in base or "__pycache__" in base:
+      for base, _, files in os.walk("."):
+          if any(x in base for x in [".git", ".venv", "venv", "__pycache__", "artifacts"]):
               continue
           for name in files:
               if name.endswith(".py"):
@@ -197,9 +40,9 @@ steps:
       class_map = defaultdict(list)
       func_map = defaultdict(list)
       dependency_edges = []
-      cycles_hint = []
+      centrality = Counter()
 
-      for path in py_files:
+      for path in sorted(py_files):
           try:
               with open(path, "r", encoding="utf-8") as f:
                   source = f.read()
@@ -213,10 +56,14 @@ steps:
                   for alias in node.names:
                       imports_map[path].append(alias.name)
                       dependency_edges.append((path, alias.name))
+                      centrality[path] += 1
+                      centrality[alias.name] += 1
               elif isinstance(node, ast.ImportFrom):
                   mod = node.module or ""
                   imports_map[path].append(mod)
                   dependency_edges.append((path, mod))
+                  centrality[path] += 1
+                  centrality[mod] += 1
               elif isinstance(node, ast.ClassDef):
                   class_map[path].append(node.name)
               elif isinstance(node, ast.FunctionDef):
@@ -224,30 +71,25 @@ steps:
               elif isinstance(node, ast.AsyncFunctionDef):
                   func_map[path].append(node.name)
               elif isinstance(node, ast.Call):
-                  name = None
+                  call_name = None
                   if isinstance(node.func, ast.Name):
-                      name = node.func.id
+                      call_name = node.func.id
                   elif isinstance(node.func, ast.Attribute):
-                      name = node.func.attr
-                  if name:
-                      calls_map[path].append(name)
-
-      centrality = Counter()
-      for src, dst in dependency_edges:
-          centrality[src] += 1
-          centrality[dst] += 1
+                      call_name = node.func.attr
+                  if call_name:
+                      calls_map[path].append(call_name)
 
       ranking = [{"node": node, "score": score} for node, score in centrality.most_common()]
 
       summary = {
           "python_files": sorted(py_files),
-          "imports_map": {k: v for k, v in sorted(imports_map.items())},
-          "calls_map": {k: v for k, v in sorted(calls_map.items())},
-          "class_map": {k: v for k, v in sorted(class_map.items())},
-          "func_map": {k: v for k, v in sorted(func_map.items())},
+          "imports_map": dict(sorted(imports_map.items())),
+          "calls_map": dict(sorted(calls_map.items())),
+          "class_map": dict(sorted(class_map.items())),
+          "func_map": dict(sorted(func_map.items())),
           "dependency_edges": dependency_edges,
           "centrality_ranking": ranking,
-          "cycles": cycles_hint,
+          "cycles": [],
       }
 
       with open("artifacts/autopsy_summary.json", "w", encoding="utf-8") as f:
@@ -256,7 +98,7 @@ steps:
       with open("artifacts/dependency_edges.csv", "w", encoding="utf-8") as f:
           f.write("source,target\n")
           for src, dst in dependency_edges:
-              f.write(f"\"{src}\",\"{dst}\"\n")
+              f.write(f"\"{src}\",\"{str(dst)}\"\n")
 
       with open("artifacts/centrality_ranking.txt", "w", encoding="utf-8") as f:
           for row in ranking:
@@ -265,25 +107,26 @@ steps:
       with open("artifacts/repo_graph.dot", "w", encoding="utf-8") as f:
           f.write("digraph repo {\n")
           for src, dst in dependency_edges:
-              safe_src = src.replace('"', "'")
-              safe_dst = str(dst).replace('"', "'")
-              f.write(f"  \"{safe_src}\" -> \"{safe_dst}\";\n")
+              s = src.replace('"', "'")
+              d = str(dst).replace('"', "'")
+              f.write(f"  \"{s}\" -> \"{d}\";\n")
           f.write("}\n")
 
-      html = [
-          "<html><head><meta charset='utf-8'><title>Repo Forensics</title></head><body>",
-          "<h1>Repo Forensics</h1>",
+      html_lines = [
+          "<html><head><meta charset='utf-8'><title>Repo Autopsy</title></head><body>",
+          "<h1>Repo Autopsy</h1>",
           "<h2>Top central nodes</h2><pre>",
       ]
       for row in ranking[:100]:
-          html.append(f"{row['score']:>5}  {row['node']}")
-      html.append("</pre><h2>Python files</h2><pre>")
-      for p in sorted(py_files):
-          html.append(p)
-      html.append("</pre></body></html>")
+          html_lines.append(f"{row['score']:>5}  {row['node']}")
+      html_lines.append("</pre>")
+      html_lines.append("<h2>Python files</h2><pre>")
+      for path in sorted(py_files):
+          html_lines.append(path)
+      html_lines.append("</pre></body></html>")
 
       with open("artifacts/repo_graph.html", "w", encoding="utf-8") as f:
-          f.write("\n".join(html))
+          f.write("\n".join(html_lines))
 
       print("[OK] artifacts/autopsy_summary.json")
       print("[OK] artifacts/dependency_edges.csv")
@@ -295,14 +138,13 @@ steps:
   - name: Show artifacts list
     run: |
       echo "==============================="
-      echo "FORENSICS ARTIFACTS"
+      echo "AUTOPSY ARTIFACTS"
       echo "==============================="
       ls -la artifacts
 
-  - name: Upload repo forensics artifacts
+  - name: Upload repo autopsy artifacts
     uses: actions/upload-artifact@v4
     with:
-      name: repo-forensics
+      name: repo-autopsy
       if-no-files-found: error
       path: artifacts/*
-
