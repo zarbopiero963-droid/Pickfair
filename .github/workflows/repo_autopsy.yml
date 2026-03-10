@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -23,7 +22,14 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
+          sudo apt-get install -y \
+            xvfb \
+            libx11-xcb1 \
+            libxrender1 \
+            libxext6 \
+            libx11-6 \
+            libgl1 \
+            graphviz
 
       - name: Install Python dependencies
         run: |
@@ -37,17 +43,29 @@ jobs:
 
       - name: Static Analysis (RUFF)
         run: |
-          echo "STATIC ANALYSIS"
+          echo "==============================="
+          echo "STATIC ANALYSIS START"
+          echo "==============================="
           ruff check .
+          echo "==============================="
+          echo "STATIC ANALYSIS OK"
+          echo "==============================="
 
       - name: Type Checking (MYPY)
         run: |
-          echo "TYPE CHECK"
+          echo "==============================="
+          echo "TYPE CHECK START"
+          echo "==============================="
           mypy . --ignore-missing-imports
+          echo "==============================="
+          echo "TYPE CHECK OK"
+          echo "==============================="
 
-      - name: Run tests
+      - name: Run tests with strict coverage
         run: |
-          echo "RUNNING TESTS"
+          echo "==============================="
+          echo "STARTING PYTEST EXECUTION"
+          echo "==============================="
 
           xvfb-run -a pytest \
             -vv \
@@ -59,15 +77,61 @@ jobs:
             --cov-report=json \
             --cov-fail-under=90
 
-      - name: Coverage Gate
+          echo "==============================="
+          echo "PYTEST COMPLETED"
+          echo "==============================="
+
+      - name: Print coverage debug
+        if: always()
         run: |
+          echo "==============================="
+          echo "COVERAGE DEBUG"
+          echo "==============================="
+          ls -la
+          if [ -f coverage.json ]; then
+            python - <<'PY'
+import json
+from pathlib import Path
+p = Path("coverage.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+print("coverage.json trovato")
+print("numero file nel report:", len(data.get("files", {})))
+for i, k in enumerate(sorted(data.get("files", {}).keys())[:30], start=1):
+    print(f"{i:02d}. {k}")
+PY
+          else
+            echo "coverage.json NON trovato"
+            exit 1
+          fi
+
+      - name: Enforce 100% per critical files
+        run: |
+          echo "==============================="
+          echo "CRITICAL COVERAGE GATE"
+          echo "==============================="
           python .github/scripts/check_per_file_coverage.py
 
-      - name: Repo Autopsy Report
+      - name: Repo Autopsy Report + Graphs
         run: |
+          echo "==============================="
+          echo "REPO AUTOPSY START"
+          echo "==============================="
           python .github/scripts/repo_autopsy.py
+          echo "==============================="
+          echo "REPO AUTOPSY END"
+          echo "==============================="
 
-      - name: Upload reports
+      - name: Mutation Testing
+        run: |
+          echo "==============================="
+          echo "MUTATION TESTING"
+          echo "==============================="
+          mutmut run || true
+          echo "==============================="
+          echo "MUTATION TESTING FINISHED"
+          echo "==============================="
+
+      - name: Upload reports and graphs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -76,3 +140,8 @@ jobs:
             coverage.xml
             coverage.json
             repo_autopsy_report.json
+            repo_file_graph.dot
+            repo_call_graph.dot
+            repo_file_graph.svg
+            repo_call_graph.svg
+            .mutmut-cache
