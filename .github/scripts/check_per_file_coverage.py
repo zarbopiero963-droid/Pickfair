@@ -10,7 +10,10 @@ CRITICAL_FILES = {
     "controllers/dutching_controller.py",
 }
 
+
 def main() -> int:
+    print("=== COVERAGE GATE START ===")
+
     if not COVERAGE_FILE.exists():
         print("❌ ERRORE CRITICO: coverage.json non trovato.")
         return 1
@@ -26,13 +29,24 @@ def main() -> int:
     failed = []
     seen_critical = set()
 
+    print("\nAnalisi file critici...\n")
+
     for normalized_name, meta in indexed.items():
         for critical in CRITICAL_FILES:
             if normalized_name.endswith(critical):
                 seen_critical.add(critical)
                 pct = float(meta.get("summary", {}).get("percent_covered", 0.0))
+
+                print(f"FILE: {normalized_name}")
+                print(f"Coverage: {pct:.2f}%")
+
                 if pct < 100.0:
+                    print("❌ SOTTO 100%")
                     failed.append((normalized_name, pct))
+                else:
+                    print("✅ OK")
+
+                print("")
 
     missing = sorted(CRITICAL_FILES - seen_critical)
     if missing:
@@ -48,7 +62,9 @@ def main() -> int:
         return 1
 
     print("✅ GATE SUPERATO: tutti i file critici sono al 100% di coverage.")
+    print("=== COVERAGE GATE END ===")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
