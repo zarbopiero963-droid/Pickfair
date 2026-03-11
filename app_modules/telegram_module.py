@@ -8,31 +8,193 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramModule:
+    def _safe_refresh_telegram_signals_tree(self):
+        try:
+            if hasattr(self, "_refresh_telegram_signals_tree"):
+                self._refresh_telegram_signals_tree()
+        except Exception as e:
+            logger.exception(
+                "[TelegramModule] Errore refresh telegram signals tree: %s", e
+            )
+
+    def _safe_refresh_telegram_chats_tree(self):
+        try:
+            if hasattr(self, "_refresh_telegram_chats_tree"):
+                self._refresh_telegram_chats_tree()
+        except Exception as e:
+            logger.exception(
+                "[TelegramModule] Errore refresh telegram chats tree: %s", e
+            )
+
+    def _safe_db_save_received_signal(
+        self,
+        selection,
+        action,
+        price,
+        stake,
+        status,
+    ):
+        if not hasattr(self, "db") or self.db is None:
+            return
+        if not hasattr(self.db, "save_received_signal"):
+            return
+
+        try:
+            self.db.save_received_signal(
+                selection=selection,
+                action=action,
+                price=float(price or 0.0),
+                stake=float(stake or 0.0),
+                status=str(status or ""),
+            )
+        except Exception as e:
+            logger.exception(
+                "[TelegramModule] Errore save_received_signal status=%s: %s",
+                status,
+                e,
+            )
+
+    def _normalize_signal_action(self, signal):
+        action = (
+            signal.get("action")
+            or signal.get("side")
+            or signal.get("bet_type")
+            or "BACK"
+        )
+        action = str(action).upper().strip()
+        if action not in ("BACK", "LAY"):
+            action = "BACK"
+        return action
+
+    def _safe_parse_price(self, signal):
+        raw = signal.get("price", signal.get("odds", 2.0))
+        try:
+            return float(raw)
+        except Exception:
+            return None
+
+    def _safe_parse_stake(self):
+        try:
+            raw = self.tg_auto_stake_var.get()
+            if isinstance(raw, str):
+                raw = raw.replace(",", ".").strip()
+            stake = float(raw)
+            if stake <= 0:
+                return 1.0
+            return stake
+        except Exception:
+            return 1.0
+
+    def _safe_parse_selection_id(self, signal):
+        raw = signal.get("selection_id", signal.get("selectionId"))
+        try:
+            if raw in (None, ""):
+                return None
+            return int(raw)
+        except Exception:
+            return None
+
+    def _safe_parse_market_id(self, signal):
+        raw = signal.get("market_id", signal.get("marketId"))
+        if raw in (None, ""):
+            return None
+        try:
+            return str(raw).strip()
+        except Exception:
+            return None
+
+    def _build_oms_payload_from_signal(self, signal, action, original_price, stake):
+        selection_id = self._safe_parse_selection_id(signal)
+        market_id = self._safe_parse_market_id(signal)
+        selection_name = str(
+            signal.get("selection")
+            or signal.get("runner_name")
+            or signal.get("runnerName")
+            or selection_id
+            or "Unknown"
+        )
+
+        if selection_id is None or not market_id:
+            return None
+
+        forced_price = 1.01 if action == "BACK" else 1000.0
+
+        event_name = (
+            signal.get("match")
+            or signal.get("event")
+            or signal.get("event_name")
+            or "Segnale Telegram"
+        )
+        market_name = (
+            signal.get("market")
+            or signal.get("market_name")
+            or "Scommessa da Segnale"
+        )
+        market_type = signal.get("market_type") or "MATCH_ODDS"
+
+        return {
+            "market_id": market_id,
+            "market_type": str(market_type),
+            "event_name": str(event_name),
+            "market_name": str(market_name),
+            "selection_id": int(selection_id),
+            "runner_name": selection_name,
+            "bet_type": action,
+            "price": float(forced_price),
+            "stake": float(stake),
+            "simulation_mode": bool(getattr(self, "simulation_mode", False)),
+            "source": "TELEGRAM",
+            "master_price": float(original_price),
+            "forced_execution": True,
+        }
+
     def _start_telegram_listener(self):
         """Start the Telegram listener background thread (decoupled with EventBus)."""
-        settings = self.db.get_telegram_settings()
-        if not settings or not settings.get("api_id") or not settings.get("api_hash"):
+        try:
+            settings = self.db.get_telegram_settings() if hasattr(self, "db") else {}
+            settings = settings or {}
+        except Exception as e:
+            logger.exception(
+                "[TelegramModule] Errore lettura telegram settings: %s", e
+            )
+            settings = {}
+
+        if not settings.get("api_id") or not settings.get("api_hash"):
             messagebox.showwarning(
                 "Attenzione",
                 "Configura e salva le credenziali Telegram prima di avviare il listener.",
             )
             return
 
-        if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
+        existing_listener = getattr(self, "telegram_listener", None)
+        if existing_listener and getattr(existing_listener, "running", False):
             messagebox.showinfo("Info", "Listener già in esecuzione")
             return
 
         try:
             from telegram_listener import TelegramListener
 
-            self.telegram_listener = TelegramListener(
-                api_id=int(settings["api_id"]),
-                api_hash=settings["api_hash"].strip(),
-                session_string=settings.get("session_string"),
+            api_id = int(settings["api_id"])
+            api_hash = str(settings["api_hash"]).strip()
+            session_string = settings.get("session_string")
+
+            listener = TelegramListener(
+                api_id=api_id,
+                api_hash=api_hash,
+                session_string=session_string,
             )
 
             monitored_chats = []
-            for chat in self.db.get_telegram_chats():
+            try:
+                chats = self.db.get_telegram_chats() if hasattr(self, "db") else []
+                chats = chats or []
+            except Exception as e:
+                logger.exception(
+                    "[TelegramModule] Errore lettura telegram chats: %s", e
+                )
+                chats = []
+
+            for chat in chats:
                 if not chat.get("is_active", True):
                     continue
                 try:
@@ -50,10 +212,10 @@ class TelegramModule:
                 )
                 return
 
-            self.telegram_listener.set_monitored_chats(monitored_chats)
-            self.telegram_listener.set_database(self.db)
+            listener.set_monitored_chats(monitored_chats)
+            listener.set_database(self.db)
 
-            self.telegram_listener.set_callbacks(
+            listener.set_callbacks(
                 on_signal=lambda sig: self.bus.publish("TELEGRAM_SIGNAL", sig),
                 on_message=None,
                 on_status=lambda st, msg: self.bus.publish(
@@ -62,6 +224,7 @@ class TelegramModule:
                 ),
             )
 
+            self.telegram_listener = listener
             self.telegram_listener.start()
             self.telegram_status = "LISTENING"
 
@@ -74,14 +237,20 @@ class TelegramModule:
             messagebox.showinfo("Successo", "Telegram Listener avviato")
 
         except Exception as e:
+            logger.exception("[TelegramModule] Impossibile avviare listener: %s", e)
             messagebox.showerror(
                 "Errore",
                 f"Impossibile avviare listener: {str(e)}",
             )
 
     def _stop_telegram_listener(self):
-        if getattr(self, "telegram_listener", None) and self.telegram_listener.running:
-            self.telegram_listener.stop()
+        listener = getattr(self, "telegram_listener", None)
+        if listener and getattr(listener, "running", False):
+            try:
+                listener.stop()
+            except Exception as e:
+                logger.exception("[TelegramModule] Errore stop listener: %s", e)
+
             self.telegram_status = "STOPPED"
 
             if hasattr(self, "tg_status_label") and self.tg_status_label.winfo_exists():
@@ -99,48 +268,51 @@ class TelegramModule:
         - BACK -> 1.01
         - LAY  -> 1000.0
         """
+
         def safe_process_signal():
-            action = str(signal.get("action", "BACK")).upper().strip()
-            selection_id = signal.get("selection_id")
-            market_id = signal.get("market_id")
-            selection_name = signal.get("selection", str(selection_id))
+            signal = signal or {}
 
-            try:
-                original_price = float(signal.get("price", 2.0))
-            except Exception:
+            action = self._normalize_signal_action(signal)
+            selection_id = self._safe_parse_selection_id(signal)
+            market_id = self._safe_parse_market_id(signal)
+            selection_name = str(
+                signal.get("selection")
+                or signal.get("runner_name")
+                or signal.get("runnerName")
+                or selection_id
+                or "Unknown"
+            )
+
+            original_price = self._safe_parse_price(signal)
+            stake = self._safe_parse_stake()
+
+            if original_price is None:
                 logger.error("[TelegramModule] Segnale ignorato: price non valido.")
-                if hasattr(self.db, "save_received_signal"):
-                    self.db.save_received_signal(
-                        selection=selection_name,
-                        action=action,
-                        price=0.0,
-                        stake=0.0,
-                        status="ERROR",
-                    )
-                self._refresh_telegram_signals_tree()
-                return
-
-            try:
-                stake = float(self.tg_auto_stake_var.get().replace(",", "."))
-            except Exception:
-                stake = 1.0
-
-            if hasattr(self.db, "save_received_signal"):
-                self.db.save_received_signal(
+                self._safe_db_save_received_signal(
                     selection=selection_name,
                     action=action,
-                    price=original_price,
-                    stake=stake,
-                    status="RECEIVED",
+                    price=0.0,
+                    stake=0.0,
+                    status="ERROR",
                 )
-            self._refresh_telegram_signals_tree()
+                self._safe_refresh_telegram_signals_tree()
+                return
 
-            auto_bet_enabled = (
+            self._safe_db_save_received_signal(
+                selection=selection_name,
+                action=action,
+                price=original_price,
+                stake=stake,
+                status="RECEIVED",
+            )
+            self._safe_refresh_telegram_signals_tree()
+
+            auto_bet_enabled = bool(
                 hasattr(self, "tg_auto_bet_var")
                 and self.tg_auto_bet_var is not None
                 and self.tg_auto_bet_var.get()
             )
-            confirm_enabled = (
+            confirm_enabled = bool(
                 hasattr(self, "tg_confirm_var")
                 and self.tg_confirm_var is not None
                 and self.tg_confirm_var.get()
@@ -156,93 +328,88 @@ class TelegramModule:
                         f"Piazzare a MERCATO (miglior prezzo disponibile)?"
                     )
                     if not messagebox.askyesno("Nuovo Segnale Telegram", msg):
-                        if hasattr(self.db, "save_received_signal"):
-                            self.db.save_received_signal(
-                                selection=selection_name,
-                                action=action,
-                                price=original_price,
-                                stake=stake,
-                                status="IGNORED",
-                            )
-                        self._refresh_telegram_signals_tree()
-                        return
-                else:
-                    if hasattr(self.db, "save_received_signal"):
-                        self.db.save_received_signal(
+                        self._safe_db_save_received_signal(
                             selection=selection_name,
                             action=action,
                             price=original_price,
                             stake=stake,
                             status="IGNORED",
                         )
-                    self._refresh_telegram_signals_tree()
+                        self._safe_refresh_telegram_signals_tree()
+                        return
+                else:
+                    self._safe_db_save_received_signal(
+                        selection=selection_name,
+                        action=action,
+                        price=original_price,
+                        stake=stake,
+                        status="IGNORED",
+                    )
+                    self._safe_refresh_telegram_signals_tree()
                     return
 
-            if not selection_id or not market_id:
+            if selection_id is None or not market_id:
                 logger.error(
                     "[TelegramModule] Segnale ignorato: market_id o selection_id mancanti."
                 )
-                if hasattr(self.db, "save_received_signal"):
-                    self.db.save_received_signal(
-                        selection=selection_name,
-                        action=action,
-                        price=original_price,
-                        stake=stake,
-                        status="ERROR",
-                    )
-                self._refresh_telegram_signals_tree()
+                self._safe_db_save_received_signal(
+                    selection=selection_name,
+                    action=action,
+                    price=original_price,
+                    stake=stake,
+                    status="ERROR",
+                )
+                self._safe_refresh_telegram_signals_tree()
                 return
 
-            # Forced execution: market-style order
-            forced_price = 1.01 if action == "BACK" else 1000.0
+            payload = self._build_oms_payload_from_signal(
+                signal=signal,
+                action=action,
+                original_price=original_price,
+                stake=stake,
+            )
 
-            try:
-                payload = {
-                    "market_id": str(market_id),
-                    "market_type": signal.get("market_type", "MATCH_ODDS"),
-                    "event_name": signal.get("match", "Segnale Telegram"),
-                    "market_name": signal.get("market", "Scommessa da Segnale"),
-                    "selection_id": int(selection_id),
-                    "runner_name": selection_name,
-                    "bet_type": action,
-                    "price": forced_price,
-                    "stake": stake,
-                    "simulation_mode": getattr(self, "simulation_mode", False),
-                    "source": "TELEGRAM",
-                    "master_price": original_price,
-                    "forced_execution": True,
-                }
-            except Exception as e:
-                logger.error(
-                    "[TelegramModule] Segnale ignorato: payload invalido (%s)",
-                    e,
+            if not payload:
+                logger.error("[TelegramModule] Segnale ignorato: payload OMS nullo.")
+                self._safe_db_save_received_signal(
+                    selection=selection_name,
+                    action=action,
+                    price=original_price,
+                    stake=stake,
+                    status="ERROR",
                 )
-                if hasattr(self.db, "save_received_signal"):
-                    self.db.save_received_signal(
-                        selection=selection_name,
-                        action=action,
-                        price=original_price,
-                        stake=stake,
-                        status="ERROR",
-                    )
-                self._refresh_telegram_signals_tree()
+                self._safe_refresh_telegram_signals_tree()
                 return
 
             logger.info(
                 "[TelegramModule] Inoltro segnale all'OMS via RiskGate (MARKET ORDER): %s",
                 payload,
             )
-            self.bus.publish("REQ_QUICK_BET", payload)
 
-            if hasattr(self.db, "save_received_signal"):
-                self.db.save_received_signal(
+            try:
+                self.bus.publish("REQ_QUICK_BET", payload)
+            except Exception as e:
+                logger.exception(
+                    "[TelegramModule] Errore publish REQ_QUICK_BET: %s", e
+                )
+                self._safe_db_save_received_signal(
                     selection=selection_name,
                     action=action,
                     price=original_price,
                     stake=stake,
-                    status="SUBMITTED",
+                    status="ERROR",
                 )
-            self._refresh_telegram_signals_tree()
+                self._safe_refresh_telegram_signals_tree()
+                return
+
+            self._safe_db_save_received_signal(
+                selection=selection_name,
+                action=action,
+                price=original_price,
+                stake=stake,
+                status="SUBMITTED",
+            )
+            self._safe_refresh_telegram_signals_tree()
 
         if hasattr(self, "uiq") and self.uiq:
             self.uiq.post(safe_process_signal)
@@ -268,7 +435,11 @@ class TelegramModule:
 
         for chat in chats:
             state = "Sì" if chat.get("is_active") else "No"
-            title = chat.get("title") or chat.get("username") or str(chat.get("chat_id"))
+            title = (
+                chat.get("title")
+                or chat.get("username")
+                or str(chat.get("chat_id"))
+            )
             self.tg_chats_tree.insert(
                 "",
                 tk.END,
@@ -284,7 +455,7 @@ class TelegramModule:
         chats = self.db.get_telegram_chats()
         updated_chats = [c for c in chats if str(c["chat_id"]) not in selected]
         self.db.replace_telegram_chats(updated_chats)
-        self._refresh_telegram_chats_tree()
+        self._safe_refresh_telegram_chats_tree()
 
     def _add_selected_available_chats(self):
         selected = getattr(self, "tg_available_tree", None) and self.tg_available_tree.selection()
@@ -301,7 +472,7 @@ class TelegramModule:
                 is_active=True,
             )
 
-        self._refresh_telegram_chats_tree()
+        self._safe_refresh_telegram_chats_tree()
         messagebox.showinfo("Successo", "Chat aggiunte al monitoraggio.")
 
     def _refresh_rules_tree(self):
@@ -469,4 +640,3 @@ class TelegramModule:
                     values=(date_str, sel, action, price, stake, status),
                     tags=(tag,) if tag else (),
                 )
-
