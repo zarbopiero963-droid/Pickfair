@@ -3,97 +3,39 @@ name: Pickfair CI Pipeline
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
 
 jobs:
-  full_test_and_coverage_gate:
+
+  full_test_coverage_gate:
     name: Full Test & Coverage Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest pytest-cov
 
-      - name: Run full tests
-        run: |
-          xvfb-run -a pytest tests -x -vv
-
-  pickfair_test_suite:
-    name: Pickfair Test Suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
-
-      - name: Run suite
-        run: |
-          xvfb-run -a pytest tests -x -vv
-
-  repo_autopsy:
-    name: Repo Autopsy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Repo autopsy
-        run: |
-          echo "REPO AUTOPSY START"
-          find . -maxdepth 3 -type f | sort
-          echo "REPO AUTOPSY END"
-
-  repo_forensics:
-    name: Repo Forensics
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Repo forensics
-        run: |
-          echo "REPO FORENSICS START"
-          python - <<'PY'
-          import os
-          for root, _, files in os.walk("."):
-              for f in files:
-                  if f.endswith(".py"):
-                      print(os.path.join(root, f))
-          PY
-          echo "REPO FORENSICS END"
-
-  system_validation:
-    name: System Validation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
-
-      - name: Validate imports and smoke tests
+      - name: Import smoke
         run: |
           python - <<'PY'
           modules = [
@@ -107,156 +49,183 @@ jobs:
               "app_modules.telegram_module",
               "main",
           ]
-          for mod in modules:
-              __import__(mod)
-              print(f"[OK] {mod}")
+          for m in modules:
+              __import__(m)
+              print("[OK]", m)
           PY
+
+      - name: Run full tests
+        run: |
+          xvfb-run -a pytest tests \
+            -vv \
+            --maxfail=1 \
+            --durations=15 \
+            --cov=. \
+            --cov-report=term-missing
+
+  pickfair_test_suite:
+    name: Pickfair Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - run: |
+          xvfb-run -a pytest tests -x -vv
+
+  repo_autopsy:
+    name: Repo Autopsy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          python - <<'PY'
+          import os,ast
+          for root,_,files in os.walk("."):
+              if ".git" in root: continue
+              for f in files:
+                  if f.endswith(".py"):
+                      p=os.path.join(root,f)
+                      try:
+                          ast.parse(open(p).read())
+                          print("[OK]",p)
+                      except Exception as e:
+                          print("[ERR]",p,e)
+          PY
+
+  repo_forensics:
+    name: Repo Forensics
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          python - <<'PY'
+          import os,ast
+          for root,_,files in os.walk("."):
+              if ".git" in root: continue
+              for f in files:
+                  if f.endswith(".py"):
+                      path=os.path.join(root,f)
+                      try:
+                          tree=ast.parse(open(path).read())
+                          funcs=[n.name for n in ast.walk(tree) if isinstance(n,ast.FunctionDef)]
+                          print(path,len(funcs),"functions")
+                      except: pass
+          PY
+
+  system_validation:
+    name: System Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: System tests
+        run: |
+          if [ -f tests/test_system_simulation.py ]; then
+            pytest tests/test_system_simulation.py -vv
+          fi
+
+          if [ -f tests/test_system_expanded_validation.py ]; then
+            pytest tests/test_system_expanded_validation.py -vv
+          fi
 
   unified_final_log:
     name: Unified Final Log
     runs-on: ubuntu-latest
+    if: always()
     needs:
-      - full_test_and_coverage_gate
+      - full_test_coverage_gate
       - pickfair_test_suite
       - repo_autopsy
       - repo_forensics
       - system_validation
-    if: always()
+
     steps:
-      - name: Merge all job logs into one final output
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
+
+      - name: Install tools
         run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          import time
-          import urllib.request
-          import urllib.error
+          sudo apt-get update
+          sudo apt-get install -y unzip jq
 
-          repo = os.environ["REPO"]
-          run_id = os.environ["RUN_ID"]
-          token = os.environ["GH_TOKEN"]
+      - name: Download logs archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/logs \
+            -o logs.zip
 
-          owner, repo_name = repo.split("/", 1)
+      - name: Extract logs
+        run: |
+          unzip logs.zip -d logs
 
-          headers = {
-              "Accept": "application/vnd.github+json",
-              "Authorization": f"Bearer {token}",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "pickfair-unified-log",
-          }
+      - name: Merge logs
+        run: |
+          echo "##############################################################################################################"
+          echo "PICKFAIR UNIFIED FINAL LOG"
+          echo "##############################################################################################################"
+          echo
+          echo "Repository : ${{ github.repository }}"
+          echo "Run ID     : ${{ github.run_id }}"
+          echo
+          echo "=============================================================================================================="
+          echo "FINAL JOB SUMMARY"
+          echo "=============================================================================================================="
+          echo "Full Test & Coverage Gate : ${{ needs.full_test_coverage_gate.result }}"
+          echo "Pickfair Test Suite       : ${{ needs.pickfair_test_suite.result }}"
+          echo "Repo Autopsy              : ${{ needs.repo_autopsy.result }}"
+          echo "Repo Forensics            : ${{ needs.repo_forensics.result }}"
+          echo "System Validation         : ${{ needs.system_validation.result }}"
+          echo
+          echo "=============================================================================================================="
+          echo "MERGED JOB LOGS"
+          echo "=============================================================================================================="
 
-          def api_json(url: str):
-              req = urllib.request.Request(url, headers=headers)
-              with urllib.request.urlopen(req, timeout=60) as resp:
-                  return json.loads(resp.read().decode("utf-8"))
+          for f in logs/*.txt; do
+            echo
+            echo "##############################################################################################################"
+            echo "JOB LOG FILE: $f"
+            echo "##############################################################################################################"
+            cat "$f"
+            echo
+          done
 
-          def api_text_follow_302(url: str):
-              req = urllib.request.Request(url, headers=headers, method="GET")
-              opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
-              with opener.open(req, timeout=120) as resp:
-                  raw = resp.read()
-                  try:
-                      return raw.decode("utf-8", errors="replace")
-                  except Exception:
-                      return raw.decode("latin-1", errors="replace")
-
-          jobs_url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/runs/{run_id}/jobs?per_page=100"
-          data = api_json(jobs_url)
-          jobs = data.get("jobs", [])
-
-          wanted_order = [
-              "Full Test & Coverage Gate",
-              "Pickfair Test Suite",
-              "Repo Autopsy",
-              "Repo Forensics",
-              "System Validation",
-          ]
-
-          jobs_by_name = {job["name"]: job for job in jobs}
-
-          print("#" * 110)
-          print("PICKFAIR UNIFIED FINAL LOG")
-          print("#" * 110)
-          print(f"Repository : {repo}")
-          print(f"Run ID     : {run_id}")
-          print()
-
-          print("=" * 110)
-          print("FINAL JOB SUMMARY")
-          print("=" * 110)
-
-          overall_failed = False
-
-          for name in wanted_order:
-              job = jobs_by_name.get(name)
-              if not job:
-                  print(f"JOB        : {name}")
-                  print("STATUS     : NOT FOUND")
-                  print("-" * 110)
-                  overall_failed = True
-                  continue
-
-              conclusion = job.get("conclusion")
-              if conclusion not in ("success", "skipped"):
-                  overall_failed = True
-
-              print(f"JOB        : {job.get('name')}")
-              print(f"STATUS     : {job.get('status')}")
-              print(f"CONCLUSION : {conclusion}")
-              print(f"STARTED    : {job.get('started_at')}")
-              print(f"COMPLETED  : {job.get('completed_at')}")
-              print("-" * 110)
-
-          print()
-          print("=" * 110)
-          print("FULL MERGED RAW LOGS")
-          print("=" * 110)
-          print()
-
-          for name in wanted_order:
-              job = jobs_by_name.get(name)
-              print("#" * 110)
-              print(f"JOB: {name}")
-              print("#" * 110)
-
-              if not job:
-                  print("Job not found.\n")
-                  continue
-
-              print(f"JOB ID     : {job.get('id')}")
-              print(f"CONCLUSION : {job.get('conclusion')}")
-              print()
-
-              job_id = job["id"]
-              logs_url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/jobs/{job_id}/logs"
-
-              try:
-                  text = api_text_follow_302(logs_url)
-                  print(text.rstrip())
-              except urllib.error.HTTPError as e:
-                  overall_failed = True
-                  print(f"Unable to fetch job logs: HTTP {e.code} {e.reason}")
-                  try:
-                      body = e.read().decode("utf-8", errors="replace")
-                      print(body)
-                  except Exception:
-                      pass
-              except Exception as e:
-                  overall_failed = True
-                  print(f"Unable to fetch job logs: {e}")
-
-              print()
-              time.sleep(1)
-
-          print("=" * 110)
-          print("END OF UNIFIED FINAL LOG")
-          print("=" * 110)
-
-          if overall_failed:
-              sys.exit(1)
-          PY
+          echo
+          echo "=============================================================================================================="
+          echo "END OF UNIFIED FINAL LOG"
+          echo "=============================================================================================================="
