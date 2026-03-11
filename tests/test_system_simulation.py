@@ -136,12 +136,17 @@ class DummyClient:
             raise RuntimeError("network down")
         if self.mode == "db_locked":
             raise RuntimeError("database is locked")
+
+        # FIX: per il path micro-stake lo stub da 2.0 deve risultare NON matchato,
+        # altrimenti TradingEngine abortisce correttamente il replace flow.
+        size_matched = 0.0 if float(size) == 2.0 else float(size)
+
         return {
             "status": "SUCCESS",
             "instructionReports": [
                 {
                     "betId": f"BET-{customer_ref or 'X'}",
-                    "sizeMatched": float(size),
+                    "sizeMatched": size_matched,
                 }
             ],
         }
@@ -166,7 +171,18 @@ class DummyClient:
         return {"status": "SUCCESS", "instructionReports": []}
 
     def replace_orders(self, market_id=None, instructions=None):
-        return {"status": "SUCCESS", "instructionReports": []}
+        bet_id = ""
+        if instructions:
+            bet_id = instructions[0].get("betId", "")
+        return {
+            "status": "SUCCESS",
+            "instructionReports": [
+                {
+                    "betId": bet_id or "BET-REPLACED",
+                    "sizeMatched": 0.5,
+                }
+            ],
+        }
 
     def get_current_orders(self, *args, **kwargs):
         return {"currentOrders": [], "matched": [], "unmatched": []}
