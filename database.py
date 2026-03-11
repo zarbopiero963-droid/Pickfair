@@ -412,8 +412,7 @@ def save_credentials(
         username=username or "",
         app_key=app_key or "",
         certificate=certificate or "",
-        private_key=private_key or "",
-    )
+        private_key=private_key or "",)
 
 
 def save_password(self, password: Optional[str]):
