@@ -605,16 +605,13 @@ class TradingEngine:
 
                 market_id = payload["market_id"]
                 selection_id = payload["selection_id"]
-                bet_type = payload["bet_type"]
+                bet_type = str(payload["bet_type"]).upper()
                 price = float(payload["price"])
                 stake = float(payload["stake"])
-                sim_mode = bool(payload.get("simulation_mode", False))
 
-                if sim_mode:
+                if bool(payload.get("simulation_mode", False)):
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(
-                        sim_settings.get("virtual_balance", 0.0) or 0.0
-                    )
+                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
                     liability = stake * (price - 1) if bet_type == "LAY" else stake
 
                     if v_balance >= liability:
@@ -631,9 +628,15 @@ class TradingEngine:
                             status="MATCHED",
                         )
                         self.db.increment_simulation_bet_count(new_bal)
+
                         self.bus.publish(
                             "QUICK_BET_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
                                 "runner_name": payload.get("runner_name", ""),
                                 "price": price,
                                 "stake": stake,
@@ -641,25 +644,18 @@ class TradingEngine:
                                 "status": "MATCHED",
                                 "new_balance": new_bal,
                                 "sim": True,
+                                "micro": False,
                             },
                         )
                     else:
-                        self.bus.publish(
-                            "QUICK_BET_FAILED",
-                            "Saldo virtuale insufficiente",
-                        )
+                        self.bus.publish("QUICK_BET_FAILED", "Saldo virtuale insufficiente")
                     return
 
                 client = self.client_getter()
                 if not client:
                     raise Exception("Client non connesso")
 
-                self.db.create_pending_saga(
-                    customer_ref,
-                    market_id,
-                    selection_id,
-                    payload,
-                )
+                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
 
                 try:
                     if self._needs_micro_stake(stake):
@@ -707,9 +703,15 @@ class TradingEngine:
                             potential_profit=0.0,
                             status=status,
                         )
+
                         self.bus.publish(
                             "QUICK_BET_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
                                 "runner_name": payload.get("runner_name", ""),
                                 "price": price,
                                 "stake": stake,
@@ -772,15 +774,22 @@ class TradingEngine:
                             potential_profit=0.0,
                             status=status,
                         )
+
                         self.bus.publish(
                             "QUICK_BET_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
                                 "runner_name": payload.get("runner_name", ""),
                                 "price": price,
                                 "stake": stake,
                                 "matched": matched,
                                 "status": status,
                                 "sim": False,
+                                "micro": self._needs_micro_stake(stake),
                                 "recovered": True,
                             },
                         )
@@ -803,18 +812,15 @@ class TradingEngine:
                             potential_profit=0.0,
                             status="FAILED",
                         )
+
                         if isinstance(e, PermanentError):
                             self.bus.publish(
                                 "SAFE_MODE_TRIGGER",
-                                {
-                                    "reason": "Circuit Breaker",
-                                    "details": str(e),
-                                },
+                                {"reason": "Circuit Breaker", "details": str(e)},
                             )
-                        self.bus.publish(
-                            "QUICK_BET_FAILED",
-                            f"Errore Rete: {str(e)}",
-                        )
+
+                        self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+
             finally:
                 self._release_lock(customer_ref)
 
@@ -841,15 +847,11 @@ class TradingEngine:
                 sim_mode = bool(payload.get("simulation_mode", False))
                 total_stake = float(payload["total_stake"])
                 use_best_price = bool(payload.get("use_best_price", False))
-                requested_size = sum(
-                    float(r.get("stake", 0) or 0) for r in results
-                )
+                requested_size = sum(float(r.get("stake", 0) or 0) for r in results)
 
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(
-                        sim_settings.get("virtual_balance", 0.0) or 0.0
-                    )
+                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
 
                     total_risk = (
                         sum(
@@ -966,9 +968,7 @@ class TradingEngine:
                             customer_ref=customer_ref,
                         )
                         normal_status = self._response_status(normal_result)
-                        normal_reports = self._response_instruction_reports(
-                            normal_result
-                        )
+                        normal_reports = self._response_instruction_reports(normal_result)
 
                     all_reports = normal_reports + micro_reports
 
@@ -1226,4 +1226,3 @@ class TradingEngine:
                 self._release_lock(customer_ref)
 
         self.executor.submit("engine_cashout", task)
-
