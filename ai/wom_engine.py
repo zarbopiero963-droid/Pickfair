@@ -2,18 +2,23 @@
 WoM Engine - Weight of Money Time-Window Analysis
 Analisi storica dei tick per calcolare la pressione di mercato.
 
-v3.65 - Enterprise WoM Analysis
+Versione blindata:
+- input sporchi tollerati
+- lock coerenti sullo stato condiviso
+- snapshot atomici per letture/calcoli
+- nessun side effect nei metodi di analisi
+- storico limitato e controllato
 """
 
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 WOM_WINDOW_SIZE = 50
 WOM_TIME_WINDOW_SEC = 30.0
-WOM_TIME_WINDOWS = [5.0, 15.0, 30.0, 60.0]  # Multiple time windows for analysis
+WOM_TIME_WINDOWS = [5.0, 15.0, 30.0, 60.0]
 EDGE_THRESHOLDS = {
     "strong_back": 0.65,
     "back": 0.55,
@@ -22,7 +27,7 @@ EDGE_THRESHOLDS = {
     "lay": 0.45,
     "strong_lay": 0.35,
 }
-DELTA_THRESHOLD = 0.05  # Minimum delta for trend significance
+DELTA_THRESHOLD = 0.05
 
 
 @dataclass
@@ -49,15 +54,13 @@ class WoMResult:
     confidence: float
     tick_count: int
     time_span: float
-
-    # v3.67 - Time-Window Analysis
     wom_5s: float = 0.5
     wom_15s: float = 0.5
     wom_30s: float = 0.5
     wom_60s: float = 0.5
-    delta_pressure: float = 0.0  # Change in pressure over time
-    momentum: float = 0.0  # Rate of change
-    volatility: float = 0.0  # Price volatility indicator
+    delta_pressure: float = 0.0
+    momentum: float = 0.0
+    volatility: float = 0.0
 
 
 @dataclass
@@ -65,32 +68,35 @@ class SelectionWoMHistory:
     """Storage storico tick per una selezione."""
 
     selection_id: int
-    ticks: deque = field(default_factory=lambda: deque(maxlen=WOM_WINDOW_SIZE))
+    maxlen: int = WOM_WINDOW_SIZE
+    ticks: Deque[TickData] = field(init=False)
+
+    def __post_init__(self):
+        self.ticks = deque(maxlen=max(2, int(self.maxlen or WOM_WINDOW_SIZE)))
 
     def add_tick(self, tick: TickData):
-        """Aggiunge tick alla storia."""
         self.ticks.append(tick)
 
+    def get_recent_from_snapshot(
+        self,
+        ticks_snapshot: List[TickData],
+        max_age_sec: float,
+        now: Optional[float] = None,
+    ) -> List[TickData]:
+        ref_now = time.time() if now is None else float(now)
+        max_age = max(0.1, float(max_age_sec or WOM_TIME_WINDOW_SEC))
+        return [t for t in ticks_snapshot if ref_now - t.timestamp <= max_age]
+
     def get_recent(self, max_age_sec: float = WOM_TIME_WINDOW_SEC) -> List[TickData]:
-        """Ritorna tick entro la finestra temporale."""
-        now = time.time()
-        return [t for t in self.ticks if now - t.timestamp <= max_age_sec]
+        return self.get_recent_from_snapshot(list(self.ticks), max_age_sec)
 
     def clear(self):
-        """Pulisce la storia."""
         self.ticks.clear()
 
 
 class WoMEngine:
     """
     Engine per analisi Weight of Money su finestra temporale.
-
-    Il WoM misura la pressione di acquisto/vendita:
-    - WoM > 0.55: Pressione BACK (compratori)
-    - WoM < 0.45: Pressione LAY (venditori)
-    - 0.45-0.55: Neutrale
-
-    L'edge score combina WoM con trend per suggerire la direzione.
     """
 
     def __init__(
@@ -98,10 +104,82 @@ class WoMEngine:
         window_size: int = WOM_WINDOW_SIZE,
         time_window: float = WOM_TIME_WINDOW_SEC,
     ):
-        self._window_size = window_size
-        self._time_window = time_window
+        self._window_size = max(2, int(window_size or WOM_WINDOW_SIZE))
+        self._time_window = max(1.0, float(time_window or WOM_TIME_WINDOW_SEC))
         self._histories: Dict[int, SelectionWoMHistory] = {}
         self._lock = threading.RLock()
+
+    # =========================================================
+    # SAFE PARSERS
+    # =========================================================
+
+    def _safe_int(self, value, default: Optional[int] = None) -> Optional[int]:
+        try:
+            if value in (None, ""):
+                return default
+            return int(value)
+        except Exception:
+            return default
+
+    def _safe_float(self, value, default: float = 0.0) -> float:
+        try:
+            if value in (None, ""):
+                return float(default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _clamp(self, value: float, low: float, high: float) -> float:
+        return max(low, min(high, float(value)))
+
+    # =========================================================
+    # INTERNAL STATE HELPERS
+    # =========================================================
+
+    def _get_or_create_history(self, selection_id: int) -> SelectionWoMHistory:
+        history = self._histories.get(selection_id)
+        if history is None:
+            history = SelectionWoMHistory(
+                selection_id=selection_id,
+                maxlen=self._window_size,
+            )
+            self._histories[selection_id] = history
+        return history
+
+    def _get_ticks_snapshot(
+        self,
+        selection_id: int,
+        max_age_sec: Optional[float] = None,
+    ) -> List[TickData]:
+        with self._lock:
+            history = self._histories.get(selection_id)
+            if history is None:
+                return []
+            ticks_snapshot = list(history.ticks)
+
+        if max_age_sec is None:
+            return ticks_snapshot
+
+        now = time.time()
+        max_age = max(0.1, self._safe_float(max_age_sec, self._time_window))
+        return [t for t in ticks_snapshot if now - t.timestamp <= max_age]
+
+    def _calculate_wom_from_ticks(self, ticks: List[TickData]) -> Optional[float]:
+        if len(ticks) < 2:
+            return None
+
+        total_back_vol = sum(max(0.0, self._safe_float(t.back_volume, 0.0)) for t in ticks)
+        total_lay_vol = sum(max(0.0, self._safe_float(t.lay_volume, 0.0)) for t in ticks)
+        total_vol = total_back_vol + total_lay_vol
+
+        if total_vol <= 0:
+            return None
+
+        return total_back_vol / total_vol
+
+    # =========================================================
+    # PUBLIC WRITE API
+    # =========================================================
 
     def record_tick(
         self,
@@ -111,130 +189,104 @@ class WoMEngine:
         lay_price: float,
         lay_volume: float,
     ):
-        """
-        Registra un nuovo tick per una selezione.
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
+            return
 
-        Args:
-            selection_id: ID runner
-            back_price: Miglior prezzo BACK
-            back_volume: Volume disponibile BACK
-            lay_price: Miglior prezzo LAY
-            lay_volume: Volume disponibile LAY
-        """
+        tick = TickData(
+            timestamp=time.time(),
+            selection_id=sel_id,
+            back_price=max(0.0, self._safe_float(back_price, 0.0)),
+            back_volume=max(0.0, self._safe_float(back_volume, 0.0)),
+            lay_price=max(0.0, self._safe_float(lay_price, 0.0)),
+            lay_volume=max(0.0, self._safe_float(lay_volume, 0.0)),
+        )
+
         with self._lock:
-            if selection_id not in self._histories:
-                self._histories[selection_id] = SelectionWoMHistory(selection_id)
+            history = self._get_or_create_history(sel_id)
+            history.add_tick(tick)
 
-            tick = TickData(
-                timestamp=time.time(),
-                selection_id=selection_id,
-                back_price=back_price,
-                back_volume=back_volume,
-                lay_price=lay_price,
-                lay_volume=lay_volume,
-            )
-            self._histories[selection_id].add_tick(tick)
+    # =========================================================
+    # PUBLIC READ / ANALYSIS API
+    # =========================================================
 
     def calculate_wom(self, selection_id: int) -> Optional[WoMResult]:
-        """
-        Calcola WoM per una selezione.
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
+            return None
 
-        Returns:
-            WoMResult con tutti i dati analitici, None se dati insufficienti
-        """
-        with self._lock:
-            if selection_id not in self._histories:
-                return None
+        ticks = self._get_ticks_snapshot(sel_id, self._time_window)
+        if len(ticks) < 2:
+            return None
 
-            ticks = self._histories[selection_id].get_recent(self._time_window)
+        wom = self._calculate_wom_from_ticks(ticks)
+        if wom is None:
+            return None
 
-            if len(ticks) < 2:
-                return None
+        mid_idx = len(ticks) // 2
+        if mid_idx > 0:
+            first_half = ticks[:mid_idx]
+            second_half = ticks[mid_idx:]
+            first_wom = self._calculate_wom_from_ticks(first_half)
+            second_wom = self._calculate_wom_from_ticks(second_half)
 
-            total_back_vol = sum(t.back_volume for t in ticks)
-            total_lay_vol = sum(t.lay_volume for t in ticks)
-            total_vol = total_back_vol + total_lay_vol
-
-            if total_vol == 0:
-                return None
-
-            wom = total_back_vol / total_vol
-
-            mid_idx = len(ticks) // 2
-            if mid_idx > 0:
-                first_half = ticks[:mid_idx]
-                second_half = ticks[mid_idx:]
-
-                first_back = sum(t.back_volume for t in first_half)
-                first_lay = sum(t.lay_volume for t in first_half)
-                first_total = first_back + first_lay
-
-                second_back = sum(t.back_volume for t in second_half)
-                second_lay = sum(t.lay_volume for t in second_half)
-                second_total = second_back + second_lay
-
-                first_wom = first_back / first_total if first_total > 0 else 0.5
-                second_wom = second_back / second_total if second_total > 0 else 0.5
-
-                wom_trend = second_wom - first_wom
-            else:
+            if first_wom is None or second_wom is None:
                 wom_trend = 0.0
+            else:
+                wom_trend = second_wom - first_wom
+        else:
+            wom_trend = 0.0
 
-            edge_score = self._calculate_edge_score(wom, wom_trend)
-            suggested_side = self._determine_side(wom, wom_trend)
-            confidence = self._calculate_confidence(wom, len(ticks), wom_trend)
+        edge_score = self._calculate_edge_score(wom, wom_trend)
+        suggested_side = self._determine_side(wom, wom_trend)
+        confidence = self._calculate_confidence(wom, len(ticks), wom_trend)
+        time_span = ticks[-1].timestamp - ticks[0].timestamp if len(ticks) > 1 else 0.0
 
-            time_span = (
-                ticks[-1].timestamp - ticks[0].timestamp if len(ticks) > 1 else 0.0
-            )
-
-            return WoMResult(
-                selection_id=selection_id,
-                wom=wom,
-                wom_trend=wom_trend,
-                edge_score=edge_score,
-                suggested_side=suggested_side,
-                confidence=confidence,
-                tick_count=len(ticks),
-                time_span=time_span,
-            )
+        return WoMResult(
+            selection_id=sel_id,
+            wom=wom,
+            wom_trend=wom_trend,
+            edge_score=edge_score,
+            suggested_side=suggested_side,
+            confidence=confidence,
+            tick_count=len(ticks),
+            time_span=max(0.0, time_span),
+        )
 
     def get_ai_edge_score(self, selections: List[Dict]) -> Dict[int, WoMResult]:
-        """
-        Calcola edge score per multiple selezioni.
+        results: Dict[int, WoMResult] = {}
 
-        Args:
-            selections: Lista di dict con selectionId, price, etc.
+        for sel in selections or []:
+            sel_id = sel.get("selectionId", sel.get("selection_id"))
+            parsed_id = self._safe_int(sel_id)
+            if parsed_id is None:
+                continue
 
-        Returns:
-            Dict mappando selectionId -> WoMResult
-        """
-        results = {}
-
-        for sel in selections:
-            sel_id = sel.get("selectionId") or sel.get("selection_id")
-            if sel_id:
-                wom_result = self.calculate_wom(sel_id)
-                if wom_result:
-                    results[sel_id] = wom_result
+            wom_result = self.calculate_wom(parsed_id)
+            if wom_result:
+                results[parsed_id] = wom_result
 
         return results
 
     def get_mixed_suggestions(self, selections: List[Dict]) -> List[Dict]:
-        """
-        Suggerisce side BACK/LAY per ogni runner basandosi su WoM.
+        selections = selections or []
+        if not selections:
+            return []
 
-        Per mixed dutching deve esserci almeno 1 BACK e 1 LAY.
-
-        Returns:
-            Lista di dict con selectionId, suggested_side, edge_score, confidence
-        """
         results = []
         edge_data = self.get_ai_edge_score(selections)
 
+        valid_probs = []
+        for s in selections:
+            price = self._safe_float(s.get("price", 2.0), 2.0)
+            if price > 1.0:
+                valid_probs.append(1.0 / price)
+
+        avg_prob = sum(valid_probs) / len(valid_probs) if valid_probs else 0.5
+
         for sel in selections:
-            sel_id = sel.get("selectionId") or sel.get("selection_id")
-            price = sel.get("price", 2.0)
+            sel_id = self._safe_int(sel.get("selectionId", sel.get("selection_id")))
+            price = self._safe_float(sel.get("price", 2.0), 2.0)
             implied_prob = 1.0 / price if price > 1 else 1.0
 
             if sel_id is not None and sel_id in edge_data:
@@ -254,11 +306,7 @@ class WoMEngine:
                     }
                 )
             else:
-                avg_prob = sum(1.0 / s.get("price", 2.0) for s in selections) / len(
-                    selections
-                )
                 suggested_side = "BACK" if implied_prob < avg_prob else "LAY"
-
                 results.append(
                     {
                         "selectionId": sel_id,
@@ -289,242 +337,177 @@ class WoMEngine:
 
         return results
 
-    def _calculate_edge_score(self, wom: float, trend: float) -> float:
-        """
-        Calcola edge score normalizzato [-1, 1].
+    # =========================================================
+    # CORE ANALYTICS
+    # =========================================================
 
-        -1 = strong LAY
-        +1 = strong BACK
-        """
-        base_edge = (wom - 0.5) * 2
-        trend_boost = trend * 0.5
+    def _calculate_edge_score(self, wom: float, trend: float) -> float:
+        base_edge = (float(wom) - 0.5) * 2.0
+        trend_boost = float(trend) * 0.5
         edge = base_edge + trend_boost
-        return max(-1.0, min(1.0, edge))
+        return self._clamp(edge, -1.0, 1.0)
 
     def _determine_side(self, wom: float, trend: float) -> str:
-        """Determina side suggerito basandosi su WoM e trend."""
         if wom >= EDGE_THRESHOLDS["strong_back"]:
             return "BACK"
-        elif wom >= EDGE_THRESHOLDS["back"]:
-            return "BACK" if trend >= 0 else "BACK"
-        elif wom <= EDGE_THRESHOLDS["strong_lay"]:
+        if wom >= EDGE_THRESHOLDS["back"]:
+            return "BACK"
+        if wom <= EDGE_THRESHOLDS["strong_lay"]:
             return "LAY"
-        elif wom <= EDGE_THRESHOLDS["lay"]:
-            return "LAY" if trend <= 0 else "LAY"
-        else:
-            return "BACK" if trend > 0.05 else ("LAY" if trend < -0.05 else "BACK")
+        if wom <= EDGE_THRESHOLDS["lay"]:
+            return "LAY"
+        return "BACK" if trend > 0.05 else ("LAY" if trend < -0.05 else "BACK")
 
     def _calculate_confidence(self, wom: float, tick_count: int, trend: float) -> float:
-        """
-        Calcola confidence [0, 1] basandosi su:
-        - Distanza dal neutrale (0.5)
-        - Numero di tick (più dati = più affidabile)
-        - Coerenza del trend
-        """
-        wom_distance = abs(wom - 0.5) * 2
-        tick_factor = min(1.0, tick_count / 30)
+        wom_distance = abs(float(wom) - 0.5) * 2.0
+        tick_factor = min(1.0, max(0.0, float(tick_count) / 30.0))
         trend_coherence = (
             1.0 if (wom > 0.5 and trend > 0) or (wom < 0.5 and trend < 0) else 0.7
         )
-
         confidence = wom_distance * 0.4 + tick_factor * 0.4 + trend_coherence * 0.2
-        return min(1.0, confidence)
+        return self._clamp(confidence, 0.0, 1.0)
+
+    # =========================================================
+    # HOUSEKEEPING
+    # =========================================================
 
     def clear_history(self, selection_id: Optional[int] = None):
-        """Pulisce storia tick."""
         with self._lock:
-            if selection_id:
-                if selection_id in self._histories:
-                    self._histories[selection_id].clear()
+            if selection_id is not None:
+                sel_id = self._safe_int(selection_id)
+                if sel_id is not None and sel_id in self._histories:
+                    self._histories[sel_id].clear()
             else:
                 self._histories.clear()
 
     def get_stats(self) -> Dict:
-        """Ritorna statistiche engine."""
         with self._lock:
             total_ticks = sum(len(h.ticks) for h in self._histories.values())
-            return {
-                "selections_tracked": len(self._histories),
-                "total_ticks": total_ticks,
-                "window_size": self._window_size,
-                "time_window": self._time_window,
-            }
+            selections_tracked = len(self._histories)
 
-    # ========== v3.67 Time-Window Analysis ==========
+        return {
+            "selections_tracked": selections_tracked,
+            "total_ticks": total_ticks,
+            "window_size": self._window_size,
+            "time_window": self._time_window,
+        }
+
+    # =========================================================
+    # TIME WINDOW METHODS
+    # =========================================================
 
     def calculate_wom_window(self, selection_id: int, window_sec: float) -> float:
-        """
-        Calcola WoM per una specifica finestra temporale.
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
+            return 0.5
 
-        Args:
-            selection_id: ID runner
-            window_sec: Finestra in secondi
-
-        Returns:
-            WoM ratio [0, 1], 0.5 se dati insufficienti
-        """
-        with self._lock:
-            if selection_id not in self._histories:
-                return 0.5
-
-            ticks = self._histories[selection_id].get_recent(window_sec)
-            if len(ticks) < 2:
-                return 0.5
-
-            total_back = sum(t.back_volume for t in ticks)
-            total_lay = sum(t.lay_volume for t in ticks)
-            total = total_back + total_lay
-
-            return total_back / total if total > 0 else 0.5
+        ticks = self._get_ticks_snapshot(
+            sel_id,
+            max(0.1, self._safe_float(window_sec, WOM_TIME_WINDOW_SEC)),
+        )
+        wom = self._calculate_wom_from_ticks(ticks)
+        return wom if wom is not None else 0.5
 
     def calculate_multi_window_wom(self, selection_id: int) -> Dict[str, float]:
-        """
-        Calcola WoM su multiple finestre temporali.
-        Operazione atomica con snapshot dei tick.
-
-        Returns:
-            Dict con wom_5s, wom_15s, wom_30s, wom_60s
-        """
-        with self._lock:
-            if selection_id not in self._histories:
-                return {"wom_5s": 0.5, "wom_15s": 0.5, "wom_30s": 0.5, "wom_60s": 0.5}
-
-            all_ticks = list(self._histories[selection_id].ticks)
-            now = time.time()
-
-            def calc_wom_from_snapshot(ticks_list, window_sec):
-                recent = [t for t in ticks_list if now - t.timestamp <= window_sec]
-                if len(recent) < 2:
-                    return 0.5
-                total_back = sum(t.back_volume for t in recent)
-                total_lay = sum(t.lay_volume for t in recent)
-                total = total_back + total_lay
-                return total_back / total if total > 0 else 0.5
-
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
             return {
-                "wom_5s": calc_wom_from_snapshot(all_ticks, 5.0),
-                "wom_15s": calc_wom_from_snapshot(all_ticks, 15.0),
-                "wom_30s": calc_wom_from_snapshot(all_ticks, 30.0),
-                "wom_60s": calc_wom_from_snapshot(all_ticks, 60.0),
+                "wom_5s": 0.5,
+                "wom_15s": 0.5,
+                "wom_30s": 0.5,
+                "wom_60s": 0.5,
             }
 
+        ticks_snapshot = self._get_ticks_snapshot(sel_id)
+        if not ticks_snapshot:
+            return {
+                "wom_5s": 0.5,
+                "wom_15s": 0.5,
+                "wom_30s": 0.5,
+                "wom_60s": 0.5,
+            }
+
+        now = time.time()
+
+        def calc_window(window_sec: float) -> float:
+            recent = [t for t in ticks_snapshot if now - t.timestamp <= window_sec]
+            wom = self._calculate_wom_from_ticks(recent)
+            return wom if wom is not None else 0.5
+
+        return {
+            "wom_5s": calc_window(5.0),
+            "wom_15s": calc_window(15.0),
+            "wom_30s": calc_window(30.0),
+            "wom_60s": calc_window(60.0),
+        }
+
     def calculate_delta_pressure(self, selection_id: int) -> float:
-        """
-        Calcola il delta di pressione (cambiamento nel tempo).
-
-        Confronta WoM recente (5s) vs storico (30s) per rilevare
-        cambiamenti di momentum nel mercato.
-
-        Returns:
-            Delta [-1, 1]: positivo = pressione BACK aumenta
-        """
         wom_5s = self.calculate_wom_window(selection_id, 5.0)
         wom_30s = self.calculate_wom_window(selection_id, 30.0)
-
         delta = wom_5s - wom_30s
-        return max(-1.0, min(1.0, delta * 2))  # Amplifica per sensibilità
+        return self._clamp(delta * 2.0, -1.0, 1.0)
 
     def calculate_momentum(self, selection_id: int) -> float:
-        """
-        Calcola il momentum (velocità del cambiamento).
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
+            return 0.0
 
-        Usa la derivata del WoM nel tempo per misurare
-        quanto rapidamente sta cambiando la pressione.
+        ticks = self._get_ticks_snapshot(sel_id, 30.0)
+        if len(ticks) < 4:
+            return 0.0
 
-        Returns:
-            Momentum [-1, 1]: positivo = accelerazione BACK
-        """
-        with self._lock:
-            if selection_id not in self._histories:
-                return 0.0
+        q_size = len(ticks) // 4
+        if q_size < 1:
+            return 0.0
 
-            ticks = self._histories[selection_id].get_recent(30.0)
-            if len(ticks) < 4:
-                return 0.0
+        quarters = [ticks[i * q_size:(i + 1) * q_size] for i in range(4)]
+        wom_values: List[float] = []
 
-            # Dividi in quartili e calcola WoM per ciascuno
-            q_size = len(ticks) // 4
-            if q_size < 1:
-                return 0.0
+        for q in quarters:
+            wom = self._calculate_wom_from_ticks(q)
+            if wom is not None:
+                wom_values.append(wom)
 
-            quarters = [ticks[i * q_size : (i + 1) * q_size] for i in range(4)]
-            wom_values = []
+        if len(wom_values) < 2:
+            return 0.0
 
-            for q in quarters:
-                if not q:
-                    continue
-                back = sum(t.back_volume for t in q)
-                lay = sum(t.lay_volume for t in q)
-                total = back + lay
-                wom_values.append(back / total if total > 0 else 0.5)
-
-            if len(wom_values) < 2:
-                return 0.0
-
-            # Calcola accelerazione (seconda derivata approssimata)
-            deltas = [
-                wom_values[i + 1] - wom_values[i] for i in range(len(wom_values) - 1)
-            ]
-            momentum = sum(deltas) / len(deltas) if deltas else 0.0
-
-            return max(-1.0, min(1.0, momentum * 4))
+        deltas = [wom_values[i + 1] - wom_values[i] for i in range(len(wom_values) - 1)]
+        momentum = sum(deltas) / len(deltas) if deltas else 0.0
+        return self._clamp(momentum * 4.0, -1.0, 1.0)
 
     def calculate_volatility(self, selection_id: int) -> float:
-        """
-        Calcola la volatilità del prezzo.
+        sel_id = self._safe_int(selection_id)
+        if sel_id is None:
+            return 0.0
 
-        Returns:
-            Volatility [0, 1]: alto = mercato volatile
-        """
-        with self._lock:
-            if selection_id not in self._histories:
-                return 0.0
+        ticks = self._get_ticks_snapshot(sel_id, 30.0)
+        if len(ticks) < 3:
+            return 0.0
 
-            ticks = self._histories[selection_id].get_recent(30.0)
-            if len(ticks) < 3:
-                return 0.0
+        spreads: List[float] = []
+        for t in ticks:
+            if t.lay_price > 0 and t.back_price > 0:
+                spreads.append(max(0.0, t.lay_price - t.back_price))
 
-            # Calcola spread medio e deviazione
-            spreads = []
-            for t in ticks:
-                if t.lay_price > 0 and t.back_price > 0:
-                    spreads.append(t.lay_price - t.back_price)
+        if len(spreads) < 2:
+            return 0.0
 
-            if len(spreads) < 2:
-                return 0.0
-
-            avg_spread = sum(spreads) / len(spreads)
-            variance = sum((s - avg_spread) ** 2 for s in spreads) / len(spreads)
-            std_dev = variance**0.5
-
-            # Normalizza (spread tipico 0.01-0.10)
-            volatility = min(1.0, std_dev / 0.05)
-            return volatility
+        avg_spread = sum(spreads) / len(spreads)
+        variance = sum((s - avg_spread) ** 2 for s in spreads) / len(spreads)
+        std_dev = variance ** 0.5
+        volatility = min(1.0, std_dev / 0.05)
+        return max(0.0, volatility)
 
     def calculate_enhanced_wom(self, selection_id: int) -> Optional[WoMResult]:
-        """
-        Calcola WoM completo con tutti i nuovi indicatori.
-
-        Include:
-        - WoM su multiple finestre (5s, 15s, 30s, 60s)
-        - Delta pressure (cambio momentum)
-        - Momentum (accelerazione)
-        - Volatility (stabilità mercato)
-
-        Returns:
-            WoMResult completo con tutti gli indicatori
-        """
         base_result = self.calculate_wom(selection_id)
         if not base_result:
             return None
 
-        # Calcola indicatori avanzati
         multi_wom = self.calculate_multi_window_wom(selection_id)
         delta_pressure = self.calculate_delta_pressure(selection_id)
         momentum = self.calculate_momentum(selection_id)
         volatility = self.calculate_volatility(selection_id)
 
-        # Crea risultato esteso
         return WoMResult(
             selection_id=base_result.selection_id,
             wom=base_result.wom,
@@ -544,14 +527,6 @@ class WoMEngine:
         )
 
     def get_time_window_signal(self, selection_id: int) -> Dict:
-        """
-        Genera segnale di trading basato su analisi time-window.
-
-        Combina tutti gli indicatori per dare un segnale chiaro.
-
-        Returns:
-            Dict con signal, strength, reasoning
-        """
         result = self.calculate_enhanced_wom(selection_id)
         if not result:
             return {
@@ -561,21 +536,16 @@ class WoMEngine:
                 "reasoning": "Dati insufficienti",
             }
 
-        # Analisi multi-timeframe
         short_term = result.wom_5s
         long_term = result.wom_30s
+        convergence = abs(short_term - 0.5) * abs(long_term - 0.5) * 4.0
 
-        # Convergenza: breve e lungo termine concordano
-        convergence = abs(short_term - 0.5) * abs(long_term - 0.5) * 4
-
-        # Segnale basato su delta + momentum
         signal_strength = (
             abs(result.delta_pressure) * 0.4
             + abs(result.momentum) * 0.3
             + abs(result.wom - 0.5) * 0.3
         )
 
-        # Determina direzione
         if result.delta_pressure > DELTA_THRESHOLD and result.momentum > 0:
             signal = "STRONG_BACK"
             side = "BACK"
@@ -597,14 +567,13 @@ class WoMEngine:
             side = "NEUTRAL"
             reasoning = "Mercato in equilibrio"
 
-        # Avviso volatilità
         if result.volatility > 0.7:
             reasoning += " [ALTA VOLATILITA']"
-            signal_strength *= 0.8  # Riduci confidence su mercati volatili
+            signal_strength *= 0.8
 
         return {
             "signal": signal,
-            "strength": min(1.0, signal_strength * convergence),
+            "strength": self._clamp(signal_strength * convergence, 0.0, 1.0),
             "side": side,
             "reasoning": reasoning,
             "wom_data": {
@@ -627,4 +596,3 @@ def get_wom_engine() -> WoMEngine:
     if _global_wom_engine is None:
         _global_wom_engine = WoMEngine()
     return _global_wom_engine
-
