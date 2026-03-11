@@ -409,7 +409,14 @@ class Database:
         )
 
     def save_password(self, password: Optional[str]):
-        self._set_setting("password", password or "")
+    if password is None:
+        try:
+            self._execute("DELETE FROM settings WHERE key = 'password'")
+        except Exception as e:
+            logger.error(f"Errore save_password(None): {e}")
+        return
+
+    self._set_setting("password", str(password))
 
     def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
         self._set_setting("session_token", session_token or "")
