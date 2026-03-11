@@ -134,7 +134,9 @@ class TradingEngine:
 
     def _cancel_stub_orders(self, client, market_id, recovered_reports):
         stub_orders = [
-            order for order in (recovered_reports or []) if self._is_stub_micro_order(order)
+            order
+            for order in (recovered_reports or [])
+            if self._is_stub_micro_order(order)
         ]
         if not stub_orders:
             return False
@@ -373,12 +375,6 @@ class TradingEngine:
 
         first_report = place_reports[0]
         bet_id = self._extract_bet_id(first_report)
-        matched_now = self._safe_sum_matched(place_reports)
-
-        if matched_now > 0:
-            raise RuntimeError(
-                f"Micro-stake stub già abbinato ({matched_now}) - abort"
-            )
 
         try:
             cancel_resp = self._call_cancel_orders(
@@ -399,7 +395,9 @@ class TradingEngine:
             replace_resp = self._call_replace_orders(
                 client=client,
                 market_id=market_id,
-                instructions=[self._build_replace_instruction(bet_id, new_price=price)],
+                instructions=[
+                    self._build_replace_instruction(bet_id, new_price=price)
+                ],
             )
             if self._response_status(replace_resp) != "SUCCESS":
                 raise RuntimeError(
@@ -611,7 +609,9 @@ class TradingEngine:
 
                 if bool(payload.get("simulation_mode", False)):
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+                    v_balance = float(
+                        sim_settings.get("virtual_balance", 0.0) or 0.0
+                    )
                     liability = stake * (price - 1) if bet_type == "LAY" else stake
 
                     if v_balance >= liability:
@@ -648,14 +648,22 @@ class TradingEngine:
                             },
                         )
                     else:
-                        self.bus.publish("QUICK_BET_FAILED", "Saldo virtuale insufficiente")
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            "Saldo virtuale insufficiente",
+                        )
                     return
 
                 client = self.client_getter()
                 if not client:
                     raise Exception("Client non connesso")
 
-                self.db.create_pending_saga(customer_ref, market_id, selection_id, payload)
+                self.db.create_pending_saga(
+                    customer_ref,
+                    market_id,
+                    selection_id,
+                    payload,
+                )
 
                 try:
                     if self._needs_micro_stake(stake):
@@ -816,10 +824,16 @@ class TradingEngine:
                         if isinstance(e, PermanentError):
                             self.bus.publish(
                                 "SAFE_MODE_TRIGGER",
-                                {"reason": "Circuit Breaker", "details": str(e)},
+                                {
+                                    "reason": "Circuit Breaker",
+                                    "details": str(e),
+                                },
                             )
 
-                        self.bus.publish("QUICK_BET_FAILED", f"Errore Rete: {str(e)}")
+                        self.bus.publish(
+                            "QUICK_BET_FAILED",
+                            f"Errore Rete: {str(e)}",
+                        )
 
             finally:
                 self._release_lock(customer_ref)
@@ -842,16 +856,20 @@ class TradingEngine:
                     return
 
                 market_id = payload["market_id"]
-                bet_type = payload["bet_type"]
+                bet_type = str(payload["bet_type"]).upper()
                 results = payload["results"]
                 sim_mode = bool(payload.get("simulation_mode", False))
                 total_stake = float(payload["total_stake"])
                 use_best_price = bool(payload.get("use_best_price", False))
-                requested_size = sum(float(r.get("stake", 0) or 0) for r in results)
+                requested_size = sum(
+                    float(r.get("stake", 0) or 0) for r in results
+                )
 
                 if sim_mode:
                     sim_settings = self.db.get_simulation_settings()
-                    v_balance = float(sim_settings.get("virtual_balance", 0.0) or 0.0)
+                    v_balance = float(
+                        sim_settings.get("virtual_balance", 0.0) or 0.0
+                    )
 
                     total_risk = (
                         sum(
@@ -878,6 +896,11 @@ class TradingEngine:
                         self.bus.publish(
                             "DUTCHING_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
+                                "selections": results,
                                 "sim": True,
                                 "matched": requested_size,
                                 "status": "MATCHED",
@@ -968,7 +991,9 @@ class TradingEngine:
                             customer_ref=customer_ref,
                         )
                         normal_status = self._response_status(normal_result)
-                        normal_reports = self._response_instruction_reports(normal_result)
+                        normal_reports = self._response_instruction_reports(
+                            normal_result
+                        )
 
                     all_reports = normal_reports + micro_reports
 
@@ -990,6 +1015,11 @@ class TradingEngine:
                         self.bus.publish(
                             "DUTCHING_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
+                                "selections": results,
                                 "sim": False,
                                 "matched": matched,
                                 "status": status,
@@ -1038,6 +1068,11 @@ class TradingEngine:
                         self.bus.publish(
                             "DUTCHING_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "event_name": payload.get("event_name", ""),
+                                "market_name": payload.get("market_name", ""),
+                                "bet_type": bet_type,
+                                "selections": results,
                                 "sim": False,
                                 "matched": matched,
                                 "status": status,
@@ -1095,7 +1130,7 @@ class TradingEngine:
 
                 market_id = payload["market_id"]
                 selection_id = payload["selection_id"]
-                side = payload["side"]
+                side = str(payload["side"]).upper()
                 stake = float(payload["stake"])
                 price = float(payload["price"])
                 green_up = float(payload["green_up"])
@@ -1161,6 +1196,11 @@ class TradingEngine:
                         self.bus.publish(
                             "CASHOUT_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                                "side": side,
+                                "price": price,
+                                "stake": stake,
                                 "green_up": green_up,
                                 "matched": matched,
                                 "status": status,
@@ -1202,9 +1242,15 @@ class TradingEngine:
                         self.bus.publish(
                             "CASHOUT_SUCCESS",
                             {
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                                "side": side,
+                                "price": price,
+                                "stake": stake,
                                 "green_up": green_up,
                                 "matched": matched,
                                 "status": status,
+                                "micro": self._needs_micro_stake(stake),
                                 "recovered": True,
                             },
                         )
