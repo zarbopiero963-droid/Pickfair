@@ -824,7 +824,7 @@ class Database:
         selections,
         total_stake,
         potential_profit,
-        status,
+        status="PENDING",
     ):
         self._execute(
             """
