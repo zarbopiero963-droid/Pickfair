@@ -408,10 +408,13 @@ class Database:
             private_key=private_key or "",
         )
 
-    def save_password(self, password: Optional[str]):
-    if password is None:
-        try:
-            self._execute("DELETE FROM settings WHERE key = 'password'")
+    def save_password(self, password: 
+    Optional[str]):
+        if password is None:
+            try:
+                self._execute(
+                    "DELETE FROM settings  WHERE key = 'password'"
+            )
         except Exception as e:
             logger.error(f"Errore save_password(None): {e}")
         return
