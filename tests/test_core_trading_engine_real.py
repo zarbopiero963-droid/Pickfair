@@ -1,464 +1,326 @@
+import json
 
 from core.trading_engine import TradingEngine
 
-class DummyBus: def init(self): self.subscribers = {} self.events = []
 
-def subscribe(self, event_name, handler):
-    self.subscribers.setdefault(event_name, []).append(handler)
+class DummyBus:
+    def __init__(self):
+        self.subscribers = {}
+        self.events = []
 
-def publish(self, event_name, payload):
-    self.events.append((event_name, payload))
-    for handler in self.subscribers.get(event_name, []):
-        handler(payload)
+    def subscribe(self, event_name, handler):
+        self.subscribers.setdefault(event_name, []).append(handler)
 
-class DummyExecutor: def submit(self, name, fn): return fn()
+    def publish(self, event_name, payload):
+        self.events.append((event_name, payload))
+        for handler in self.subscribers.get(event_name, []):
+            handler(payload)
 
-class DummyDB: def init(self): self.pending_sagas = [] self.saved_bets = [] self.saved_cashouts = [] self.sim_settings = {"virtual_balance": 1000.0} self.sim_saved = [] self.sim_balance_updates = []
 
-def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
-    self.pending_sagas.append(
-        {
-            "customer_ref": customer_ref,
-            "market_id": market_id,
-            "selection_id": selection_id,
-            "raw_payload": json.dumps(payload),
-            "status": "PENDING",
-        }
-    )
+class DummyExecutor:
+    def submit(self, name, fn):
+        return fn()
 
-def get_pending_sagas(self):
-    return [x for x in self.pending_sagas if x["status"] == "PENDING"]
 
-def mark_saga_reconciled(self, customer_ref):
-    for saga in self.pending_sagas:
-        if saga["customer_ref"] == customer_ref:
-            saga["status"] = "RECONCILED"
+class DummyDB:
+    def __init__(self):
+        self.pending_sagas = []
+        self.saved_bets = []
+        self.saved_cashouts = []
+        self.sim_settings = {"virtual_balance": 1000.0}
+        self.sim_saved = []
+        self.sim_balance_updates = []
 
-def mark_saga_failed(self, customer_ref):
-    for saga in self.pending_sagas:
-        if saga["customer_ref"] == customer_ref:
-            saga["status"] = "FAILED"
-
-def save_bet(
-    self,
-    event_name,
-    market_id,
-    market_name,
-    bet_type,
-    selections,
-    total_stake,
-    potential_profit,
-    status,
-):
-    self.saved_bets.append(
-        {
-            "event_name": event_name,
-            "market_id": market_id,
-            "market_name": market_name,
-            "bet_type": bet_type,
-            "selections": selections,
-            "total_stake": total_stake,
-            "potential_profit": potential_profit,
-            "status": status,
-        }
-    )
-
-def save_cashout_transaction(self, **kwargs):
-    self.saved_cashouts.append(kwargs)
-
-def get_simulation_settings(self):
-    return dict(self.sim_settings)
-
-def save_simulation_bet(self, **kwargs):
-    self.sim_saved.append(kwargs)
-
-def increment_simulation_bet_count(self, new_balance):
-    self.sim_balance_updates.append(new_balance)
-    self.sim_settings["virtual_balance"] = new_balance
-
-class DummyClient: def init(self): self.place_bet_calls = [] self.place_orders_calls = [] self.cancel_orders_calls = [] self.replace_orders_calls = [] self.get_current_orders_calls = [] self.market_book = { "runners": [ { "selectionId": 11, "ex": { "availableToBack": [{"price": 2.2, "size": 50}], "availableToLay": [{"price": 2.24, "size": 40}], }, }, { "selectionId": 22, "ex": { "availableToBack": [{"price": 3.1, "size": 30}], "availableToLay": [{"price": 3.15, "size": 25}], }, }, ] }
-
-def place_bet(
-    self,
-    market_id,
-    selection_id,
-    side,
-    price,
-    size,
-    persistence_type="LAPSE",
-    customer_ref=None,
-):
-    self.place_bet_calls.append(
-        {
-            "market_id": market_id,
-            "selection_id": selection_id,
-            "side": side,
-            "price": price,
-            "size": size,
-            "customer_ref": customer_ref,
-        }
-    )
-    return {
-        "status": "SUCCESS",
-        "instructionReports": [
+    def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
+        self.pending_sagas.append(
             {
-                "betId": f"BET_{selection_id}",
-                "sizeMatched": size,
+                "customer_ref": customer_ref,
+                "market_id": market_id,
+                "selection_id": selection_id,
+                "raw_payload": json.dumps(payload),
+                "status": "PENDING",
             }
-        ],
-    }
+        )
 
-def place_orders(self, market_id, instructions, customer_ref=None):
-    self.place_orders_calls.append(
-        {
-            "market_id": market_id,
-            "instructions": instructions,
-            "customer_ref": customer_ref,
-        }
-    )
-    return {
-        "status": "SUCCESS",
-        "instructionReports": [
+    def get_pending_sagas(self):
+        return [x for x in self.pending_sagas if x["status"] == "PENDING"]
+
+    def mark_saga_reconciled(self, customer_ref):
+        for saga in self.pending_sagas:
+            if saga["customer_ref"] == customer_ref:
+                saga["status"] = "RECONCILED"
+
+    def mark_saga_failed(self, customer_ref):
+        for saga in self.pending_sagas:
+            if saga["customer_ref"] == customer_ref:
+                saga["status"] = "FAILED"
+
+    def save_bet(
+        self,
+        event_name,
+        market_id,
+        market_name,
+        bet_type,
+        selections,
+        total_stake,
+        potential_profit,
+        status,
+    ):
+        self.saved_bets.append(
             {
-                "betId": f"BET_{i['selectionId']}",
-                "sizeMatched": i["limitOrder"]["size"],
+                "event_name": event_name,
+                "market_id": market_id,
+                "market_name": market_name,
+                "bet_type": bet_type,
+                "selections": selections,
+                "total_stake": total_stake,
+                "potential_profit": potential_profit,
+                "status": status,
             }
-            for i in instructions
-        ],
-    }
+        )
 
-def cancel_orders(self, market_id=None, instructions=None):
-    self.cancel_orders_calls.append(
-        {"market_id": market_id, "instructions": instructions}
-    )
-    return {"status": "SUCCESS", "instructionReports": []}
+    def save_cashout_transaction(self, **kwargs):
+        self.saved_cashouts.append(kwargs)
 
-def replace_orders(self, market_id=None, instructions=None):
-    self.replace_orders_calls.append(
-        {"market_id": market_id, "instructions": instructions}
-    )
-    return {
-        "status": "SUCCESS",
-        "instructionReports": [{"betId": instructions[0]["betId"], "sizeMatched": 0}],
-    }
+    def get_simulation_settings(self):
+        return dict(self.sim_settings)
 
-def get_current_orders(self, *args, **kwargs):
-    self.get_current_orders_calls.append({"args": args, "kwargs": kwargs})
-    return {"currentOrders": [], "matched": [], "unmatched": []}
+    def save_simulation_bet(self, **kwargs):
+        self.sim_saved.append(kwargs)
 
-def get_market_book(self, market_id):
-    return self.market_book
+    def increment_simulation_bet_count(self, new_balance):
+        self.sim_balance_updates.append(new_balance)
+        self.sim_settings["virtual_balance"] = new_balance
 
-def _make_engine(): bus = DummyBus() db = DummyDB() client = DummyClient() executor = DummyExecutor() engine = TradingEngine(bus, db, lambda: client, executor) return engine, bus, db, client
 
-def test_quick_bet_real_success_payload_is_complete(): engine, bus, db, client = _make_engine()
-
-payload = {
-    "market_id": "1.234",
-    "selection_id": 11,
-    "bet_type": "BACK",
-    "price": 2.5,
-    "stake": 10.0,
-    "event_name": "Juve - Milan",
-    "market_name": "Match Odds",
-    "runner_name": "Juve",
-    "simulation_mode": False,
-}
-
-engine._handle_quick_bet(payload)
-
-assert len(client.place_bet_calls) == 1
-assert len(db.saved_bets) == 1
-
-success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
-assert len(success_events) == 1
-
-event_payload = success_events[0][1]
-assert event_payload["runner_name"] == "Juve"
-assert event_payload["price"] == 2.5
-assert event_payload["stake"] == 10.0
-assert event_payload["status"] == "MATCHED"
-assert event_payload["bet_type"] == "BACK"
-assert event_payload["market_id"] == "1.234"
-assert event_payload["selection_id"] == 11
-assert event_payload["event_name"] == "Juve - Milan"
-assert event_payload["market_name"] == "Match Odds"
-assert event_payload["sim"] is False
-
-def test_quick_bet_micro_stake_uses_stub_cancel_replace(): engine, bus, db, client = _make_engine()
-
-payload = {
-    "market_id": "1.555",
-    "selection_id": 11,
-    "bet_type": "BACK",
-    "price": 2.12,
-    "stake": 0.5,
-    "event_name": "Inter - Roma",
-    "market_name": "Match Odds",
-    "runner_name": "Inter",
-    "simulation_mode": False,
-}
-
-engine._handle_quick_bet(payload)
-
-assert len(client.place_bet_calls) == 1
-assert client.place_bet_calls[0]["price"] == 1.01
-assert client.place_bet_calls[0]["size"] == 2.0
-assert len(client.cancel_orders_calls) == 1
-assert len(client.replace_orders_calls) == 1
-
-success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
-assert len(success_events) == 1
-assert success_events[0][1]["micro"] is True
-
-def test_dutching_real_success_with_best_price(): engine, bus, db, client = _make_engine()
-
-payload = {
-    "market_id": "1.999",
-    "market_type": "MATCH_ODDS",
-    "event_name": "Napoli - Lazio",
-    "market_name": "Match Odds",
-    "bet_type": "BACK",
-    "total_stake": 15.0,
-    "simulation_mode": False,
-    "use_best_price": True,
-    "results": [
-        {"selectionId": 11, "runnerName": "Napoli", "stake": 10.0, "price": 2.0},
-        {"selectionId": 22, "runnerName": "Lazio", "stake": 5.0, "price": 3.0},
-    ],
-}
-
-engine._handle_place_dutching(payload)
-
-assert len(client.place_orders_calls) == 1
-instructions = client.place_orders_calls[0]["instructions"]
-assert instructions[0]["limitOrder"]["price"] == 2.2
-assert instructions[1]["limitOrder"]["price"] == 3.1
-
-success_events = [x for x in bus.events if x[0] == "DUTCHING_SUCCESS"]
-assert len(success_events) == 1
-event_payload = success_events[0][1]
-assert event_payload["market_id"] == "1.999"
-assert event_payload["event_name"] == "Napoli - Lazio"
-assert event_payload["market_name"] == "Match Odds"
-assert len(event_payload["selections"]) == 2
-
-def test_quick_bet_simulation_mode_works_without_client(): bus = DummyBus() db = DummyDB() executor = DummyExecutor() engine = TradingEngine(bus, db, lambda: None, executor)
-
-payload = {
-    "market_id": "1.777",
-    "selection_id": 11,
-    "bet_type": "BACK",
-    "price": 2.0,
-    "stake": 20.0,
-    "event_name": "Sim Match",
-    "market_name": "Sim Market",
-    "runner_name": "Runner",
-    "simulation_mode": True,
-}
-
-engine._handle_quick_bet(payload)
-
-success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
-assert len(success_events) == 1
-assert success_events[0][1]["sim"] is True
-assert db.sim_balance_updates[-1] == 980.0
-
-END_CREATE_FILE
-
-CREATE_FILE tests/test_telegram_sender_real.py from telegram_sender import TelegramSender
-
-class DummyBus: def init(self): self.subscribers = {}
-
-def subscribe(self, event_name, handler):
-    self.subscribers.setdefault(event_name, []).append(handler)
-
-def publish(self, event_name, payload):
-    for handler in self.subscribers.get(event_name, []):
-        handler(payload)
-
-class DummyClient: async def get_entity(self, chat_id): return chat_id
-
-async def send_message(self, entity, text):
-    class Msg:
-        id = 123
-    return Msg()
-
-class DummyDB: def init(self): self.rows = []
-
-def save_telegram_outbox_log(
-    self,
-    chat_id,
-    message_type,
-    text,
-    status,
-    message_id=None,
-    error=None,
-    flood_wait=0,
-):
-    self.rows.append(
-        {
-            "chat_id": str(chat_id),
-            "message_type": message_type,
-            "text": text,
-            "status": status,
-            "message_id": message_id,
-            "error": error,
-            "flood_wait": flood_wait,
+class DummyClient:
+    def __init__(self):
+        self.place_bet_calls = []
+        self.place_orders_calls = []
+        self.cancel_orders_calls = []
+        self.replace_orders_calls = []
+        self.get_current_orders_calls = []
+        self.market_book = {
+            "runners": [
+                {
+                    "selectionId": 11,
+                    "ex": {
+                        "availableToBack": [{"price": 2.2, "size": 50}],
+                        "availableToLay": [{"price": 2.24, "size": 40}],
+                    },
+                },
+                {
+                    "selectionId": 22,
+                    "ex": {
+                        "availableToBack": [{"price": 3.1, "size": 30}],
+                        "availableToLay": [{"price": 3.15, "size": 25}],
+                    },
+                },
+            ]
         }
-    )
 
-def test_sender_formats_master_signal_from_quick_bet_event(): bus = DummyBus() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", )
+    def place_bet(
+        self,
+        market_id,
+        selection_id,
+        side,
+        price,
+        size,
+        persistence_type="LAPSE",
+        customer_ref=None,
+    ):
+        self.place_bet_calls.append(
+            {
+                "market_id": market_id,
+                "selection_id": selection_id,
+                "side": side,
+                "price": price,
+                "size": size,
+                "customer_ref": customer_ref,
+            }
+        )
+        return {
+            "status": "SUCCESS",
+            "instructionReports": [
+                {
+                    "betId": f"BET_{selection_id}",
+                    "sizeMatched": size,
+                }
+            ],
+        }
 
-captured = []
+    def place_orders(self, market_id, instructions, customer_ref=None):
+        self.place_orders_calls.append(
+            {
+                "market_id": market_id,
+                "instructions": instructions,
+                "customer_ref": customer_ref,
+            }
+        )
+        return {
+            "status": "SUCCESS",
+            "instructionReports": [
+                {
+                    "betId": f"BET_{i['selectionId']}",
+                    "sizeMatched": i["limitOrder"]["size"],
+                }
+                for i in instructions
+            ],
+        }
 
-def fake_queue_default_message(text, max_retries=3, callback=None):
-    captured.append(text)
+    def cancel_orders(self, market_id=None, instructions=None):
+        self.cancel_orders_calls.append(
+            {"market_id": market_id, "instructions": instructions}
+        )
+        return {"status": "SUCCESS", "instructionReports": []}
 
-sender.queue_default_message = fake_queue_default_message
+    def replace_orders(self, market_id=None, instructions=None):
+        self.replace_orders_calls.append(
+            {"market_id": market_id, "instructions": instructions}
+        )
+        return {
+            "status": "SUCCESS",
+            "instructionReports": [
+                {"betId": instructions[0]["betId"], "sizeMatched": 0}
+            ],
+        }
 
-bus.publish(
-    "QUICK_BET_SUCCESS",
-    {
-        "sim": False,
-        "runner_name": "Juve",
-        "bet_type": "BACK",
-        "price": 2.15,
+    def get_current_orders(self, *args, **kwargs):
+        self.get_current_orders_calls.append({"args": args, "kwargs": kwargs})
+        return {"currentOrders": [], "matched": [], "unmatched": []}
+
+    def get_market_book(self, market_id):
+        return self.market_book
+
+
+def _make_engine():
+    bus = DummyBus()
+    db = DummyDB()
+    client = DummyClient()
+    executor = DummyExecutor()
+    engine = TradingEngine(bus, db, lambda: client, executor)
+    return engine, bus, db, client
+
+
+def test_quick_bet_real_success_payload_is_complete():
+    engine, bus, db, client = _make_engine()
+
+    payload = {
         "market_id": "1.234",
-        "selection_id": 55,
+        "selection_id": 11,
+        "bet_type": "BACK",
+        "price": 2.5,
+        "stake": 10.0,
         "event_name": "Juve - Milan",
         "market_name": "Match Odds",
-        "status": "MATCHED",
-    },
-)
-
-assert len(captured) == 1
-msg = captured[0]
-assert "MASTER SIGNAL" in msg
-assert "selection: Juve" in msg
-assert "action: BACK" in msg
-assert "master_price: 2.15" in msg
-assert "market_id: 1.234" in msg
-assert "selection_id: 55" in msg
-
-def test_sender_ignores_simulated_events(): bus = DummyBus() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", )
-
-captured = []
-
-def fake_queue_default_message(text, max_retries=3, callback=None):
-    captured.append(text)
-
-sender.queue_default_message = fake_queue_default_message
-
-bus.publish(
-    "QUICK_BET_SUCCESS",
-    {
-        "sim": True,
         "runner_name": "Juve",
+        "simulation_mode": False,
+    }
+
+    engine._handle_quick_bet(payload)
+
+    assert len(client.place_bet_calls) == 1
+    assert len(db.saved_bets) == 1
+
+    success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+    assert len(success_events) == 1
+
+    event_payload = success_events[0][1]
+    assert event_payload["runner_name"] == "Juve"
+    assert event_payload["price"] == 2.5
+    assert event_payload["stake"] == 10.0
+    assert event_payload["status"] == "MATCHED"
+    assert event_payload["bet_type"] == "BACK"
+    assert event_payload["market_id"] == "1.234"
+    assert event_payload["selection_id"] == 11
+    assert event_payload["event_name"] == "Juve - Milan"
+    assert event_payload["market_name"] == "Match Odds"
+    assert event_payload["sim"] is False
+
+
+def test_quick_bet_micro_stake_uses_stub_cancel_replace():
+    engine, bus, db, client = _make_engine()
+
+    payload = {
+        "market_id": "1.555",
+        "selection_id": 11,
         "bet_type": "BACK",
-        "price": 2.15,
-        "market_id": "1.234",
-        "selection_id": 55,
-    },
-)
-
-assert captured == []
-
-def test_sender_logs_outbox_if_db_is_available(): bus = DummyBus() db = DummyDB() sender = TelegramSender( client=DummyClient(), event_bus=bus, default_chat_id="-100123", db=db, )
-
-result = sender.send_message_sync("-100123", "hello")
-
-assert result.success is True
-assert len(db.rows) >= 1
-assert any(row["status"] == "SENT" for row in db.rows)
-
-END_CREATE_FILE
-
-CREATE_FILE tests/test_app_telegram_module_real.py from app_modules.telegram_module import TelegramModule
-
-class DummyVar: def init(self, value): self.value = value
-
-def get(self):
-    return self.value
-
-class DummyBus: def init(self): self.events = []
-
-def publish(self, event_name, payload):
-    self.events.append((event_name, payload))
-
-class DummyDB: def init(self): self.saved = []
-
-def save_received_signal(self, **kwargs):
-    self.saved.append(kwargs)
-
-def get_received_signals(self, limit=50):
-    return []
-
-def get_telegram_settings(self):
-    return {}
-
-def get_telegram_chats(self):
-    return []
-
-class DummyUIQ: def post(self, fn, *args, **kwargs): return fn(*args, **kwargs)
-
-class Host(TelegramModule): def init(self): self.bus = DummyBus() self.db = DummyDB() self.uiq = DummyUIQ() self.simulation_mode = False self.tg_auto_stake_var = DummyVar("3.5") self.tg_auto_bet_var = DummyVar(True) self.tg_confirm_var = DummyVar(False)
-
-def _refresh_telegram_signals_tree(self):
-    return None
-
-def test_telegram_module_forces_back_market_order(): host = Host()
-
-host._handle_telegram_signal(
-    {
-        "action": "BACK",
-        "selection": "Juve",
-        "price": 2.15,
-        "market_id": "1.234",
-        "selection_id": 55,
-        "market_type": "MATCH_ODDS",
-        "match": "Juve - Milan",
-        "market": "Match Odds",
+        "price": 2.12,
+        "stake": 0.5,
+        "event_name": "Inter - Roma",
+        "market_name": "Match Odds",
+        "runner_name": "Inter",
+        "simulation_mode": False,
     }
-)
 
-event_name, payload = host.bus.events[-1]
-assert event_name == "REQ_QUICK_BET"
-assert payload["price"] == 1.01
-assert payload["stake"] == 3.5
-assert payload["bet_type"] == "BACK"
-assert payload["selection_id"] == 55
+    engine._handle_quick_bet(payload)
 
-def test_telegram_module_forces_lay_market_order(): host = Host()
+    assert len(client.place_bet_calls) == 1
+    assert client.place_bet_calls[0]["price"] == 1.01
+    assert client.place_bet_calls[0]["size"] == 2.0
+    assert len(client.cancel_orders_calls) == 1
+    assert len(client.replace_orders_calls) == 1
 
-host._handle_telegram_signal(
-    {
-        "action": "LAY",
-        "selection": "Milan",
-        "price": 1.95,
-        "market_id": "1.987",
-        "selection_id": 77,
+    success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+    assert len(success_events) == 1
+    assert success_events[0][1]["micro"] is True
+
+
+def test_dutching_real_success_with_best_price():
+    engine, bus, db, client = _make_engine()
+
+    payload = {
+        "market_id": "1.999",
         "market_type": "MATCH_ODDS",
-        "match": "Juve - Milan",
-        "market": "Match Odds",
+        "event_name": "Napoli - Lazio",
+        "market_name": "Match Odds",
+        "bet_type": "BACK",
+        "total_stake": 15.0,
+        "simulation_mode": False,
+        "use_best_price": True,
+        "results": [
+            {"selectionId": 11, "runnerName": "Napoli", "stake": 10.0, "price": 2.0},
+            {"selectionId": 22, "runnerName": "Lazio", "stake": 5.0, "price": 3.0},
+        ],
     }
-)
 
-event_name, payload = host.bus.events[-1]
-assert event_name == "REQ_QUICK_BET"
-assert payload["price"] == 1000.0
-assert payload["bet_type"] == "LAY"
-assert payload["selection_id"] == 77
+    engine._handle_place_dutching(payload)
 
-END_CREATE_FILE
+    assert len(client.place_orders_calls) == 1
+    instructions = client.place_orders_calls[0]["instructions"]
+    assert instructions[0]["limitOrder"]["price"] == 2.2
+    assert instructions[1]["limitOrder"]["price"] == 3.1
 
-CREATE_FILE tests/test_import_smoke_core.py import importlib
+    success_events = [x for x in bus.events if x[0] == "DUTCHING_SUCCESS"]
+    assert len(success_events) == 1
+    event_payload = success_events[0][1]
+    assert event_payload["market_id"] == "1.999"
+    assert event_payload["event_name"] == "Napoli - Lazio"
+    assert event_payload["market_name"] == "Match Odds"
+    assert len(event_payload["selections"]) == 2
 
-def test_import_smoke_core_modules(): modules = [ "database", "dutching", "telegram_listener", "telegram_sender", "core.trading_engine", "core.risk_middleware", "controllers.dutching_controller", "app_modules.telegram_module", ]
 
-for module_name in modules:
-    mod = importlib.import_module(module_name)
-    assert mod is not None
+def test_quick_bet_simulation_mode_works_without_client():
+    bus = DummyBus()
+    db = DummyDB()
+    executor = DummyExecutor()
+    engine = TradingEngine(bus, db, lambda: None, executor)
 
-END_CREATE_FILE
+    payload = {
+        "market_id": "1.777",
+        "selection_id": 11,
+        "bet_type": "BACK",
+        "price": 2.0,
+        "stake": 20.0,
+        "event_name": "Sim Match",
+        "market_name": "Sim Market",
+        "runner_name": "Runner",
+        "simulation_mode": True,
+    }
 
+    engine._handle_quick_bet(payload)
+
+    success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
+    assert len(success_events) == 1
+    assert success_events[0][1]["sim"] is True
+    assert db.sim_balance_updates[-1] == 980.0
