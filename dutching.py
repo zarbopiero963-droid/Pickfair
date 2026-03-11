@@ -36,6 +36,11 @@ def round_step(value: Decimal) -> Decimal:
     return (value / STEP).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * STEP
 
 
+def format_currency(value) -> str:
+    amount = _to_decimal(value, "0")
+    return f"€{amount:.2f}"
+
+
 def _normalize_price(value) -> Decimal:
     price = _to_decimal(value, "0")
     if price <= Decimal("1.01"):
@@ -272,7 +277,7 @@ def calculate_mixed_dutching(
         normalized_sides.append(side)
 
     total_weight = sum(weights)
-    if total_weight <= 0:
+    if total_weight <= Decimal("0"):
         raise ValueError("Peso totale non valido")
 
     raw_stakes = []
