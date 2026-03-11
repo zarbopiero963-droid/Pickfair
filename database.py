@@ -412,16 +412,18 @@ class Database:
     def save_password(self, password: Optional[str]):
         if password is None:
             try:
-                self._execute(
-                    "DELETE FROM settings WHERE key = 'password'"
-                )
+                self._execute("DELETE FROM settings WHERE key = 'password'")
             except Exception as e:
-                logger.error(f"Errore save_password(None): {e}")
+                logger.error("Errore save_password(None): %s", e)
             return
 
         self._set_setting("password", str(password))
 
-    def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
+    def save_session(
+        self,
+        session_token: Optional[str],
+        expiry: Optional[str] = None,
+    ):
         self._set_setting("session_token", session_token or "")
         self._set_setting("session_expiry", expiry or "")
 
@@ -431,7 +433,7 @@ class Database:
                 "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
             )
         except Exception as e:
-            logger.error(f"Errore clear_session: {e}")
+            logger.error("Errore clear_session: %s", e)
 
     def clear_sessions(self):
         self.clear_session()
@@ -842,7 +844,7 @@ class Database:
         selections,
         total_stake,
         potential_profit,
-        status="PENDING",
+        status="MATCHED",
     ):
         self._execute(
             """
@@ -861,7 +863,7 @@ class Database:
                 self._json_dumps(selections),
                 self._as_float(total_stake, 0.0),
                 self._as_float(potential_profit, 0.0),
-                str(status or ""),
+                str(status or "MATCHED"),
             ),
         )
 
