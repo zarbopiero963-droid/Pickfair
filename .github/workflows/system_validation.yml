@@ -1,23 +1,24 @@
 name: System Validation
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
       - master
       - develop
-    paths:
-      - "**/*.py"
-      - "tests/test_system_simulation.py"
-      - ".github/workflows/system_validation.yml"
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout code
@@ -40,10 +41,10 @@ jobs:
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
           else
-            pip install pytest pytest-cov pytest-mock pytest-asyncio
+            pip install pytest pytest-cov pytest-asyncio pytest-mock coverage[toml]
           fi
 
-      - name: Py compile all files
+      - name: PyCompile all Python files
         run: |
           echo "==============================="
           echo "PY_COMPILE ALL FILES"
@@ -56,9 +57,8 @@ jobs:
           failed = []
 
           for root, _, files in os.walk("."):
-              if ".git" in root or ".venv" in root or "venv" in root or "__pycache__" in root:
+              if any(skip in root for skip in [".git", ".venv", "venv", "__pycache__", ".pytest_cache"]):
                   continue
-
               for name in files:
                   if name.endswith(".py"):
                       path = os.path.join(root, name)
@@ -72,11 +72,11 @@ jobs:
           if failed:
               print("\nFILES WITH SYNTAX ERRORS:")
               for f in failed:
-                  print(" -", f)
+                  print(f" - {f}")
               sys.exit(1)
           PY
 
-      - name: Import smoke test for core modules
+      - name: Import smoke test
         run: |
           echo "==============================="
           echo "IMPORT SMOKE TEST"
@@ -110,13 +110,32 @@ jobs:
           if failed:
               print("\nMODULES FAILED TO IMPORT:")
               for m in failed:
-                  print(" -", m)
+                  print(f" - {m}")
               sys.exit(1)
           PY
 
-      - name: Run system simulation / chaos / latency / stress tests
+      - name: Run system simulation tests
         run: |
           echo "==============================="
           echo "SYSTEM VALIDATION TESTS"
           echo "==============================="
           xvfb-run -a pytest -vv tests/test_system_simulation.py
+
+      - name: Run expanded system validation tests
+        run: |
+          echo "==============================="
+          echo "EXPANDED SYSTEM VALIDATION TESTS"
+          echo "==============================="
+          xvfb-run -a pytest -vv tests/test_system_expanded_validation.py
+
+      - name: Debug workspace
+        if: always()
+        run: |
+          echo "==============================="
+          echo "WORKSPACE FILES"
+          echo "==============================="
+          ls -la
+          echo "==============================="
+          echo "TESTS FILES"
+          echo "==============================="
+          ls -la tests || true
