@@ -339,7 +339,7 @@ class Database:
         ON CONFLICT(key) DO UPDATE SET value=excluded.value
         """,
         (str(key), stored),
-    )
+    ) 
 
 
 def _get_setting_raw(self, key: str, default: Any = None) -> Any:
