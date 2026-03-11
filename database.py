@@ -411,8 +411,11 @@ class Database:
         self._set_setting("password", password or "")
 
     def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
-        self._set_setting("session_token", session_token or "")
-        self._set_setting("session_expiry", expiry or "")
+    """Persist session token."""
+    if session_token:
+        self._set_setting("session_token", str(session_token))
+    if expiry:
+        self._set_setting("session_expiry", str(expiry))
 
     def clear_session(self):
     """Remove session token and expiry completely from settings."""
