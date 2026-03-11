@@ -476,4 +476,4 @@ def test_safe_validate_helpers_return_tuple():
     )
     assert ok2 is False
     assert isinstance(err2, str)
-    assert err2
+    assert err2 
