@@ -1,0 +1,80 @@
+name: Pickfair Logs Aggregator
+
+on:
+  workflow_run:
+    workflows: ["Pickfair Ultra CI Pipeline"]
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+
+  aggregate_logs:
+
+    name: Aggregate Workflow Logs
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl jq
+
+      - name: Download logs archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          RUN_ID=${{ github.event.workflow_run.id }}
+
+          echo "Downloading logs for run $RUN_ID"
+
+          curl -L \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID/logs \
+          -o logs.zip
+
+      - name: Extract logs
+        run: |
+          mkdir logs
+          unzip -q logs.zip -d logs
+
+      - name: Print merged logs
+        run: |
+
+          echo "################################################################"
+          echo "PICKFAIR GLOBAL WORKFLOW LOG"
+          echo "################################################################"
+
+          echo "Repository : ${{ github.repository }}"
+          echo "Run ID     : ${{ github.event.workflow_run.id }}"
+
+          echo
+          echo "WORKFLOW STATUS"
+          echo "------------------------------------------------"
+
+          echo "Conclusion : ${{ github.event.workflow_run.conclusion }}"
+          echo "Event      : ${{ github.event.workflow_run.event }}"
+
+          echo
+          echo "MERGED JOB LOGS"
+          echo "------------------------------------------------"
+
+          for f in logs/*.txt
+          do
+            echo
+            echo "================================================"
+            echo "LOG FILE: $f"
+            echo "================================================"
+
+            cat "$f"
+
+          done
+
+          echo
+          echo "######################## END ########################"
