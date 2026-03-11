@@ -377,15 +377,30 @@ class Database:
             return text
 
     def get_settings(self) -> Dict[str, Any]:
-        rows = self._execute(
-            "SELECT key, value FROM settings",
-            fetch=True,
-            commit=False,
-        )
-        result: Dict[str, Any] = {}
-        for row in rows or []:
-            result[row["key"]] = self._parse_setting_value(row["value"])
-        return result
+    rows = self._execute(
+        "SELECT key, value FROM settings",
+        fetch=True,
+        commit=False,
+    )
+
+    result: Dict[str, Any] = {}
+
+    for row in rows or []:
+        key = row["key"]
+        raw_value = row["value"]
+
+        if raw_value is None:
+            continue
+
+        value = self._parse_setting_value(raw_value)
+
+        # Evita chiavi vuote legacy
+        if key in ("session_token", "session_expiry") and value == "":
+            continue
+
+        result[key] = value
+
+    return result
 
     def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
         payload = {}
