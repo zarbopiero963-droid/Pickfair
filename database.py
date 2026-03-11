@@ -331,89 +331,96 @@ class Database:
     # =========================================================
 
     def _set_setting(self, key: str, value: Any):
-        stored = "" if value is None else str(value)
-        self._execute(
-            """
-            INSERT INTO settings (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """,
-            (str(key), stored),
-        )
+    stored = "" if value is None else str(value)
+    self._execute(
+        """
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """,
+        (str(key), stored),
+    )
 
-    def _get_setting_raw(self, key: str, default: Any = None) -> Any:
-        rows = self._execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (str(key),),
-            fetch=True,
-            commit=False,
-        )
-        if not rows:
-            return default
-        return rows[0]["value"]
 
-    def _parse_setting_value(self, value: Any) -> Any:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            return value
+def _get_setting_raw(self, key: str, default: Any = None) -> Any:
+    rows = self._execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (str(key),),
+        fetch=True,
+        commit=False,
+    )
+    if not rows:
+        return default
+    return rows[0]["value"]
 
-        text = value.strip()
-        if text == "":
-            return ""
 
-        # Parse solo JSON object/list per evitare "1.0" -> 1.0
-        if text.startswith("{") or text.startswith("["):
-            try:
-                return json.loads(text)
-            except Exception:
-                return text
+def _parse_setting_value(self, value: Any) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
 
-        return text
+    text = value.strip()
+    if text == "":
+        return ""
 
-    def get_settings(self) -> Dict[str, Any]:
-        rows = self._execute(
-            "SELECT key, value FROM settings",
-            fetch=True,
-            commit=False,
-        )
-        result: Dict[str, Any] = {}
-        for row in rows or []:
-            result[row["key"]] = self._parse_setting_value(row["value"])
-        return result
+    # Parse solo JSON object/list per evitare "1.0" -> 1.0
+    if text.startswith("{") or text.startswith("["):
+        try:
+            return json.loads(text)
+        except Exception:
+            return text
 
-    def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
-        payload = {}
-        if isinstance(settings, dict):
-            payload.update(settings)
-        payload.update(kwargs)
+    return text
 
-        if not payload:
-            return
 
-        for key, value in payload.items():
-            self._set_setting(str(key), value)
+def get_settings(self) -> Dict[str, Any]:
+    rows = self._execute(
+        "SELECT key, value FROM settings",
+        fetch=True,
+        commit=False,
+    )
+    result: Dict[str, Any] = {}
+    for row in rows or []:
+        result[row["key"]] = self._parse_setting_value(row["value"])
+    return result
 
-    def save_credentials(
-        self,
-        username: str,
-        app_key: str,
-        certificate: str,
-        private_key: str,
-    ):
-        self.save_settings(
-            username=username or "",
-            app_key=app_key or "",
-            certificate=certificate or "",
-            private_key=private_key or "",
-        )
 
-    def save_password(self, password: 
-    Optional[str]):
-        if password is None:
-            try:
-                self._execute(
-                    "DELETE FROM settings  WHERE key = 'password'"
+def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
+    payload = {}
+
+    if isinstance(settings, dict):
+        payload.update(settings)
+
+    payload.update(kwargs)
+
+    if not payload:
+        return
+
+    for key, value in payload.items():
+        self._set_setting(str(key), value)
+
+
+def save_credentials(
+    self,
+    username: str,
+    app_key: str,
+    certificate: str,
+    private_key: str,
+):
+    self.save_settings(
+        username=username or "",
+        app_key=app_key or "",
+        certificate=certificate or "",
+        private_key=private_key or "",
+    )
+
+
+def save_password(self, password: Optional[str]):
+    if password is None:
+        try:
+            self._execute(
+                "DELETE FROM settings WHERE key = 'password'"
             )
         except Exception as e:
             logger.error(f"Errore save_password(None): {e}")
@@ -421,27 +428,32 @@ class Database:
 
     self._set_setting("password", str(password))
 
-    def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
-        self._set_setting("session_token", session_token or "")
-        self._set_setting("session_expiry", expiry or "")
 
-    def clear_session(self):
-        """Remove session token and expiry from settings."""
-        try:
-            self._execute(
-                "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
-            )
-        except Exception as e:
-            logger.error(f"Errore clear_session: {e}")
+def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
+    self._set_setting("session_token", session_token or "")
+    self._set_setting("session_expiry", expiry or "")
 
-    def clear_sessions(self):
-        self.clear_session()
 
-    def save_update_url(self, update_url: Optional[str]):
-        self._set_setting("update_url", update_url or "")
+def clear_session(self):
+    """Remove session token and expiry from settings."""
+    try:
+        self._execute(
+            "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
+        )
+    except Exception as e:
+        logger.error(f"Errore clear_session: {e}")
 
-    def save_skipped_version(self, version: Optional[str]):
-        self._set_setting("skipped_version", version or "")
+
+def clear_sessions(self):
+    self.clear_session()
+
+
+def save_update_url(self, update_url: Optional[str]):
+    self._set_setting("update_url", update_url or "")
+
+
+def save_skipped_version(self, version: Optional[str]):
+    self._set_setting("skipped_version", version or "")
 
     # =========================================================
     # TELEGRAM SETTINGS
