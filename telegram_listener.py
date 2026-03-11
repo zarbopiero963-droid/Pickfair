@@ -54,7 +54,7 @@ class TelegramListener:
     def _default_patterns(self) -> Dict:
         """Default regex patterns for parsing betting signals."""
         return {
-            "event": r"🆚\s*(.+?)(?:\n|$)",
+            "event_icon": r"🆚\s*(.+?)(?:\n|$)",
             "league": r"🏆\s*(.+?)(?:\n|$)",
             "score": r"(\d+)\s*[-–]\s*(\d+)",
             "time": r"(\d+)m",
@@ -72,7 +72,7 @@ class TelegramListener:
 
     def set_signal_patterns(self, patterns: Dict):
         """Update signal parsing patterns."""
-        self.signal_patterns.update(patterns)
+        self.signal_patterns.update(patterns or {})
 
     def set_database(self, db):
         """Set database reference for loading custom patterns."""
@@ -84,21 +84,21 @@ class TelegramListener:
         if hasattr(self, "db") and self.db:
             try:
                 try:
-                    self.custom_patterns = self.db.get_signal_patterns(enabled_only=True)
+                    patterns = self.db.get_signal_patterns(enabled_only=True)
                 except TypeError:
                     patterns = self.db.get_signal_patterns()
-                    self.custom_patterns = [
-                        p for p in (patterns or []) if p.get("enabled", False)
+                    patterns = [
+                        p for p in (patterns or []) if bool(p.get("enabled", False))
                     ]
-            except Exception as e:
-                print(f"Error loading custom patterns: {e}")
+                self.custom_patterns = list(patterns or [])
+            except Exception:
                 self.custom_patterns = []
         else:
             self.custom_patterns = []
 
     def set_monitored_chats(self, chat_ids: List[int]):
         """Set list of chat IDs to monitor."""
-        self.monitored_chats = chat_ids
+        self.monitored_chats = list(chat_ids or [])
 
     def set_callbacks(
         self,
@@ -111,75 +111,20 @@ class TelegramListener:
         self.message_callback = on_message
         self.status_callback = on_status
 
-    def parse_signal(self, text: str) -> Optional[Dict]:
-        """
-        Parse message text for betting signals.
-
-        Supporta:
-        - formato MASTER SIGNAL (copy trading)
-        - formato legacy
-        """
-
-        # ============================
-        # 1) MASTER SIGNAL FORMAT
-        # ============================
-
-        if "MASTER SIGNAL" in text.upper():
-
-            def extract(field):
-                match = re.search(rf"{field}\s*:\s*(.+)", text, re.IGNORECASE)
-                return match.group(1).strip() if match else None
-
-            try:
-                event = extract("event_name")
-                market = extract("market_name")
-                selection = extract("selection")
-                action = extract("action")
-                price = extract("master_price")
-                market_id = extract("market_id")
-                selection_id = extract("selection_id")
-
-                if not market_id or not selection_id:
-                    return None
-
-                signal = {
-                    "raw_text": text,
-                    "timestamp": datetime.now().isoformat(),
-                    "event": event,
-                    "league": None,
-                    "side": action.upper() if action else "BACK",
-                    "selection": selection,
-                    "market_type": "MATCH_ODDS",
-                    "odds": float(price) if price else None,
-                    "stake": None,
-                    "score_home": None,
-                    "score_away": None,
-                    "over_line": None,
-                    "minute": None,
-                    "cashout_type": None,
-                    "market_id": str(market_id),
-                    "selection_id": int(selection_id),
-                    "market_name": market,
-                    "source": "MASTER_SIGNAL",
-                }
-                return signal
-
-            except Exception:
-                return None
-
-        # ============================
-        # 2) CUSTOM PATTERNS FROM DB
-        # ============================
-
-        signal = {
+    def _base_signal(self, text: str, source: str = "LEGACY") -> Dict:
+        return {
             "raw_text": text,
             "timestamp": datetime.now().isoformat(),
             "event": None,
+            "match": None,
             "league": None,
             "side": None,
+            "action": None,
             "selection": None,
             "market_type": None,
+            "market": None,
             "odds": None,
+            "price": None,
             "stake": None,
             "score_home": None,
             "score_away": None,
@@ -189,191 +134,303 @@ class TelegramListener:
             "market_id": None,
             "selection_id": None,
             "market_name": None,
-            "source": "LEGACY",
+            "source": source,
         }
 
-        custom_patterns = getattr(self, "custom_patterns", [])
+    def _normalize_action(self, value: Optional[str], default: str = "BACK") -> str:
+        action = str(value or default).upper().strip()
+        if action not in ("BACK", "LAY"):
+            return default
+        return action
+
+    def _safe_float(self, value):
+        try:
+            if value is None:
+                return None
+            return float(str(value).replace(",", ".").strip())
+        except Exception:
+            return None
+
+    def _safe_int(self, value):
+        try:
+            if value is None or value == "":
+                return None
+            return int(str(value).strip())
+        except Exception:
+            return None
+
+    def _extract_master_field(self, text: str, field: str) -> Optional[str]:
+        match = re.search(rf"^{field}\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        return match.group(1).strip() if match else None
+
+    def _parse_master_signal(self, text: str) -> Optional[Dict]:
+        event = self._extract_master_field(text, "event_name")
+        market = self._extract_master_field(text, "market_name")
+        selection = self._extract_master_field(text, "selection")
+        action_raw = self._extract_master_field(text, "action")
+        price_raw = self._extract_master_field(text, "master_price")
+        market_id = self._extract_master_field(text, "market_id")
+        selection_id_raw = self._extract_master_field(text, "selection_id")
+
+        if not market_id or selection_id_raw is None:
+            return None
+
+        selection_id = self._safe_int(selection_id_raw)
+        if selection_id is None:
+            return None
+
+        action = self._normalize_action(action_raw, default="BACK")
+        price = self._safe_float(price_raw)
+
+        signal = self._base_signal(text, source="MASTER_SIGNAL")
+        signal.update(
+            {
+                "event": event,
+                "match": event,
+                "side": action,
+                "action": action,
+                "selection": selection,
+                "market_type": "MATCH_ODDS",
+                "market": market,
+                "market_name": market,
+                "odds": price,
+                "price": price,
+                "market_id": str(market_id).strip(),
+                "selection_id": selection_id,
+            }
+        )
+        return signal
+
+    def _parse_custom_patterns(self, text: str) -> Optional[Dict]:
+        custom_patterns = getattr(self, "custom_patterns", []) or []
+
         for cp in custom_patterns:
             try:
                 pattern = cp.get("pattern", "")
-                if not pattern or not re.search(pattern, text, re.IGNORECASE):
+                if not pattern:
+                    continue
+                if not re.search(pattern, text, re.IGNORECASE):
                     continue
 
-                event_match = re.search(self.signal_patterns["event"], text)
-                if event_match:
-                    signal["event"] = event_match.group(1).strip()
+                signal = self._base_signal(text, source="CUSTOM_PATTERN")
 
-                score_match = re.search(self.signal_patterns["score"], text)
-                if score_match:
-                    signal["score_home"] = int(score_match.group(1))
-                    signal["score_away"] = int(score_match.group(2))
+                odds_match = re.search(self.signal_patterns["odds"], text, re.IGNORECASE)
+                time_match = re.search(self.signal_patterns["time"], text, re.IGNORECASE)
+                score_match = re.search(self.signal_patterns["score"], text, re.IGNORECASE)
 
-                time_match = re.search(self.signal_patterns["time"], text)
-                if time_match:
-                    signal["minute"] = int(time_match.group(1))
-
-                odds_match = re.search(self.signal_patterns["odds"], text)
                 if odds_match:
-                    signal["odds"] = float(odds_match.group(1).replace(",", "."))
+                    odds_value = self._safe_float(odds_match.group(1))
+                    signal["odds"] = odds_value
+                    signal["price"] = odds_value
+
+                if time_match:
+                    signal["minute"] = self._safe_int(time_match.group(1))
+
+                if score_match:
+                    signal["score_home"] = self._safe_int(score_match.group(1))
+                    signal["score_away"] = self._safe_int(score_match.group(2))
 
                 min_minute = cp.get("min_minute")
                 max_minute = cp.get("max_minute")
-                if (
-                    min_minute is not None
-                    and signal["minute"] is not None
-                    and signal["minute"] < min_minute
-                ):
+                minute = signal["minute"]
+
+                if min_minute is not None and minute is not None and minute < min_minute:
                     continue
-                if (
-                    max_minute is not None
-                    and signal["minute"] is not None
-                    and signal["minute"] > max_minute
-                ):
+                if max_minute is not None and minute is not None and minute > max_minute:
+                    continue
+                if cp.get("live_only") and minute is None:
                     continue
 
+                total_goals = (signal["score_home"] or 0) + (signal["score_away"] or 0)
                 min_score = cp.get("min_score")
                 max_score = cp.get("max_score")
-                total_goals = (signal["score_home"] or 0) + (signal["score_away"] or 0)
+
                 if min_score is not None and total_goals < min_score:
                     continue
                 if max_score is not None and total_goals > max_score:
                     continue
 
-                if cp.get("live_only") and signal["minute"] is None:
-                    continue
-
+                action = self._normalize_action(cp.get("bet_side"), default="BACK")
+                signal["side"] = action
+                signal["action"] = action
                 signal["market_type"] = cp.get("market_type", "CUSTOM")
-                signal["side"] = cp.get("bet_side", "BACK")
 
                 selection_template = cp.get("selection_template", "")
                 if selection_template:
                     selection = selection_template
-                    selection = selection.replace(
-                        "{home_score}", str(signal["score_home"] or 0)
-                    )
-                    selection = selection.replace(
-                        "{away_score}", str(signal["score_away"] or 0)
-                    )
-                    selection = selection.replace(
-                        "{minute}", str(signal["minute"] or 0)
-                    )
+                    selection = selection.replace("{home_score}", str(signal["score_home"] or 0))
+                    selection = selection.replace("{away_score}", str(signal["score_away"] or 0))
+                    selection = selection.replace("{minute}", str(signal["minute"] or 0))
                     selection = selection.replace("{total_goals}", str(total_goals))
                     selection = selection.replace("{over_line}", str(total_goals + 0.5))
                     signal["selection"] = selection
                 else:
                     signal["selection"] = cp.get("name", "Custom Pattern")
 
-                signal["source"] = "CUSTOM_PATTERN"
                 return signal
             except re.error:
                 continue
+            except Exception:
+                continue
 
-        # ============================
-        # 3) CASHOUT SIGNAL
-        # ============================
+        return None
 
+    def _parse_cashout_signal(self, text: str) -> Optional[Dict]:
         if re.search(self.signal_patterns["cashout_all"], text, re.IGNORECASE):
-            return {
-                "market_type": "CASHOUT",
-                "cashout_type": "ALL",
-                "raw_text": text,
-                "timestamp": datetime.now().isoformat(),
-                "source": "LEGACY",
-            }
+            signal = self._base_signal(text, source="LEGACY")
+            signal["market_type"] = "CASHOUT"
+            signal["cashout_type"] = "ALL"
+            return signal
 
         if re.search(self.signal_patterns["cashout"], text, re.IGNORECASE):
-            event_match = re.search(self.signal_patterns["event"], text)
-            return {
-                "market_type": "CASHOUT",
-                "cashout_type": "SINGLE",
-                "raw_text": text,
-                "timestamp": datetime.now().isoformat(),
-                "event": event_match.group(1).strip() if event_match else None,
-                "source": "LEGACY",
-            }
+            signal = self._base_signal(text, source="LEGACY")
+            signal["market_type"] = "CASHOUT"
+            signal["cashout_type"] = "SINGLE"
+            return signal
 
-        # ============================
-        # 4) LEGACY SIGNALS
-        # ============================
+        return None
 
-        event_match = re.search(self.signal_patterns["event"], text)
-        if event_match:
-            signal["event"] = event_match.group(1).strip()
+    def _extract_event_from_lines(self, text: str) -> Optional[str]:
+        icon_match = re.search(self.signal_patterns["event_icon"], text, re.IGNORECASE)
+        if icon_match:
+            return icon_match.group(1).strip()
 
-        league_match = re.search(self.signal_patterns["league"], text)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        first = lines[0]
+        if any(ch in first for ch in (" - ", " vs ", " VS ", "–")):
+            return first
+
+        return None
+
+    def _parse_legacy_signal(self, text: str) -> Optional[Dict]:
+        signal = self._base_signal(text, source="LEGACY")
+
+        event_value = self._extract_event_from_lines(text)
+        if event_value:
+            signal["event"] = event_value
+            signal["match"] = event_value
+
+        league_match = re.search(self.signal_patterns["league"], text, re.IGNORECASE)
         if league_match:
             signal["league"] = league_match.group(1).strip()
 
-        score_match = re.search(self.signal_patterns["score"], text)
+        score_match = re.search(self.signal_patterns["score"], text, re.IGNORECASE)
         if score_match:
-            signal["score_home"] = int(score_match.group(1))
-            signal["score_away"] = int(score_match.group(2))
-            total_goals = signal["score_home"] + signal["score_away"]
-            signal["over_line"] = total_goals + 0.5
+            signal["score_home"] = self._safe_int(score_match.group(1))
+            signal["score_away"] = self._safe_int(score_match.group(2))
+            if signal["score_home"] is not None and signal["score_away"] is not None:
+                total_goals = signal["score_home"] + signal["score_away"]
+                signal["over_line"] = total_goals + 0.5
 
-        time_match = re.search(self.signal_patterns["time"], text)
+        time_match = re.search(self.signal_patterns["time"], text, re.IGNORECASE)
         if time_match:
-            signal["minute"] = int(time_match.group(1))
+            signal["minute"] = self._safe_int(time_match.group(1))
 
-        if re.search(self.signal_patterns["back"], text, re.IGNORECASE):
-            signal["side"] = "BACK"
-        elif re.search(self.signal_patterns["lay"], text, re.IGNORECASE):
+        if re.search(self.signal_patterns["lay"], text, re.IGNORECASE):
             signal["side"] = "LAY"
+            signal["action"] = "LAY"
+        elif re.search(self.signal_patterns["back"], text, re.IGNORECASE):
+            signal["side"] = "BACK"
+            signal["action"] = "BACK"
+
+        odds_match = re.search(self.signal_patterns["odds"], text, re.IGNORECASE)
+        if odds_match:
+            odds_value = self._safe_float(odds_match.group(1))
+            signal["odds"] = odds_value
+            signal["price"] = odds_value
+
+        stake_match = re.search(self.signal_patterns["stake"], text.lower(), re.IGNORECASE)
+        if stake_match:
+            signal["stake"] = self._safe_float(stake_match.group(1))
 
         if re.search(self.signal_patterns["next_goal"], text, re.IGNORECASE):
             signal["market_type"] = "NEXT_GOAL"
             if signal["score_home"] is not None and signal["score_away"] is not None:
                 signal["selection"] = f"Over {signal['over_line']}"
                 signal["side"] = "BACK"
+                signal["action"] = "BACK"
 
         over_match = re.search(self.signal_patterns["over"], text, re.IGNORECASE)
         if over_match:
             signal["selection"] = f"Over {over_match.group(2)}"
             signal["market_type"] = "OVER_UNDER"
+            if not signal["action"]:
+                signal["side"] = "BACK"
+                signal["action"] = "BACK"
 
         under_match = re.search(self.signal_patterns["under"], text, re.IGNORECASE)
         if under_match:
             signal["selection"] = f"Under {under_match.group(2)}"
             signal["market_type"] = "OVER_UNDER"
-
-        odds_match = re.search(self.signal_patterns["odds"], text)
-        if odds_match:
-            odds_str = odds_match.group(1).replace(",", ".")
-            signal["odds"] = float(odds_str)
-
-        stake_match = re.search(self.signal_patterns["stake"], text.lower())
-        if stake_match:
-            stake_str = stake_match.group(1).replace(",", ".")
-            signal["stake"] = float(stake_str)
+            if not signal["action"]:
+                signal["side"] = "BACK"
+                signal["action"] = "BACK"
 
         if signal["event"] and signal["score_home"] is not None:
             signal["selection"] = f"Over {signal['over_line']}"
             signal["side"] = "BACK"
+            signal["action"] = "BACK"
             signal["market_type"] = "OVER_UNDER"
             return signal
 
-        if signal["side"] and signal["selection"]:
+        if signal["action"] and signal["selection"]:
             return signal
 
         return None
+
+    def parse_signal(self, text: str) -> Optional[Dict]:
+        """
+        Parse message text for betting signals.
+
+        Supporta:
+        - formato MASTER SIGNAL (copy trading)
+        - formato custom da DB
+        - cashout
+        - formato legacy
+        """
+        if not text or not str(text).strip():
+            return None
+
+        text = str(text).strip()
+
+        if "MASTER SIGNAL" in text.upper():
+            return self._parse_master_signal(text)
+
+        custom = self._parse_custom_patterns(text)
+        if custom is not None:
+            return custom
+
+        cashout = self._parse_cashout_signal(text)
+        if cashout is not None:
+            return cashout
+
+        return self._parse_legacy_signal(text)
 
     async def _connect(self):
         """Connect to Telegram."""
         try:
             if self.session_path:
                 self.client = TelegramClient(
-                    self.session_path, self.api_id, self.api_hash
+                    self.session_path,
+                    self.api_id,
+                    self.api_hash,
                 )
             elif self.session_string:
                 self.client = TelegramClient(
-                    StringSession(self.session_string), self.api_id, self.api_hash
+                    StringSession(self.session_string),
+                    self.api_id,
+                    self.api_hash,
                 )
             else:
-                session_path = os.path.join(
+                session_dir = os.path.join(
                     os.environ.get("APPDATA", "."),
                     "Pickfair",
-                    "telegram_session",
                 )
+                os.makedirs(session_dir, exist_ok=True)
+                session_path = os.path.join(session_dir, "telegram_session")
                 self.client = TelegramClient(session_path, self.api_id, self.api_hash)
 
             await self.client.connect()
@@ -429,7 +486,8 @@ class TelegramListener:
         self.running = True
         if self.status_callback:
             self.status_callback(
-                "LISTENING", f"In ascolto su {len(self.monitored_chats)} chat"
+                "LISTENING",
+                f"In ascolto su {len(self.monitored_chats)} chat",
             )
 
         await self.client.run_until_disconnected()
@@ -466,7 +524,8 @@ class TelegramListener:
         if self.client and self.loop:
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    self.client.disconnect(), self.loop
+                    self.client.disconnect(),
+                    self.loop,
                 )
                 future.result(timeout=5)
             except Exception:
@@ -528,4 +587,3 @@ class SignalQueue:
         """Clear all signals."""
         with self.lock:
             self.queue.clear()
-
