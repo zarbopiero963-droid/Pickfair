@@ -229,8 +229,12 @@ def dynamic_cashout_single(
     mp = _to_decimal(matched_price, "0")
     cp = _to_decimal(current_price, "0")
 
-    if cp <= Decimal("1.01"):
-        return {"lay_stake": 0.0, "green_up": 0.0}
+    if ms <= Decimal("0") or mp <= Decimal("1.01") or cp <= Decimal("1.01"):
+        return {
+            "lay_stake": 0.0,
+            "green_up": 0.0,
+            "net_profit": 0.0,
+        }
 
     cashout_stake = (ms * mp) / cp
     cashout_stake = cashout_stake.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -238,10 +242,12 @@ def dynamic_cashout_single(
     profit_win = ms * (mp - Decimal("1")) - cashout_stake * (cp - Decimal("1"))
     profit_lose = cashout_stake - ms
     green = (profit_win + profit_lose) / Decimal("2")
+    green = green.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     return {
         "lay_stake": float(cashout_stake),
         "green_up": float(green),
+        "net_profit": float(green),
     }
 
 
