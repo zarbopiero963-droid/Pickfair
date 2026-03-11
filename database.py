@@ -99,17 +99,6 @@ class Database:
                 if getattr(self._local, "transaction_depth", 0) > 0:
                     self._local.transaction_depth -= 1
 
-    def _table_columns(self, table_name: str) -> set:
-        rows = self._execute(f"PRAGMA table_info({table_name})", fetch=True, commit=False)
-        return {row["name"] for row in rows or []}
-
-    def _has_column(self, table_name: str, column_name: str) -> bool:
-        return column_name in self._table_columns(table_name)
-
-    def _ensure_column(self, table_name: str, column_name: str, column_sql: str) -> None:
-        if not self._has_column(table_name, column_name):
-            self._execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
-
     def _json_dumps(self, value: Any) -> str:
         try:
             return json.dumps(value or [], ensure_ascii=False)
@@ -166,7 +155,7 @@ class Database:
                 return int(default)
 
     # =========================================================
-    # DB INIT / MIGRATIONS
+    # DB INIT
     # =========================================================
 
     def _init_db(self):
@@ -328,11 +317,11 @@ class Database:
 
     def _seed_default_simulation_settings(self):
         defaults = {
-            "virtual_balance": 1000.0,
-            "starting_balance": 1000.0,
-            "bet_count": 0,
+            "virtual_balance": "1000.0",
+            "starting_balance": "1000.0",
+            "bet_count": "0",
         }
-        current = self.get_simulation_settings()
+        current = self.get_settings()
         for key, value in defaults.items():
             if key not in current:
                 self._set_setting(key, value)
@@ -342,7 +331,7 @@ class Database:
     # =========================================================
 
     def _set_setting(self, key: str, value: Any):
-        stored = value if isinstance(value, str) else json.dumps(value)
+        stored = "" if value is None else str(value)
         self._execute(
             """
             INSERT INTO settings (key, value)
@@ -368,39 +357,30 @@ class Database:
             return None
         if not isinstance(value, str):
             return value
+
         text = value.strip()
         if text == "":
             return ""
-        try:
-            return json.loads(text)
-        except Exception:
-            return text
+
+        # Parse solo JSON object/list per evitare "1.0" -> 1.0
+        if text.startswith("{") or text.startswith("["):
+            try:
+                return json.loads(text)
+            except Exception:
+                return text
+
+        return text
 
     def get_settings(self) -> Dict[str, Any]:
-    rows = self._execute(
-        "SELECT key, value FROM settings",
-        fetch=True,
-        commit=False,
-    )
-
-    result: Dict[str, Any] = {}
-
-    for row in rows or []:
-        key = row["key"]
-        raw_value = row["value"]
-
-        if raw_value is None:
-            continue
-
-        value = self._parse_setting_value(raw_value)
-
-        # Evita chiavi vuote legacy
-        if key in ("session_token", "session_expiry") and value == "":
-            continue
-
-        result[key] = value
-
-    return result
+        rows = self._execute(
+            "SELECT key, value FROM settings",
+            fetch=True,
+            commit=False,
+        )
+        result: Dict[str, Any] = {}
+        for row in rows or []:
+            result[row["key"]] = self._parse_setting_value(row["value"])
+        return result
 
     def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
         payload = {}
@@ -414,7 +394,13 @@ class Database:
         for key, value in payload.items():
             self._set_setting(str(key), value)
 
-    def save_credentials(self, username: str, app_key: str, certificate: str, private_key: str):
+    def save_credentials(
+        self,
+        username: str,
+        app_key: str,
+        certificate: str,
+        private_key: str,
+    ):
         self.save_settings(
             username=username or "",
             app_key=app_key or "",
@@ -426,14 +412,11 @@ class Database:
         self._set_setting("password", password or "")
 
     def save_session(self, session_token: Optional[str], expiry: Optional[str] = None):
-    """Persist session token."""
-    if session_token:
-        self._set_setting("session_token", str(session_token))
-    if expiry:
-        self._set_setting("session_expiry", str(expiry))
+        self._set_setting("session_token", session_token or "")
+        self._set_setting("session_expiry", expiry or "")
 
     def clear_session(self):
-        """Remove session token and expiry completely from settings."""
+        """Remove session token and expiry from settings."""
         try:
             self._execute(
                 "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
@@ -476,15 +459,21 @@ class Database:
             "api_hash": settings.get("tg_api_hash", settings.get("api_hash", "")),
             "session_string": settings.get("tg_session_string", ""),
             "phone_number": settings.get("tg_phone_number", ""),
-            "enabled": bool(settings.get("tg_enabled", False)),
-            "auto_bet": bool(settings.get("tg_auto_bet", False)),
-            "require_confirmation": bool(settings.get("tg_require_confirmation", True)),
+            "enabled": bool(self._as_bool_int(settings.get("tg_enabled", 0))),
+            "auto_bet": bool(self._as_bool_int(settings.get("tg_auto_bet", 0))),
+            "require_confirmation": bool(
+                self._as_bool_int(settings.get("tg_require_confirmation", 1), 1)
+            ),
             "auto_stake": self._as_float(settings.get("tg_auto_stake", 1.0), 1.0),
             "master_chat_id": settings.get("master_chat_id", ""),
             "publisher_chat_id": settings.get("publisher_chat_id", ""),
         }
 
-    def save_telegram_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
+    def save_telegram_settings(
+        self,
+        settings: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
         payload = {}
         if isinstance(settings, dict):
             payload.update(settings)
@@ -584,7 +573,10 @@ class Database:
             )
 
     def delete_telegram_chat(self, chat_id):
-        self._execute("DELETE FROM telegram_chats WHERE chat_id = ?", (str(chat_id),))
+        self._execute(
+            "DELETE FROM telegram_chats WHERE chat_id = ?",
+            (str(chat_id),),
+        )
 
     # =========================================================
     # SIGNAL PATTERNS
@@ -620,7 +612,12 @@ class Database:
             result.append(item)
         return result
 
-    def save_signal_pattern(self, pattern: str, label: Optional[str] = None, enabled: bool = True):
+    def save_signal_pattern(
+        self,
+        pattern: str,
+        label: Optional[str] = None,
+        enabled: bool = True,
+    ):
         self._execute(
             """
             INSERT INTO signal_patterns (pattern, label, enabled)
@@ -633,7 +630,12 @@ class Database:
             ),
         )
 
-    def update_signal_pattern(self, pattern_id, pattern: str, label: Optional[str] = None):
+    def update_signal_pattern(
+        self,
+        pattern_id,
+        pattern: str,
+        label: Optional[str] = None,
+    ):
         self._execute(
             """
             UPDATE signal_patterns
@@ -667,7 +669,10 @@ class Database:
         return bool(new_state)
 
     def delete_signal_pattern(self, pattern_id):
-        self._execute("DELETE FROM signal_patterns WHERE id = ?", (self._as_int(pattern_id),))
+        self._execute(
+            "DELETE FROM signal_patterns WHERE id = ?",
+            (self._as_int(pattern_id),),
+        )
 
     # =========================================================
     # TELEGRAM SIGNALS INBOX
@@ -766,7 +771,11 @@ class Database:
     # =========================================================
 
     def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
-        raw_payload = payload if isinstance(payload, str) else json.dumps(payload or {}, ensure_ascii=False)
+        raw_payload = (
+            payload
+            if isinstance(payload, str)
+            else json.dumps(payload or {}, ensure_ascii=False)
+        )
         payload_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
 
         self._execute(
@@ -921,7 +930,10 @@ class Database:
                 self._as_float(kwargs.get("stake", 0.0), 0.0),
                 str(kwargs.get("status", "") or ""),
                 self._json_dumps(selections) if selections is not None else "[]",
-                self._as_float(kwargs.get("total_stake", kwargs.get("stake", 0.0)), 0.0),
+                self._as_float(
+                    kwargs.get("total_stake", kwargs.get("stake", 0.0)),
+                    0.0,
+                ),
                 self._as_float(kwargs.get("potential_profit", 0.0), 0.0),
             ),
         )
@@ -954,15 +966,24 @@ class Database:
     def get_simulation_settings(self) -> Dict[str, Any]:
         settings = self.get_settings()
         return {
-            "virtual_balance": self._as_float(settings.get("virtual_balance", 1000.0), 1000.0),
-            "starting_balance": self._as_float(settings.get("starting_balance", 1000.0), 1000.0),
-            "bet_count": self._as_int(settings.get("bet_count", 0), 0),
+            "virtual_balance": self._as_float(
+                settings.get("virtual_balance", "1000.0"),
+                1000.0,
+            ),
+            "starting_balance": self._as_float(
+                settings.get("starting_balance", "1000.0"),
+                1000.0,
+            ),
+            "bet_count": self._as_int(settings.get("bet_count", "0"), 0),
         }
 
     def increment_simulation_bet_count(self, new_balance):
         current = self.get_simulation_settings()
-        self._set_setting("virtual_balance", self._as_float(new_balance, current["virtual_balance"]))
-        self._set_setting("bet_count", current["bet_count"] + 1)
+        self._set_setting(
+            "virtual_balance",
+            str(self._as_float(new_balance, current["virtual_balance"])),
+        )
+        self._set_setting("bet_count", str(current["bet_count"] + 1))
 
     # =========================================================
     # CASHOUT
