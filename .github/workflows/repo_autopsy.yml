@@ -41,22 +41,48 @@ jobs:
           import os
           from collections import Counter, defaultdict
 
-          try:
-              import networkx as nx
-          except Exception:
-              nx = None
+          import networkx as nx
 
           SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "artifacts"}
 
+          def norm_path(path: str) -> str:
+              path = path.replace("\\", "/")
+              path = os.path.normpath(path).replace("\\", "/")
+              if path.startswith("./"):
+                  path = path[2:]
+              return path
+
+          def is_test_path(path: str) -> bool:
+              p = norm_path(path)
+              return p.startswith("tests/") or p == "tests/__init__.py"
+
+          def module_to_repo_path(mod_name: str):
+              if not mod_name:
+                  return None
+              candidate = norm_path(mod_name.replace(".", "/") + ".py")
+              if os.path.exists(candidate):
+                  return candidate
+              init_candidate = norm_path(mod_name.replace(".", "/") + "/__init__.py")
+              if os.path.exists(init_candidate):
+                  return init_candidate
+              return mod_name
+
           py_files = []
+          raw_to_norm = {}
+          norm_counts = Counter()
+
           for base, _, files in os.walk("."):
               if any(part in base for part in SKIP_PARTS):
                   continue
               for name in files:
                   if name.endswith(".py"):
-                      py_files.append(os.path.join(base, name).replace("\\", "/"))
+                      raw = os.path.join(base, name).replace("\\", "/")
+                      norm = norm_path(raw)
+                      py_files.append(norm)
+                      raw_to_norm[raw] = norm
+                      norm_counts[norm] += 1
 
-          py_files = sorted(py_files)
+          py_files = sorted(set(py_files))
 
           imports_map = defaultdict(list)
           calls_map = defaultdict(list)
@@ -64,17 +90,6 @@ jobs:
           func_map = defaultdict(list)
           dependency_edges = []
           parse_errors = {}
-
-          def module_to_repo_path(mod_name: str):
-              if not mod_name:
-                  return None
-              candidate = mod_name.replace(".", "/") + ".py"
-              if os.path.exists(candidate):
-                  return candidate.replace("\\", "/")
-              init_candidate = mod_name.replace(".", "/") + "/__init__.py"
-              if os.path.exists(init_candidate):
-                  return init_candidate.replace("\\", "/")
-              return mod_name
 
           for path in py_files:
               try:
@@ -110,31 +125,80 @@ jobs:
                       if call_name:
                           calls_map[path].append(call_name)
 
-          centrality_counter = Counter()
+          production_files = [p for p in py_files if not is_test_path(p)]
+          test_files = [p for p in py_files if is_test_path(p)]
+
+          prod_edges = []
+          test_edges = []
+
           for src, dst in dependency_edges:
-              centrality_counter[src] += 1
-              centrality_counter[str(dst)] += 1
+              if is_test_path(src):
+                  test_edges.append((src, str(dst)))
+              else:
+                  prod_edges.append((src, str(dst)))
 
-          ranking = centrality_counter.most_common(50)
+          prod_centrality = Counter()
+          for src, dst in prod_edges:
+              prod_centrality[src] += 1
+              if isinstance(dst, str) and dst in production_files:
+                  prod_centrality[dst] += 1
 
-          cycles = []
-          if nx is not None:
-              g = nx.DiGraph()
-              for src, dst in dependency_edges:
-                  g.add_edge(src, str(dst))
-              try:
-                  raw_cycles = list(nx.simple_cycles(g))
-                  cycles = raw_cycles[:20]
-              except Exception:
-                  cycles = []
+          test_centrality = Counter()
+          for src, dst in test_edges:
+              test_centrality[src] += 1
+              if isinstance(dst, str) and dst in test_files:
+                  test_centrality[dst] += 1
+
+          prod_import_count = {p: len(set(imports_map.get(p, []))) for p in production_files}
+          test_import_count = {p: len(set(imports_map.get(p, []))) for p in test_files}
+
+          prod_func_count = {p: len(func_map.get(p, [])) for p in production_files}
+          test_func_count = {p: len(func_map.get(p, [])) for p in test_files}
+
+          prod_class_count = {p: len(class_map.get(p, [])) for p in production_files}
+          test_class_count = {p: len(class_map.get(p, [])) for p in test_files}
+
+          prod_top_central = sorted(prod_centrality.items(), key=lambda x: x[1], reverse=True)[:20]
+          test_top_central = sorted(test_centrality.items(), key=lambda x: x[1], reverse=True)[:20]
+          prod_top_funcs = sorted(prod_func_count.items(), key=lambda x: x[1], reverse=True)[:20]
+          prod_top_imports = sorted(prod_import_count.items(), key=lambda x: x[1], reverse=True)[:20]
+          prod_top_classes = sorted(prod_class_count.items(), key=lambda x: x[1], reverse=True)[:20]
+
+          g_prod = nx.DiGraph()
+          for p in production_files:
+              g_prod.add_node(p)
+          for src, dst in prod_edges:
+              if isinstance(dst, str) and dst in production_files:
+                  g_prod.add_edge(src, dst)
+
+          try:
+              prod_cycles = list(nx.simple_cycles(g_prod))[:20]
+          except Exception:
+              prod_cycles = []
+
+          duplicate_norm_paths = [p for p, count in norm_counts.items() if count > 1]
 
           print("=" * 70)
           print("REPO AUTOPSY START")
           print("=" * 70)
-
           print(f"[INFO] Python files found: {len(py_files)}")
+          print(f"[INFO] Production files: {len(production_files)}")
+          print(f"[INFO] Test files: {len(test_files)}")
+
+          print("\n" + "=" * 70)
+          print("NORMALIZED FILE LIST")
+          print("=" * 70)
           for p in py_files:
               print(f"[FILE] {p}")
+
+          print("\n" + "=" * 70)
+          print("PATH DUPLICATE CHECK")
+          print("=" * 70)
+          if duplicate_norm_paths:
+              for p in duplicate_norm_paths:
+                  print(f"[YELLOW][DUPLICATE_NORMALIZED] {p}")
+          else:
+              print("[GREEN][OK] No normalized path duplicates detected")
 
           print("\n" + "=" * 70)
           print("PARSE ERRORS")
@@ -146,94 +210,99 @@ jobs:
               print("[GREEN][OK] No parse errors")
 
           print("\n" + "=" * 70)
-          print("IMPORT MAP")
+          print("TOP PRODUCTION FILES BY CENTRALITY")
           print("=" * 70)
-          for path in py_files:
-              imports = imports_map.get(path, [])
-              print(f"\n[MODULE] {path}")
+          for node, score in prod_top_central:
+              tag = "[GREEN]" if score >= 8 else "[YELLOW]"
+              print(f"{tag}[CENTRAL] score={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("TOP TEST FILES BY CENTRALITY")
+          print("=" * 70)
+          for node, score in test_top_central:
+              tag = "[GREEN]" if score >= 5 else "[YELLOW]"
+              print(f"{tag}[TEST_CENTRAL] score={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("TOP PRODUCTION FILES BY FUNCTION COUNT")
+          print("=" * 70)
+          for node, score in prod_top_funcs:
+              tag = "[RED]" if score >= 30 else "[YELLOW]" if score >= 15 else "[GREEN]"
+              print(f"{tag}[FUNC_COUNT] count={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("TOP PRODUCTION FILES BY IMPORT COUNT")
+          print("=" * 70)
+          for node, score in prod_top_imports:
+              tag = "[RED]" if score >= 15 else "[YELLOW]" if score >= 8 else "[GREEN]"
+              print(f"{tag}[IMPORT_COUNT] count={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("TOP PRODUCTION FILES BY CLASS COUNT")
+          print("=" * 70)
+          for node, score in prod_top_classes:
+              tag = "[YELLOW]" if score >= 3 else "[GREEN]"
+              print(f"{tag}[CLASS_COUNT] count={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("HOT PRODUCTION MODULE DETAILS")
+          print("=" * 70)
+          for node, _ in prod_top_central[:10]:
+              print(f"\n[MODULE] {node}")
+              funcs = func_map.get(node, [])
+              classes = class_map.get(node, [])
+              imports = sorted(set(imports_map.get(node, [])))
+              if classes:
+                  for cls in classes[:20]:
+                      print(f"  [CLASS] {cls}")
+              else:
+                  print("  [CLASS] <none>")
+              if funcs:
+                  for fn in funcs[:50]:
+                      print(f"  [FUNC] {fn}")
+              else:
+                  print("  [FUNC] <none>")
               if imports:
-                  for item in sorted(set(imports)):
-                      print(f"  [IMPORT] {item}")
+                  for imp in imports[:50]:
+                      print(f"  [IMPORT] {imp}")
               else:
                   print("  [IMPORT] <none>")
 
           print("\n" + "=" * 70)
-          print("CLASS MAP")
+          print("PRODUCTION DEPENDENCY CYCLES")
           print("=" * 70)
-          for path in py_files:
-              classes = class_map.get(path, [])
-              print(f"\n[MODULE] {path}")
-              if classes:
-                  for item in classes:
-                      print(f"  [CLASS] {item}")
-              else:
-                  print("  [CLASS] <none>")
-
-          print("\n" + "=" * 70)
-          print("FUNCTION MAP")
-          print("=" * 70)
-          for path in py_files:
-              funcs = func_map.get(path, [])
-              print(f"\n[MODULE] {path}")
-              if funcs:
-                  for item in funcs:
-                      print(f"  [FUNC] {item}")
-              else:
-                  print("  [FUNC] <none>")
-
-          print("\n" + "=" * 70)
-          print("TOP CENTRAL NODES")
-          print("=" * 70)
-          if ranking:
-              for score, (node, _) in enumerate([], start=1):
-                  pass
-              for node, score in ranking:
-                  color = "[GREEN]" if score >= 5 else "[YELLOW]"
-                  print(f"{color}[CENTRAL] score={score:>3} node={node}")
-          else:
-              print("[YELLOW] No dependency ranking available")
-
-          print("\n" + "=" * 70)
-          print("DEPENDENCY EDGES")
-          print("=" * 70)
-          for src, dst in dependency_edges[:500]:
-              print(f"[EDGE] {src} -> {dst}")
-          if len(dependency_edges) > 500:
-              print(f"[INFO] ... truncated, total edges: {len(dependency_edges)}")
-
-          print("\n" + "=" * 70)
-          print("DEPENDENCY CYCLES")
-          print("=" * 70)
-          if cycles:
-              for idx, cycle in enumerate(cycles, start=1):
+          if prod_cycles:
+              for idx, cycle in enumerate(prod_cycles, start=1):
                   print(f"[RED][CYCLE {idx}] {' -> '.join(cycle)}")
           else:
-              print("[GREEN][OK] No cycles detected (or graph lib unavailable)")
+              print("[GREEN][OK] No production dependency cycles detected")
 
           summary = {
               "python_files": py_files,
+              "production_files": production_files,
+              "test_files": test_files,
               "parse_errors": parse_errors,
-              "imports_map": dict(imports_map),
-              "calls_map": dict(calls_map),
-              "class_map": dict(class_map),
-              "func_map": dict(func_map),
+              "imports_map": {k: v for k, v in imports_map.items()},
+              "calls_map": {k: v for k, v in calls_map.items()},
+              "class_map": {k: v for k, v in class_map.items()},
+              "func_map": {k: v for k, v in func_map.items()},
               "dependency_edges": dependency_edges,
-              "centrality_ranking": [{"node": node, "score": score} for node, score in ranking],
-              "cycles": cycles,
+              "prod_top_centrality": [{"file": n, "score": s} for n, s in prod_top_central],
+              "test_top_centrality": [{"file": n, "score": s} for n, s in test_top_central],
+              "prod_top_functions": [{"file": n, "count": s} for n, s in prod_top_funcs],
+              "prod_top_imports": [{"file": n, "count": s} for n, s in prod_top_imports],
+              "prod_top_classes": [{"file": n, "count": s} for n, s in prod_top_classes],
+              "production_cycles": prod_cycles,
+              "duplicate_normalized_paths": duplicate_norm_paths,
           }
 
           with open("artifacts/repo_autopsy_summary.json", "w", encoding="utf-8") as f:
               json.dump(summary, f, indent=2, ensure_ascii=False)
 
-          with open("artifacts/repo_autopsy_edges.txt", "w", encoding="utf-8") as f:
-              for src, dst in dependency_edges:
-                  f.write(f"{src} -> {dst}\n")
-
           print("\n" + "=" * 70)
           print("REPO AUTOPSY END")
           print("=" * 70)
           print("[GREEN][OK] artifacts/repo_autopsy_summary.json")
-          print("[GREEN][OK] artifacts/repo_autopsy_edges.txt")
           PY
 
       - name: Upload optional autopsy artifacts
