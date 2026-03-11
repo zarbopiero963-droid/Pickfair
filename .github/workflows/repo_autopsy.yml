@@ -1,7 +1,6 @@
 name: Repo Autopsy
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
@@ -10,176 +9,237 @@ on:
     paths:
       - "**/*.py"
       - ".github/workflows/repo_autopsy.yml"
+  workflow_dispatch:
 
 jobs:
   autopsy:
     runs-on: ubuntu-latest
-
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      PYTHONUNBUFFERED: "1"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Run repository autopsy
+      - name: Install deps
         run: |
+          python -m pip install --upgrade pip
+          pip install networkx
+
+      - name: Run repo autopsy
+        run: |
+          mkdir -p artifacts
           python - <<'PY'
           import ast
+          import json
           import os
-          from collections import defaultdict, Counter
+          from collections import Counter, defaultdict
 
-          print("="*80)
-          print("REPO AUTOPSY START")
-          print("="*80)
+          try:
+              import networkx as nx
+          except Exception:
+              nx = None
+
+          SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "artifacts"}
 
           py_files = []
-
           for base, _, files in os.walk("."):
-              if any(x in base for x in [".git",".venv","venv","__pycache__",".pytest_cache"]):
+              if any(part in base for part in SKIP_PARTS):
                   continue
-              for f in files:
-                  if f.endswith(".py"):
-                      py_files.append(os.path.join(base,f).replace("\\","/"))
+              for name in files:
+                  if name.endswith(".py"):
+                      py_files.append(os.path.join(base, name).replace("\\", "/"))
 
           py_files = sorted(py_files)
 
-          print(f"\nPython files detected: {len(py_files)}\n")
-
-          for f in py_files:
-              print("FILE:",f)
-
           imports_map = defaultdict(list)
+          calls_map = defaultdict(list)
           class_map = defaultdict(list)
           func_map = defaultdict(list)
-          calls_map = defaultdict(list)
-
           dependency_edges = []
+          parse_errors = {}
 
-          parse_errors = []
+          def module_to_repo_path(mod_name: str):
+              if not mod_name:
+                  return None
+              candidate = mod_name.replace(".", "/") + ".py"
+              if os.path.exists(candidate):
+                  return candidate.replace("\\", "/")
+              init_candidate = mod_name.replace(".", "/") + "/__init__.py"
+              if os.path.exists(init_candidate):
+                  return init_candidate.replace("\\", "/")
+              return mod_name
 
           for path in py_files:
               try:
-                  source=open(path,encoding="utf-8").read()
-                  tree=ast.parse(source,filename=path)
+                  with open(path, "r", encoding="utf-8") as f:
+                      source = f.read()
+                  tree = ast.parse(source, filename=path)
               except Exception as e:
-                  parse_errors.append((path,str(e)))
+                  parse_errors[path] = str(e)
                   continue
 
               for node in ast.walk(tree):
-
-                  if isinstance(node,ast.Import):
+                  if isinstance(node, ast.Import):
                       for alias in node.names:
-                          imports_map[path].append(alias.name)
-                          dependency_edges.append((path,alias.name))
-
-                  elif isinstance(node,ast.ImportFrom):
-                      mod=node.module or ""
+                          mod = alias.name
+                          imports_map[path].append(mod)
+                          dependency_edges.append((path, module_to_repo_path(mod)))
+                  elif isinstance(node, ast.ImportFrom):
+                      mod = node.module or ""
                       imports_map[path].append(mod)
-                      dependency_edges.append((path,mod))
-
-                  elif isinstance(node,ast.ClassDef):
+                      dependency_edges.append((path, module_to_repo_path(mod)))
+                  elif isinstance(node, ast.ClassDef):
                       class_map[path].append(node.name)
-
-                  elif isinstance(node,ast.FunctionDef):
+                  elif isinstance(node, ast.FunctionDef):
                       func_map[path].append(node.name)
-
-                  elif isinstance(node,ast.AsyncFunctionDef):
+                  elif isinstance(node, ast.AsyncFunctionDef):
                       func_map[path].append(node.name)
+                  elif isinstance(node, ast.Call):
+                      call_name = None
+                      if isinstance(node.func, ast.Name):
+                          call_name = node.func.id
+                      elif isinstance(node.func, ast.Attribute):
+                          call_name = node.func.attr
+                      if call_name:
+                          calls_map[path].append(call_name)
 
-                  elif isinstance(node,ast.Call):
+          centrality_counter = Counter()
+          for src, dst in dependency_edges:
+              centrality_counter[src] += 1
+              centrality_counter[str(dst)] += 1
 
-                      name=None
+          ranking = centrality_counter.most_common(50)
 
-                      if isinstance(node.func,ast.Name):
-                          name=node.func.id
-                      elif isinstance(node.func,ast.Attribute):
-                          name=node.func.attr
+          cycles = []
+          if nx is not None:
+              g = nx.DiGraph()
+              for src, dst in dependency_edges:
+                  g.add_edge(src, str(dst))
+              try:
+                  raw_cycles = list(nx.simple_cycles(g))
+                  cycles = raw_cycles[:20]
+              except Exception:
+                  cycles = []
 
-                      if name:
-                          calls_map[path].append(name)
+          print("=" * 70)
+          print("REPO AUTOPSY START")
+          print("=" * 70)
 
-          print("\n"+"="*80)
+          print(f"[INFO] Python files found: {len(py_files)}")
+          for p in py_files:
+              print(f"[FILE] {p}")
+
+          print("\n" + "=" * 70)
           print("PARSE ERRORS")
-          print("="*80)
-
-          if not parse_errors:
-              print("No syntax errors detected")
+          print("=" * 70)
+          if parse_errors:
+              for path, err in parse_errors.items():
+                  print(f"[RED][PARSE_ERROR] {path} -> {err}")
           else:
-              for p,e in parse_errors:
-                  print("FAIL:",p)
-                  print("ERROR:",e)
+              print("[GREEN][OK] No parse errors")
 
-          print("\n"+"="*80)
-          print("FILE STRUCTURE")
-          print("="*80)
-
+          print("\n" + "=" * 70)
+          print("IMPORT MAP")
+          print("=" * 70)
           for path in py_files:
+              imports = imports_map.get(path, [])
+              print(f"\n[MODULE] {path}")
+              if imports:
+                  for item in sorted(set(imports)):
+                      print(f"  [IMPORT] {item}")
+              else:
+                  print("  [IMPORT] <none>")
 
-              print("\nFILE:",path)
+          print("\n" + "=" * 70)
+          print("CLASS MAP")
+          print("=" * 70)
+          for path in py_files:
+              classes = class_map.get(path, [])
+              print(f"\n[MODULE] {path}")
+              if classes:
+                  for item in classes:
+                      print(f"  [CLASS] {item}")
+              else:
+                  print("  [CLASS] <none>")
 
-              print("Classes:",class_map.get(path,[]))
-              print("Functions:",func_map.get(path,[]))
-              print("Imports:",imports_map.get(path,[])[:40])
+          print("\n" + "=" * 70)
+          print("FUNCTION MAP")
+          print("=" * 70)
+          for path in py_files:
+              funcs = func_map.get(path, [])
+              print(f"\n[MODULE] {path}")
+              if funcs:
+                  for item in funcs:
+                      print(f"  [FUNC] {item}")
+              else:
+                  print("  [FUNC] <none>")
 
-          centrality=Counter()
+          print("\n" + "=" * 70)
+          print("TOP CENTRAL NODES")
+          print("=" * 70)
+          if ranking:
+              for score, (node, _) in enumerate([], start=1):
+                  pass
+              for node, score in ranking:
+                  color = "[GREEN]" if score >= 5 else "[YELLOW]"
+                  print(f"{color}[CENTRAL] score={score:>3} node={node}")
+          else:
+              print("[YELLOW] No dependency ranking available")
 
-          for src,dst in dependency_edges:
-              centrality[src]+=1
-              centrality[dst]+=1
+          print("\n" + "=" * 70)
+          print("DEPENDENCY EDGES")
+          print("=" * 70)
+          for src, dst in dependency_edges[:500]:
+              print(f"[EDGE] {src} -> {dst}")
+          if len(dependency_edges) > 500:
+              print(f"[INFO] ... truncated, total edges: {len(dependency_edges)}")
 
-          print("\n"+"="*80)
-          print("TOP CENTRAL FILES / MODULES")
-          print("="*80)
+          print("\n" + "=" * 70)
+          print("DEPENDENCY CYCLES")
+          print("=" * 70)
+          if cycles:
+              for idx, cycle in enumerate(cycles, start=1):
+                  print(f"[RED][CYCLE {idx}] {' -> '.join(cycle)}")
+          else:
+              print("[GREEN][OK] No cycles detected (or graph lib unavailable)")
 
-          for node,score in centrality.most_common(40):
-              print(f"{score:>5}",node)
+          summary = {
+              "python_files": py_files,
+              "parse_errors": parse_errors,
+              "imports_map": dict(imports_map),
+              "calls_map": dict(calls_map),
+              "class_map": dict(class_map),
+              "func_map": dict(func_map),
+              "dependency_edges": dependency_edges,
+              "centrality_ranking": [{"node": node, "score": score} for node, score in ranking],
+              "cycles": cycles,
+          }
 
-          print("\n"+"="*80)
-          print("FILES BY FUNCTION COUNT")
-          print("="*80)
+          with open("artifacts/repo_autopsy_summary.json", "w", encoding="utf-8") as f:
+              json.dump(summary, f, indent=2, ensure_ascii=False)
 
-          func_rank=sorted(
-              ((f,len(func_map.get(f,[]))) for f in py_files),
-              key=lambda x:x[1],
-              reverse=True
-          )
+          with open("artifacts/repo_autopsy_edges.txt", "w", encoding="utf-8") as f:
+              for src, dst in dependency_edges:
+                  f.write(f"{src} -> {dst}\n")
 
-          for f,c in func_rank[:40]:
-              print(f"{c:>5}",f)
-
-          print("\n"+"="*80)
-          print("FILES BY CLASS COUNT")
-          print("="*80)
-
-          class_rank=sorted(
-              ((f,len(class_map.get(f,[]))) for f in py_files),
-              key=lambda x:x[1],
-              reverse=True
-          )
-
-          for f,c in class_rank[:40]:
-              print(f"{c:>5}",f)
-
-          called=Counter()
-
-          for v in calls_map.values():
-              called.update(v)
-
-          print("\n"+"="*80)
-          print("MOST CALLED SYMBOLS")
-          print("="*80)
-
-          for name,count in called.most_common(80):
-              print(f"{count:>5}",name)
-
-          print("\n"+"="*80)
+          print("\n" + "=" * 70)
           print("REPO AUTOPSY END")
-          print("="*80)
-
+          print("=" * 70)
+          print("[GREEN][OK] artifacts/repo_autopsy_summary.json")
+          print("[GREEN][OK] artifacts/repo_autopsy_edges.txt")
           PY
+
+      - name: Upload optional autopsy artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-autopsy
+          if-no-files-found: warn
+          path: artifacts/*
