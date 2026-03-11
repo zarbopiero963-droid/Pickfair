@@ -433,13 +433,13 @@ class Database:
         self._set_setting("session_expiry", str(expiry))
 
     def clear_session(self):
-    """Remove session token and expiry completely from settings."""
-    try:
-        self._execute(
-            "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
-        )
-    except Exception as e:
-        logger.error(f"Errore clear_session: {e}")
+        """Remove session token and expiry completely from settings."""
+        try:
+            self._execute(
+                "DELETE FROM settings WHERE key IN ('session_token','session_expiry')"
+            )
+        except Exception as e:
+            logger.error(f"Errore clear_session: {e}")
 
     def clear_sessions(self):
         self.clear_session()
