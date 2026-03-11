@@ -1,0 +1,409 @@
+name: Pickfair Ultra CI Pipeline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+
+# ============================================================
+# LINT + STATIC CHECK
+# ============================================================
+
+  lint_static:
+    name: Lint & Static Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install ruff bandit
+
+      - name: Ruff Lint
+        run: |
+          ruff check .
+
+      - name: Security scan
+        run: |
+          bandit -r . -x tests
+
+
+# ============================================================
+# DEPENDENCY SECURITY SCAN
+# ============================================================
+
+  dependency_scan:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - run: |
+          pip-audit
+
+
+# ============================================================
+# IMPORT SMOKE
+# ============================================================
+
+  import_smoke:
+    name: Import Smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python - <<'PY'
+          modules = [
+              "database",
+              "dutching",
+              "telegram_listener",
+              "telegram_sender",
+              "core.trading_engine",
+              "core.risk_middleware",
+              "controllers.dutching_controller",
+              "app_modules.telegram_module",
+              "main"
+          ]
+
+          for m in modules:
+              __import__(m)
+              print("[OK]", m)
+          PY
+
+
+# ============================================================
+# FULL TEST SUITE
+# ============================================================
+
+  full_tests:
+    name: Full Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run tests
+        run: |
+          xvfb-run -a pytest tests \
+            -vv \
+            --maxfail=1 \
+            --durations=15 \
+            --cov=. \
+            --cov-report=term-missing
+
+
+# ============================================================
+# PERFORMANCE TESTS
+# ============================================================
+
+  performance_tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - run: |
+          pytest \
+            tests/test_pickfair_ultra_speed.py \
+            tests/test_pickfair_pipeline_latency.py \
+            -vv
+
+
+# ============================================================
+# STRESS TESTS
+# ============================================================
+
+  stress_tests:
+    name: HFT Stress Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - run: |
+          pytest tests/test_pickfair_hft_stress.py -vv
+
+
+# ============================================================
+# CHAOS TESTS
+# ============================================================
+
+  chaos_tests:
+    name: Chaos Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - run: |
+          if [ -f tests/test_market_chaos_engine.py ]; then
+            pytest tests/test_market_chaos_engine.py -vv
+          else
+            echo "Chaos tests not found"
+          fi
+
+
+# ============================================================
+# REPO AUTOPSY
+# ============================================================
+
+  repo_autopsy:
+    name: Repo Autopsy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python - <<'PY'
+          import os,ast
+
+          print("REPO AUTOPSY")
+
+          for root,_,files in os.walk("."):
+              if ".git" in root: continue
+
+              for f in files:
+                  if f.endswith(".py"):
+                      p=os.path.join(root,f)
+
+                      try:
+                          ast.parse(open(p).read())
+                          print("[OK]",p)
+                      except Exception as e:
+                          print("[ERROR]",p,e)
+          PY
+
+
+# ============================================================
+# REPO FORENSICS
+# ============================================================
+
+  repo_forensics:
+    name: Repo Forensics
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python - <<'PY'
+          import os,ast
+
+          print("REPO FORENSICS")
+
+          for root,_,files in os.walk("."):
+              if ".git" in root: continue
+
+              for f in files:
+                  if f.endswith(".py"):
+
+                      path=os.path.join(root,f)
+
+                      try:
+                          tree=ast.parse(open(path).read())
+                          funcs=[n.name for n in ast.walk(tree) if isinstance(n,ast.FunctionDef)]
+
+                          print(path,len(funcs),"functions")
+
+                      except:
+                          pass
+          PY
+
+
+# ============================================================
+# SYSTEM VALIDATION
+# ============================================================
+
+  system_validation:
+    name: System Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - run: |
+          if [ -f tests/test_system_simulation.py ]; then
+            pytest tests/test_system_simulation.py -vv
+          fi
+
+      - run: |
+          if [ -f tests/test_system_expanded_validation.py ]; then
+            pytest tests/test_system_expanded_validation.py -vv
+          fi
+
+
+# ============================================================
+# FINAL MERGED LOG
+# ============================================================
+
+  unified_final_log:
+    name: Unified Final Log
+    runs-on: ubuntu-latest
+    if: always()
+
+    needs:
+      - lint_static
+      - dependency_scan
+      - import_smoke
+      - full_tests
+      - performance_tests
+      - stress_tests
+      - chaos_tests
+      - repo_autopsy
+      - repo_forensics
+      - system_validation
+
+    steps:
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip jq
+
+      - name: Download workflow logs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -L \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/logs \
+          -o logs.zip
+
+      - run: |
+          unzip logs.zip -d logs
+
+      - name: Merge logs
+        run: |
+
+          echo "################################################################"
+          echo "PICKFAIR ULTRA CI FINAL LOG"
+          echo "################################################################"
+
+          echo "Repository : ${{ github.repository }}"
+          echo "Run ID     : ${{ github.run_id }}"
+
+          echo
+          echo "JOB RESULTS"
+          echo "------------------------------------------------"
+
+          echo "Lint            : ${{ needs.lint_static.result }}"
+          echo "Dependency scan : ${{ needs.dependency_scan.result }}"
+          echo "Import smoke    : ${{ needs.import_smoke.result }}"
+          echo "Full tests      : ${{ needs.full_tests.result }}"
+          echo "Performance     : ${{ needs.performance_tests.result }}"
+          echo "Stress tests    : ${{ needs.stress_tests.result }}"
+          echo "Chaos tests     : ${{ needs.chaos_tests.result }}"
+          echo "Autopsy         : ${{ needs.repo_autopsy.result }}"
+          echo "Forensics       : ${{ needs.repo_forensics.result }}"
+          echo "System validation : ${{ needs.system_validation.result }}"
+
+          echo
+          echo "MERGED JOB LOGS"
+          echo "------------------------------------------------"
+
+          for f in logs/*.txt
+          do
+            echo
+            echo "================================================"
+            echo "LOG FILE: $f"
+            echo "================================================"
+            cat "$f"
+          done
+
+          echo
+          echo "######################## END ########################"
