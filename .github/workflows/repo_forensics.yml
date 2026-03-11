@@ -37,11 +37,33 @@ jobs:
           python - <<'PY'
           import ast
           import os
-          from collections import Counter, defaultdict
+          from collections import defaultdict
 
           import networkx as nx
 
           SKIP_PARTS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "artifacts"}
+
+          def norm_path(path: str) -> str:
+              path = path.replace("\\", "/")
+              path = os.path.normpath(path).replace("\\", "/")
+              if path.startswith("./"):
+                  path = path[2:]
+              return path
+
+          def is_test_path(path: str) -> bool:
+              p = norm_path(path)
+              return p.startswith("tests/") or p == "tests/__init__.py"
+
+          def module_to_repo_path(mod_name: str):
+              if not mod_name:
+                  return None
+              candidate = norm_path(mod_name.replace(".", "/") + ".py")
+              if os.path.exists(candidate):
+                  return candidate
+              init_candidate = norm_path(mod_name.replace(".", "/") + "/__init__.py")
+              if os.path.exists(init_candidate):
+                  return init_candidate
+              return mod_name
 
           py_files = []
           for base, _, files in os.walk("."):
@@ -49,34 +71,33 @@ jobs:
                   continue
               for name in files:
                   if name.endswith(".py"):
-                      py_files.append(os.path.join(base, name).replace("\\", "/"))
+                      py_files.append(norm_path(os.path.join(base, name)))
 
-          py_files = sorted(py_files)
-
-          def module_to_repo_path(mod_name: str):
-              if not mod_name:
-                  return None
-              candidate = mod_name.replace(".", "/") + ".py"
-              if os.path.exists(candidate):
-                  return candidate.replace("\\", "/")
-              init_candidate = mod_name.replace(".", "/") + "/__init__.py"
-              if os.path.exists(init_candidate):
-                  return init_candidate.replace("\\", "/")
-              return mod_name
+          py_files = sorted(set(py_files))
+          production_files = [p for p in py_files if not is_test_path(p)]
+          test_files = [p for p in py_files if is_test_path(p)]
 
           imports_per_file = defaultdict(set)
           funcs_per_file = defaultdict(list)
           classes_per_file = defaultdict(list)
 
-          g = nx.DiGraph()
+          g_prod = nx.DiGraph()
+          g_test = nx.DiGraph()
+
+          for path in production_files:
+              g_prod.add_node(path)
+          for path in test_files:
+              g_test.add_node(path)
+
+          parse_errors = {}
 
           for path in py_files:
-              g.add_node(path)
               try:
                   with open(path, "r", encoding="utf-8") as f:
                       source = f.read()
                   tree = ast.parse(source, filename=path)
               except Exception as e:
+                  parse_errors[path] = str(e)
                   print(f"[RED][PARSE_ERROR] {path} -> {e}")
                   continue
 
@@ -85,11 +106,21 @@ jobs:
                       for alias in node.names:
                           mod = alias.name
                           imports_per_file[path].add(mod)
-                          g.add_edge(path, str(module_to_repo_path(mod)))
+                          resolved = module_to_repo_path(mod)
+                          if is_test_path(path):
+                              g_test.add_edge(path, str(resolved))
+                          else:
+                              if isinstance(resolved, str) and resolved in production_files:
+                                  g_prod.add_edge(path, resolved)
                   elif isinstance(node, ast.ImportFrom):
                       mod = node.module or ""
                       imports_per_file[path].add(mod)
-                      g.add_edge(path, str(module_to_repo_path(mod)))
+                      resolved = module_to_repo_path(mod)
+                      if is_test_path(path):
+                          g_test.add_edge(path, str(resolved))
+                      else:
+                          if isinstance(resolved, str) and resolved in production_files:
+                              g_prod.add_edge(path, resolved)
                   elif isinstance(node, ast.FunctionDef):
                       funcs_per_file[path].append(node.name)
                   elif isinstance(node, ast.AsyncFunctionDef):
@@ -97,59 +128,83 @@ jobs:
                   elif isinstance(node, ast.ClassDef):
                       classes_per_file[path].append(node.name)
 
-          degree_rank = sorted(g.degree, key=lambda x: x[1], reverse=True)[:30]
-          indegree_rank = sorted(g.in_degree, key=lambda x: x[1], reverse=True)[:30]
-          outdegree_rank = sorted(g.out_degree, key=lambda x: x[1], reverse=True)[:30]
+          degree_rank = sorted(g_prod.degree, key=lambda x: x[1], reverse=True)[:20]
+          indegree_rank = sorted(g_prod.in_degree, key=lambda x: x[1], reverse=True)[:20]
+          outdegree_rank = sorted(g_prod.out_degree, key=lambda x: x[1], reverse=True)[:20]
+          test_degree_rank = sorted(g_test.degree, key=lambda x: x[1], reverse=True)[:20]
 
           try:
-              cycles = list(nx.simple_cycles(g))[:20]
+              prod_cycles = list(nx.simple_cycles(g_prod))[:20]
           except Exception:
-              cycles = []
+              prod_cycles = []
 
           print("=" * 70)
           print("REPO FORENSICS START")
           print("=" * 70)
-
           print(f"[INFO] Total Python files: {len(py_files)}")
-          print(f"[INFO] Total graph nodes: {len(g.nodes)}")
-          print(f"[INFO] Total graph edges: {len(g.edges)}")
+          print(f"[INFO] Production files: {len(production_files)}")
+          print(f"[INFO] Test files: {len(test_files)}")
+          print(f"[INFO] Production graph nodes: {len(g_prod.nodes)}")
+          print(f"[INFO] Production graph edges: {len(g_prod.edges)}")
 
           print("\n" + "=" * 70)
-          print("TOP DEGREE RANKING")
+          print("TOP PRODUCTION DEGREE RANKING")
           print("=" * 70)
           for node, score in degree_rank:
-              print(f"[RANK][DEGREE] score={score:>3} node={node}")
+              tag = "[RED]" if score >= 10 else "[YELLOW]" if score >= 5 else "[GREEN]"
+              print(f"{tag}[RANK][DEGREE] score={score:>3} file={node}")
 
           print("\n" + "=" * 70)
-          print("TOP IN-DEGREE RANKING")
+          print("TOP PRODUCTION IN-DEGREE RANKING")
           print("=" * 70)
           for node, score in indegree_rank:
-              print(f"[RANK][IN] score={score:>3} node={node}")
+              tag = "[RED]" if score >= 5 else "[YELLOW]" if score >= 3 else "[GREEN]"
+              print(f"{tag}[RANK][IN] score={score:>3} file={node}")
 
           print("\n" + "=" * 70)
-          print("TOP OUT-DEGREE RANKING")
+          print("TOP PRODUCTION OUT-DEGREE RANKING")
           print("=" * 70)
           for node, score in outdegree_rank:
-              print(f"[RANK][OUT] score={score:>3} node={node}")
+              tag = "[RED]" if score >= 8 else "[YELLOW]" if score >= 4 else "[GREEN]"
+              print(f"{tag}[RANK][OUT] score={score:>3} file={node}")
 
           print("\n" + "=" * 70)
-          print("HOT MODULES DETAILS")
+          print("TOP TEST DEGREE RANKING")
           print("=" * 70)
-          hot_nodes = [node for node, _ in degree_rank[:15]]
+          for node, score in test_degree_rank:
+              tag = "[YELLOW]" if score >= 4 else "[GREEN]"
+              print(f"{tag}[RANK][TEST] score={score:>3} file={node}")
+
+          print("\n" + "=" * 70)
+          print("HOT PRODUCTION MODULES DETAILS")
+          print("=" * 70)
+          hot_nodes = [node for node, _ in degree_rank[:10]]
           for node in hot_nodes:
               print(f"\n[MODULE] {node}")
-              for cls in classes_per_file.get(node, []):
-                  print(f"  [CLASS] {cls}")
-              for fn in funcs_per_file.get(node, [])[:50]:
-                  print(f"  [FUNC] {fn}")
-              for imp in sorted(imports_per_file.get(node, [])):
-                  print(f"  [IMPORT] {imp}")
+              classes = classes_per_file.get(node, [])
+              funcs = funcs_per_file.get(node, [])
+              imports = sorted(imports_per_file.get(node, []))
+              if classes:
+                  for cls in classes[:20]:
+                      print(f"  [CLASS] {cls}")
+              else:
+                  print("  [CLASS] <none>")
+              if funcs:
+                  for fn in funcs[:50]:
+                      print(f"  [FUNC] {fn}")
+              else:
+                  print("  [FUNC] <none>")
+              if imports:
+                  for imp in imports[:50]:
+                      print(f"  [IMPORT] {imp}")
+              else:
+                  print("  [IMPORT] <none>")
 
           print("\n" + "=" * 70)
-          print("DEPENDENCY CYCLES")
+          print("PRODUCTION DEPENDENCY CYCLES")
           print("=" * 70)
-          if cycles:
-              for idx, cycle in enumerate(cycles, start=1):
+          if prod_cycles:
+              for idx, cycle in enumerate(prod_cycles, start=1):
                   print(f"[RED][CYCLE {idx}] {' -> '.join(cycle)}")
           else:
               print("[GREEN][OK] No dependency cycles detected")
