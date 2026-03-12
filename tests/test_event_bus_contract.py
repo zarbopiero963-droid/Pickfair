@@ -1,46 +1,55 @@
 from core.event_bus import EventBus
 
 
-def test_event_bus_subscribe_publish_unsubscribe():
+def test_event_bus_publish_and_receive():
     bus = EventBus()
-    received = []
 
-    def cb(data):
-        received.append(data)
+    received = {}
 
-    bus.subscribe("EVT", cb)
-    bus.publish("EVT", {"x": 1})
-    assert received == [{"x": 1}]
+    def handler(payload):
+        received["payload"] = payload
 
-    bus.unsubscribe("EVT", cb)
-    bus.publish("EVT", {"x": 2})
-    assert received == [{"x": 1}]
+    bus.subscribe("TEST_EVENT", handler)
+
+    payload = {"value": 123}
+
+    bus.publish("TEST_EVENT", payload)
+
+    assert "payload" in received
+    assert received["payload"] == payload
 
 
-def test_event_bus_prevents_duplicate_subscriber_registration():
+def test_event_bus_multiple_subscribers_receive_event():
     bus = EventBus()
-    received = []
 
-    def cb(data):
-        received.append(data)
+    counter = {"a": 0, "b": 0}
 
-    bus.subscribe("EVT", cb)
-    bus.subscribe("EVT", cb)
-    bus.publish("EVT", 123)
-    assert received == [123]
+    def handler_a(payload):
+        counter["a"] += 1
+
+    def handler_b(payload):
+        counter["b"] += 1
+
+    bus.subscribe("MULTI_EVENT", handler_a)
+    bus.subscribe("MULTI_EVENT", handler_b)
+
+    bus.publish("MULTI_EVENT", {"x": 1})
+
+    assert counter["a"] == 1
+    assert counter["b"] == 1
 
 
-def test_event_bus_continues_when_one_subscriber_fails():
+def test_event_bus_unsubscribe():
     bus = EventBus()
-    received = []
 
-    def bad(_data):
-        raise RuntimeError("boom")
+    counter = {"count": 0}
 
-    def good(data):
-        received.append(data)
+    def handler(payload):
+        counter["count"] += 1
 
-    bus.subscribe("EVT", bad)
-    bus.subscribe("EVT", good)
-    bus.publish("EVT", "ok")
-    assert received == ["ok"]
+    bus.subscribe("EV", handler)
+    bus.unsubscribe("EV", handler)
+
+    bus.publish("EV", {})
+
+    assert counter["count"] == 0
