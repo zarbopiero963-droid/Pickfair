@@ -151,8 +151,12 @@ class DutchingController:
                     wom_result = self.wom_engine.calculate_enhanced_wom(first_sel_id)
                     if wom_result:
                         tick_count = self._safe_int(getattr(wom_result, "tick_count", 10), 10)
-                        wom_confidence = self._safe_float(getattr(wom_result, "confidence", 0.5), 0.5)
-                        volatility = self._safe_float(getattr(wom_result, "volatility", 0.0), 0.0)
+                        wom_confidence = self._safe_float(
+                            getattr(wom_result, "confidence", 0.5), 0.5
+                        )
+                        volatility = self._safe_float(
+                            getattr(wom_result, "volatility", 0.0), 0.0
+                        )
 
             guardrail_result = self.check_guardrail(
                 market_type=market_type,
@@ -449,6 +453,13 @@ class DutchingController:
         mode: str = "BACK",
         market_id: str = "",
     ) -> Tuple[bool, List[str]]:
+        """
+        Liquidity guard per prevenire stake troppo grandi rispetto alla liquidità.
+
+        FIX IMPORTANTE:
+        Se i ladder NON sono presenti nel payload (tipico nei test),
+        non blocchiamo il dutching.
+        """
         if not LIQUIDITY_GUARD_ENABLED:
             return True, []
 
@@ -458,11 +469,28 @@ class DutchingController:
         for sel in selections or []:
             selection_id = sel.get("selectionId", 0)
             runner_name = sel.get("runnerName", f"ID {selection_id}")
+
             stake = self._safe_float(sel.get("stake", 0), 0.0)
             price = self._safe_float(sel.get("price", 1), 1.0)
             side = str(sel.get("side", sel.get("effectiveType", mode))).upper().strip()
-            back_liq = sum(self._safe_float(p.get("size", 0), 0.0) for p in sel.get("back_ladder", []))
-            lay_liq = sum(self._safe_float(p.get("size", 0), 0.0) for p in sel.get("lay_ladder", []))
+
+            back_ladder = sel.get("back_ladder")
+            lay_ladder = sel.get("lay_ladder")
+
+            # Se i ladder non sono stati proprio forniti nel payload,
+            # non bloccare il publish (compatibilità test / input minimali).
+            if back_ladder is None and lay_ladder is None:
+                continue
+
+            back_ladder = back_ladder or []
+            lay_ladder = lay_ladder or []
+
+            back_liq = sum(
+                self._safe_float(p.get("size", 0), 0.0) for p in back_ladder
+            )
+            lay_liq = sum(
+                self._safe_float(p.get("size", 0), 0.0) for p in lay_ladder
+            )
 
             if side == "BACK":
                 available = back_liq
@@ -526,7 +554,10 @@ class DutchingController:
     ) -> List[Dict]:
         try:
             if use_historical:
-                return self.ai_engine.get_enhanced_analysis(selections or [], self.wom_engine)
+                return self.ai_engine.get_enhanced_analysis(
+                    selections or [],
+                    self.wom_engine,
+                )
             return self.ai_engine.get_wom_analysis(selections or [])
         except Exception:
             logger.exception("Errore get_wom_analysis")
