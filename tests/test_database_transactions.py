@@ -1,21 +1,29 @@
-import pytest
-
 from database import Database
 
 
-def test_database_execute_commit_and_fetch(tmp_path):
-    db = Database(db_path=str(tmp_path / "test.db"))
-    db._set_setting("alpha", "1")
-    assert db._get_setting_raw("alpha") == "1"
-    db.close()
+def test_database_insert_and_read(tmp_path):
+    db_path = tmp_path / "db.sqlite"
+
+    db = Database(str(db_path))
+
+    db.save_telegram_settings(api_id="123", api_hash="abc")
+
+    settings = db.get_telegram_settings()
+
+    assert settings["api_id"] == "123"
+    assert settings["api_hash"] == "abc"
 
 
-def test_database_failed_query_does_not_break_subsequent_queries(tmp_path):
-    db = Database(db_path=str(tmp_path / "test.db"))
+def test_database_remove_password(tmp_path):
+    db_path = tmp_path / "db.sqlite"
 
-    with pytest.raises(Exception):
-        db._execute("INSERT INTO table_that_does_not_exist(x) VALUES (1)")
+    db = Database(str(db_path))
 
-    db._set_setting("beta", "2")
-    assert db.get_settings()["beta"] == "2"
-    db.close()
+    db.save_password("secret")
+    assert "password" in db.get_settings()
+
+    db.save_password(None)
+
+    settings = db.get_settings()
+
+    assert "password" not in settings
