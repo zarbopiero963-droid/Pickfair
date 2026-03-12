@@ -258,6 +258,7 @@ class DutchingController:
             }
 
         payload = {
+            "source": "DUTCHING_CONTROLLER",
             "market_id": market_id,
             "market_type": market_type,
             "event_name": self._safe_event_name(),
