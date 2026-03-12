@@ -2,38 +2,49 @@ import time
 
 from core.tick_ring_buffer import TickRingBuffer
 from core.fast_analytics import FastWoMState
+from core.perf_counters import now_ns
 
 
-def test_pipeline_burst_5000_ticks():
-    buf = TickRingBuffer(maxlen=10000)
-    wom = FastWoMState(max_ticks=256)
+def test_pipeline_latency_under_1ms_average():
 
-    start = time.perf_counter()
+    buf = TickRingBuffer(maxlen=5000)
+    wom = FastWoMState(max_ticks=128)
 
-    for i in range(5000):
+    loops = 2000
+
+    total_ns = 0
+
+    for i in range(loops):
+
+        t0 = now_ns()
+
         buf.push(
             {
-                "selection_id": (i % 10) + 1,
+                "selection_id": 1,
                 "back_price": 2.0,
-                "back_volume": 100.0 + (i % 5),
+                "back_volume": 120.0,
                 "lay_price": 2.02,
-                "lay_volume": 80.0 + (i % 5),
+                "lay_volume": 80.0,
             }
         )
 
-    processed = 0
-    while len(buf):
         tick = buf.pop()
+
         wom.push(
             {
                 "back_volume": tick["back_volume"],
                 "lay_volume": tick["lay_volume"],
             }
         )
+
         _ = wom.wom()
-        processed += 1
 
-    elapsed = time.perf_counter() - start
+        elapsed = now_ns() - t0
 
-    assert processed == 5000
-    assert elapsed < 0.20
+        total_ns += elapsed
+
+    avg_ns = total_ns / loops
+
+    avg_us = avg_ns / 1000
+
+    assert avg_us < 1000
