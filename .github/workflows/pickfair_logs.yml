@@ -11,70 +11,97 @@ permissions:
   contents: read
 
 jobs:
-
   aggregate_logs:
-
     name: Aggregate Workflow Logs
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip curl jq
+          sudo apt-get install -y unzip curl jq file
 
       - name: Download logs archive
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -e
 
           RUN_ID=${{ github.event.workflow_run.id }}
 
-          echo "Downloading logs for run $RUN_ID"
+          echo "Downloading logs for completed run $RUN_ID"
 
-          curl -L \
-          -H "Authorization: Bearer $GH_TOKEN" \
-          -H "Accept: application/vnd.github+json" \
-          https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID/logs \
-          -o logs.zip
+          HTTP_CODE=$(curl -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -o logs.zip \
+            -w "%{http_code}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID/logs")
+
+          echo "HTTP_CODE=$HTTP_CODE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Download failed. Response preview:"
+            head -c 3000 logs.zip || true
+            exit 1
+          fi
+
+      - name: Verify archive
+        run: |
+          set -e
+          file logs.zip
+          ls -lh logs.zip
+
+          if ! file logs.zip | grep -qi "zip archive"; then
+            echo "Downloaded file is not a ZIP archive."
+            echo "Preview:"
+            head -c 3000 logs.zip || true
+            exit 1
+          fi
 
       - name: Extract logs
         run: |
-          mkdir logs
+          set -e
+          rm -rf logs
+          mkdir -p logs
           unzip -q logs.zip -d logs
+
+      - name: Show extracted tree
+        run: |
+          echo "==============================="
+          echo "EXTRACTED LOG FILE TREE"
+          echo "==============================="
+          find logs -type f | sort || true
 
       - name: Print merged logs
         run: |
-
           echo "################################################################"
           echo "PICKFAIR GLOBAL WORKFLOW LOG"
           echo "################################################################"
-
           echo "Repository : ${{ github.repository }}"
           echo "Run ID     : ${{ github.event.workflow_run.id }}"
-
           echo
           echo "WORKFLOW STATUS"
           echo "------------------------------------------------"
-
           echo "Conclusion : ${{ github.event.workflow_run.conclusion }}"
           echo "Event      : ${{ github.event.workflow_run.event }}"
-
           echo
           echo "MERGED JOB LOGS"
           echo "------------------------------------------------"
 
-          for f in logs/*.txt
-          do
+          FOUND=0
+          while IFS= read -r f; do
+            FOUND=1
             echo
             echo "================================================"
             echo "LOG FILE: $f"
             echo "================================================"
-
             cat "$f"
+            echo
+          done < <(find logs -type f | sort)
 
-          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No extracted log files found."
+          fi
 
-          echo
           echo "######################## END ########################"
