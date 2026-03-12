@@ -1,14 +1,21 @@
 from tick_dispatcher import TickDispatcher
 
 
-def test_dispatch_to_multiple():
-    disp = TickDispatcher()
+def test_tick_dispatcher_multiple_subscribers():
+    dispatcher = TickDispatcher()
 
-    a, b = [], []
+    counters = {"a": 0, "b": 0}
 
-    disp.subscribe(lambda t: a.append(t))
-    disp.subscribe(lambda t: b.append(t))
+    def sub_a(tick):
+        counters["a"] += 1
 
-    disp.dispatch({"p": 1})
+    def sub_b(tick):
+        counters["b"] += 1
 
-    assert a and b
+    dispatcher.subscribe(sub_a)
+    dispatcher.subscribe(sub_b)
+
+    dispatcher.dispatch({"price": 2.0})
+
+    assert counters["a"] == 1
+    assert counters["b"] == 1
