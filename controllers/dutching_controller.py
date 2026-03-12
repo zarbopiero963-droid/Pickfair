@@ -453,13 +453,6 @@ class DutchingController:
         mode: str = "BACK",
         market_id: str = "",
     ) -> Tuple[bool, List[str]]:
-        """
-        Liquidity guard per prevenire stake troppo grandi rispetto alla liquidità.
-
-        FIX IMPORTANTE:
-        Se i ladder NON sono presenti nel payload (tipico nei test),
-        non blocchiamo il dutching.
-        """
         if not LIQUIDITY_GUARD_ENABLED:
             return True, []
 
@@ -477,8 +470,6 @@ class DutchingController:
             back_ladder = sel.get("back_ladder")
             lay_ladder = sel.get("lay_ladder")
 
-            # Se i ladder non sono stati proprio forniti nel payload,
-            # non bloccare il publish (compatibilità test / input minimali).
             if back_ladder is None and lay_ladder is None:
                 continue
 
@@ -525,8 +516,17 @@ class DutchingController:
         for r in results or []:
             original = sel_by_id.get(r.get("selectionId"), {})
             merged_item = dict(r)
-            merged_item["back_ladder"] = list(original.get("back_ladder", []) or [])
-            merged_item["lay_ladder"] = list(original.get("lay_ladder", []) or [])
+
+            if "back_ladder" in original:
+                merged_item["back_ladder"] = list(original.get("back_ladder") or [])
+            else:
+                merged_item["back_ladder"] = None
+
+            if "lay_ladder" in original:
+                merged_item["lay_ladder"] = list(original.get("lay_ladder") or [])
+            else:
+                merged_item["lay_ladder"] = None
+
             merged.append(merged_item)
 
         return merged
