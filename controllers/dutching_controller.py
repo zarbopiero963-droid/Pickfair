@@ -123,9 +123,6 @@ class DutchingController:
         if self.safe_mode.is_safe_mode_active:
             raise RuntimeError("SAFE MODE attivo: dutching bloccato")
 
-        if not self.bus:
-            raise RuntimeError("EventBus mancante nel DutchingController")
-
         if not market_id:
             raise ValueError("market_id mancante")
 
@@ -302,6 +299,9 @@ class DutchingController:
                 "orders": placed,
                 "payload": payload,
             }
+
+        if not self.bus:
+            raise RuntimeError("EventBus mancante nel DutchingController")
 
         self.bus.publish("REQ_PLACE_DUTCHING", payload)
         return {
