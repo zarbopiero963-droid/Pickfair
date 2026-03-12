@@ -1,12 +1,14 @@
 import importlib
 
 
-def test_public_api_contract():
-    telegram_listener = importlib.import_module("telegram_listener")
+def test_telegram_listener_public_api():
+    mod = importlib.import_module("telegram_listener")
 
     required = [
+        "TelegramListener",
+        "SignalQueue",
         "parse_signal_message",
     ]
 
     for name in required:
-        assert hasattr(telegram_listener, name), f"Missing API: {name}"
+        assert hasattr(mod, name), f"Missing public API: {name}"
