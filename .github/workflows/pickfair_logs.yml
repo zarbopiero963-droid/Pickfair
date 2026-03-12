@@ -49,6 +49,10 @@ jobs:
       - name: Verify archive
         run: |
           set -e
+
+          echo "==============================="
+          echo "ARCHIVE INFO"
+          echo "==============================="
           file logs.zip
           ls -lh logs.zip
 
@@ -86,22 +90,63 @@ jobs:
           echo "Conclusion : ${{ github.event.workflow_run.conclusion }}"
           echo "Event      : ${{ github.event.workflow_run.event }}"
           echo
-          echo "MERGED JOB LOGS"
-          echo "------------------------------------------------"
 
-          FOUND=0
+          print_file() {
+            f="$1"
+            if [ -f "$f" ]; then
+              echo
+              echo "################################################################"
+              echo "FILE: $f"
+              echo "################################################################"
+              cat "$f"
+              echo
+            fi
+          }
+
+          echo "================================================"
+          echo "UNIFIED IMPORTANT LOGS"
+          echo "================================================"
+
           while IFS= read -r f; do
-            FOUND=1
-            echo
-            echo "================================================"
-            echo "LOG FILE: $f"
-            echo "================================================"
-            cat "$f"
-            echo
+            case "$f" in
+              *"Run tests.txt"|\
+              *"Run xvfb-run -a pytest"*.txt|\
+              *"Run pytest"*.txt|\
+              *"Ruff Lint.txt"|\
+              *"Run pip-audit.txt"|\
+              *"Run python - 'PY'.txt"|\
+              *"Run python - <<'PY'".txt|\
+              *"Run if [ -f tests_test_system_simulation.py ]; then.txt"|\
+              *"Run if [ -f tests_test_system_expanded_validation.py ]; then.txt"|\
+              *"Run if [ -f tests_test_market_chaos_engine.py ]; then.txt"|\
+              *"Run if [ -f tests_test_pickfair_hft_stress.py ]; then.txt"|\
+              *"Run if [ -f tests_test_pickfair_ultra_speed.py ]; then.txt"|\
+              *"Run if [ -f tests_test_pickfair_pipeline_latency.py ]; then.txt")
+                print_file "$f"
+                ;;
+            esac
           done < <(find logs -type f | sort)
 
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No extracted log files found."
+          echo
+          echo "================================================"
+          echo "PYTEST FAILURE / ERROR QUICK VIEW"
+          echo "================================================"
+
+          MATCHED=0
+          while IFS= read -r f; do
+            if grep -Eq "FAILED|ERROR|short test summary info|test session starts|ImportError|AssertionError|Traceback" "$f"; then
+              MATCHED=1
+              echo
+              echo "################################################################"
+              echo "MATCHED TEST LOG: $f"
+              echo "################################################################"
+              cat "$f"
+              echo
+            fi
+          done < <(find logs -type f | sort)
+
+          if [ "$MATCHED" -eq 0 ]; then
+            echo "No failure/error sections found in extracted logs."
           fi
 
           echo "######################## END ########################"
