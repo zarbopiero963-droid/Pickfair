@@ -3,6 +3,8 @@ Telegram Listener for betting signals.
 Monitors specified channels/groups/chats and parses betting signals.
 """
 
+__all__ = ["TelegramListener", "SignalQueue", "parse_signal_message"]
+
 import asyncio
 import os
 import re
@@ -160,7 +162,11 @@ class TelegramListener:
             return None
 
     def _extract_master_field(self, text: str, field: str) -> Optional[str]:
-        match = re.search(rf"^{field}\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        match = re.search(
+            rf"^{field}\s*:\s*(.+)$",
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        )
         return match.group(1).strip() if match else None
 
     def _parse_master_signal(self, text: str) -> Optional[Dict]:
@@ -216,7 +222,11 @@ class TelegramListener:
 
                 odds_match = re.search(self.signal_patterns["odds"], text, re.IGNORECASE)
                 time_match = re.search(self.signal_patterns["time"], text, re.IGNORECASE)
-                score_match = re.search(self.signal_patterns["score"], text, re.IGNORECASE)
+                score_match = re.search(
+                    self.signal_patterns["score"],
+                    text,
+                    re.IGNORECASE,
+                )
 
                 if odds_match:
                     odds_value = self._safe_float(odds_match.group(1))
@@ -234,9 +244,17 @@ class TelegramListener:
                 max_minute = cp.get("max_minute")
                 minute = signal["minute"]
 
-                if min_minute is not None and minute is not None and minute < min_minute:
+                if (
+                    min_minute is not None
+                    and minute is not None
+                    and minute < min_minute
+                ):
                     continue
-                if max_minute is not None and minute is not None and minute > max_minute:
+                if (
+                    max_minute is not None
+                    and minute is not None
+                    and minute > max_minute
+                ):
                     continue
                 if cp.get("live_only") and minute is None:
                     continue
@@ -258,9 +276,18 @@ class TelegramListener:
                 selection_template = cp.get("selection_template", "")
                 if selection_template:
                     selection = selection_template
-                    selection = selection.replace("{home_score}", str(signal["score_home"] or 0))
-                    selection = selection.replace("{away_score}", str(signal["score_away"] or 0))
-                    selection = selection.replace("{minute}", str(signal["minute"] or 0))
+                    selection = selection.replace(
+                        "{home_score}",
+                        str(signal["score_home"] or 0),
+                    )
+                    selection = selection.replace(
+                        "{away_score}",
+                        str(signal["score_away"] or 0),
+                    )
+                    selection = selection.replace(
+                        "{minute}",
+                        str(signal["minute"] or 0),
+                    )
                     selection = selection.replace("{total_goals}", str(total_goals))
                     selection = selection.replace("{over_line}", str(total_goals + 0.5))
                     signal["selection"] = selection
@@ -342,7 +369,11 @@ class TelegramListener:
             signal["odds"] = odds_value
             signal["price"] = odds_value
 
-        stake_match = re.search(self.signal_patterns["stake"], text.lower(), re.IGNORECASE)
+        stake_match = re.search(
+            self.signal_patterns["stake"],
+            text.lower(),
+            re.IGNORECASE,
+        )
         if stake_match:
             signal["stake"] = self._safe_float(stake_match.group(1))
 
@@ -587,3 +618,22 @@ class SignalQueue:
         """Clear all signals."""
         with self.lock:
             self.queue.clear()
+
+
+def parse_signal_message(message: str):
+    """
+    Stable public parser entrypoint for tests and external callers.
+    Uses TelegramListener.parse_signal internally.
+    """
+    if message is None:
+        return None
+
+    text = str(message).strip()
+    if not text:
+        return None
+
+    try:
+        listener = TelegramListener(api_id=0, api_hash="")
+        return listener.parse_signal(text)
+    except Exception:
+        return None
