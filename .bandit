@@ -1,0 +1,12 @@
+tests:
+  include:
+    - B101
+    - B102
+    - B110
+
+skips:
+  - B101
+
+exclude_dirs:
+  - tests
+  - docs
