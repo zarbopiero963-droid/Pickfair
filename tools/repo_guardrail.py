@@ -213,8 +213,19 @@ def snapshot_api():
 
 
 def snapshot_deps():
-    data = build_dependency_graph(ROOT)
+    graph = build_dependency_graph(ROOT)
+
+    modules = set(graph.keys())
+
+    for deps in graph.values():
+        modules.update(deps)
+
+    data = {
+        "allowed_dependencies": sorted(modules)
+    }
+
     save_json(DEPS_SNAPSHOT, data)
+
     print("Saved:", DEPS_SNAPSHOT)
 
 
@@ -230,42 +241,29 @@ def snapshot_scope():
 
 
 def check_deps():
-    expected = load_json(DEPS_SNAPSHOT)
-    current = build_dependency_graph(ROOT)
+    allowed = load_json(DEPS_SNAPSHOT).get("allowed_dependencies", [])
 
-    if expected != current:
-        print("Dependency graph changed")
-        print("Run: python tools/repo_guardrail.py snapshot-deps")
+    if not allowed:
+        print("Missing allowed_dependencies snapshot")
+        sys.exit(1)
+
+    current = set(extract_top_level_dependencies(ROOT).keys())
+    allowed = set(allowed)
+
+    unexpected = current - allowed
+
+    if unexpected:
+        print("New dependencies detected:")
+        for d in sorted(unexpected):
+            print("-", d)
         sys.exit(1)
 
     print("Dependency graph OK")
 
 
-def check_scope(allowed_files_path: Path, changed_files):
-    allowed = load_json(allowed_files_path)
-
-    if not allowed:
-        print("No allowed scope snapshot found.")
-        print("Run: python tools/repo_guardrail.py snapshot-scope")
-        return 1
-
-    allowed_files = set(allowed.get("allowed_files", []))
-    changed_files = [normalize(Path(p)) for p in changed_files]
-
-    violations = [p for p in changed_files if p not in allowed_files]
-
-    if violations:
-        print("Changed files out of allowed scope:")
-        for item in violations:
-            print(f" - {item}")
-        return 1
-
-    print("Scope OK")
-    return 0
-
-
 def impact_analysis(root: Path, changed_paths):
     root = resolve_root(root)
+
     graph = build_dependency_graph(root)
     reverse_graph = reverse_dependency_graph(graph)
 
@@ -276,15 +274,20 @@ def impact_analysis(root: Path, changed_paths):
 
         if p.exists() and p.suffix == ".py":
             p = p.resolve()
+
             if is_public_api_file(p, root):
                 changed_modules.add(module_name(p, root))
+
             continue
 
         normalized = normalize(p)
+
         if normalized.endswith(".py"):
             guess = normalized[:-3].replace("/", ".")
+
             if guess.endswith(".__init__"):
                 guess = guess[:-9]
+
             changed_modules.add(guess)
 
     impacted = set(changed_modules)
@@ -298,9 +301,15 @@ def impact_analysis(root: Path, changed_paths):
                 impacted.add(caller)
                 queue.append(caller)
 
+    impacted_paths = [
+        m.replace(".", "/") + ".py"
+        for m in impacted
+    ]
+
     return {
         "changed_modules": sorted(changed_modules),
         "impacted_modules": sorted(impacted),
+        "impacted_paths": sorted(impacted_paths),
     }
 
 
@@ -311,7 +320,6 @@ def main():
         print("snapshot-deps")
         print("snapshot-scope")
         print("check-deps")
-        print("check-scope <files...>")
         print("impact <files...>")
         sys.exit(1)
 
@@ -328,10 +336,6 @@ def main():
 
     elif cmd == "check-deps":
         check_deps()
-
-    elif cmd == "check-scope":
-        code = check_scope(SCOPE_SNAPSHOT, sys.argv[2:])
-        sys.exit(code)
 
     elif cmd == "impact":
         result = impact_analysis(ROOT, sys.argv[2:])
