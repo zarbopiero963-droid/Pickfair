@@ -15,9 +15,8 @@ import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Fix reale: quando esegui "python tools/ai_reasoning_guard.py ..."
-# Python mette "tools/" in sys.path[0], non la root repo.
-# Così "guardrails.guard_probes" non si importa.
+# Fix reale: rende importabile il package guardrails quando esegui:
+# python tools/ai_reasoning_guard.py ...
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -1168,6 +1167,49 @@ def final_decision(
     }
 
 
+def build_status_summary(report: Dict[str, Any]) -> Dict[str, Any]:
+    semantic = report.get("semantic_checks", {})
+    runtime = report.get("runtime_smokes", {})
+    mutation = report.get("mutation_probes", {})
+    ai_review = report.get("ai_review", {})
+    decision = report.get("decision", {})
+
+    failed_semantic = [
+        item.get("callable")
+        for item in semantic.get("checks", [])
+        if not item.get("ok", False)
+    ]
+    failed_runtime = [
+        item.get("callable")
+        for item in runtime.get("smokes", [])
+        if not item.get("ok", False)
+    ]
+    weak_mutations = []
+    for probe in mutation.get("probes", []):
+        for mut in probe.get("mutations", []):
+            if not mut.get("mutation_caught", False):
+                weak_mutations.append(
+                    {
+                        "callable": probe.get("callable"),
+                        "path": mut.get("path"),
+                        "mode": mut.get("mode"),
+                    }
+                )
+
+    return {
+        "semantic_ok": semantic.get("ok", False),
+        "runtime_ok": runtime.get("ok", False),
+        "mutation_ok": mutation.get("ok", False),
+        "ai_review_ok": ai_review.get("ok", False),
+        "failed_semantic_checks": failed_semantic,
+        "failed_runtime_smokes": failed_runtime,
+        "weak_mutation_paths": weak_mutations,
+        "final_risk": decision.get("final_risk"),
+        "block_merge": decision.get("block_merge"),
+        "block_reasons": decision.get("block_reasons", []),
+    }
+
+
 def run_guard(changed_files: List[str]) -> Dict[str, Any]:
     config = {
         **DEFAULT_CONFIG,
@@ -1253,6 +1295,7 @@ def run_guard(changed_files: List[str]) -> Dict[str, Any]:
         "decision": decision,
     }
 
+    report["status_summary"] = build_status_summary(report)
     return report
 
 
