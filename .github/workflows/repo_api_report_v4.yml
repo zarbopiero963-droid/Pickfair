@@ -1,40 +1,49 @@
 name: Repo API Report V4
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
-
-permissions:
-  contents: read
+workflow_dispatch:
+push:
+branches:
+- main
 
 jobs:
-  report:
-    name: Generate Repository API Report V4
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+analyze:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+steps:
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Run repository analyzer
-        run: |
-          python scripts/repo_api_report_v4.py
+  - name: Setup Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
 
-      - name: Upload reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: repo-api-report-v4
-          path: |
-            artifacts/repo_api_report_v4.json
-            artifacts/repo_api_report_v4.md
-            artifacts/repo_fix_priority_report.md
-            artifacts/repo_api_report_v4_snapshot.json
+  - name: Create artifacts folder
+    run: mkdir -p artifacts
+
+  - name: Run repo analyzer
+    run: |
+      python scripts/repo_api_report_v4.py
+
+  - name: Show files after analysis
+    run: |
+      echo "FILES AFTER REPORT"
+      ls -la artifacts
+
+  - name: Generate fix backlog
+    run: |
+      python scripts/generate_fix_backlog.py
+
+  - name: Show final artifact files
+    run: |
+      echo "FINAL FILES"
+      ls -la artifacts
+
+  - name: Upload artifacts
+    uses: actions/upload-artifact@v4
+    with:
+      name: repo-api-report-v4
+      path: artifacts/
+      if-no-files-found: error
