@@ -3,13 +3,16 @@ name: AI Guardrails
 on:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   guardrails:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: checkout
         uses: actions/checkout@v4
         with:
@@ -28,14 +31,16 @@ jobs:
 
       - name: detect changed files
         id: changes
+        shell: bash
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.sha }}
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
 
-          FILES=$(git diff --name-only $BASE $HEAD)
+          FILES="$(git diff --name-only "$BASE" "$HEAD" | tr '\n' ' ')"
+          FILES_CSV="$(git diff --name-only "$BASE" "$HEAD" | paste -sd, -)"
 
-          echo "AI_CHANGED_FILES=$(echo $FILES | tr '\n' ',')" >> $GITHUB_ENV
-          echo "files=$(echo $FILES | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          echo "AI_CHANGED_FILES=$FILES_CSV" >> "$GITHUB_ENV"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
 
       - name: build dependency graph
         run: |
@@ -50,19 +55,22 @@ jobs:
           pytest -q tests/guardrails
 
       - name: run targeted tests
+        shell: bash
         run: |
-          TARGET=$(python - <<EOF
-import json
-print(" ".join(json.load(open("guardrails/targeted_tests.json"))["targeted_tests"]))
-EOF
-)
-          if [ ! -z "$TARGET" ]; then
+          TARGET=$(python -c "import json; print(' '.join(json.load(open('guardrails/targeted_tests.json'))['targeted_tests']))")
+          if [ -n "$TARGET" ]; then
             pytest -q $TARGET
+          else
+            echo 'No targeted tests found.'
           fi
 
       - name: run reasoning guard
         env:
           LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
+          LLM_GUARD_MODEL: ${{ secrets.LLM_GUARD_MODEL }}
+          LLM_GUARD_BASE_URL: ${{ secrets.LLM_GUARD_BASE_URL }}
+          LLM_GUARD_SITE_URL: ${{ secrets.LLM_GUARD_SITE_URL }}
+          LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
         run: |
           python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files }}
 
@@ -72,9 +80,13 @@ EOF
           name: guardrails
           path: |
             guardrails/*.json
+            guardrails/*.md
             artifacts/*.json
+            artifacts/*.md
+          if-no-files-found: warn
 
       - name: comment PR
+        if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -83,11 +95,6 @@ EOF
           python tools/pr_comment_report.py
 
       - name: block merge if needed
+        shell: bash
         run: |
-          python - <<EOF
-import json,sys
-r=json.load(open("guardrails/ai_reasoning_guard_report.json"))
-if r["decision"]["block_merge"]:
-    print("Merge blocked by AI guardrails")
-    sys.exit(1)
-EOF
+          python -c "import json,sys; r=json.load(open('guardrails/ai_reasoning_guard_report.json')); print('Merge blocked by AI guardrails' if r['decision']['block_merge'] else 'Merge allowed'); sys.exit(1 if r['decision']['block_merge'] else 0)"
