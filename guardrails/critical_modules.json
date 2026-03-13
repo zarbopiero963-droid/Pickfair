@@ -1,0 +1,9 @@
+{
+  "modules": [
+    "telegram_listener",
+    "controllers.dutching_controller",
+    "core.event_bus",
+    "database",
+    "guardrails.guard_probes"
+  ]
+}
