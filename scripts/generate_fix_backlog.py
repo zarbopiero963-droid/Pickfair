@@ -17,17 +17,15 @@ LOW_PRIORITY_MODULES = {
 
 def load_report():
     if not REPORT_FILE.exists():
-        raise RuntimeError(
-            "Missing artifacts/repo_api_report_v4.json. Run repo_api_report_v4.py first."
-        )
+        raise RuntimeError("Missing artifacts/repo_api_report_v4.json")
 
     return json.loads(REPORT_FILE.read_text(encoding="utf-8"))
 
 
 def priority_from_score(score):
-    if score >= 700:
+    if score >= 1100:
         return "P0"
-    if score >= 350:
+    if score >= 650:
         return "P1"
     return "P2"
 
@@ -36,7 +34,24 @@ def build_backlog(report):
     backlog = []
     seen = set()
 
-    # 1. moduli senza test diretto
+    # 1. dependency cycles
+    for cycle in report.get("dependency_cycles", []):
+        key = ("cycle", tuple(cycle))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        backlog.append(
+            {
+                "priority": "P0",
+                "type": "architecture",
+                "title": "Dependency cycle detected",
+                "modules": cycle,
+                "action": "break_dependency_cycle",
+            }
+        )
+
+    # 2. moduli senza test diretto
     for item in report.get("modules_without_direct_tests", []):
         module_short = item["module"].split(".")[-1]
         if module_short in LOW_PRIORITY_MODULES:
@@ -58,7 +73,7 @@ def build_backlog(report):
             }
         )
 
-    # 2. simboli pubblici non coperti nominalmente
+    # 3. simboli pubblici scoperti ma raggruppati per modulo
     uncovered_by_module = {}
     for item in report.get("uncovered_public_symbols", []):
         uncovered_by_module.setdefault(item["module"], []).append(item)
@@ -69,41 +84,49 @@ def build_backlog(report):
             continue
         seen.add(key)
 
+        count = len(items)
         backlog.append(
             {
-                "priority": "P1" if len(items) >= 4 else "P2",
+                "priority": "P1" if count >= 8 else "P2",
                 "type": "tests",
                 "title": "Public symbols without nominal tests",
                 "module": module,
                 "file": items[0]["file"],
-                "symbols": [x["symbol"] for x in items[:10]],
-                "count": len(items),
+                "symbols": [x["symbol"] for x in items[:12]],
+                "count": count,
                 "action": "add_targeted_tests",
             }
         )
 
-    # 3. moduli complessi
+    # 4. moduli complessi
     for item in report.get("top_risky_modules", []):
         key = ("risky_module", item["module"])
         if key in seen:
             continue
         seen.add(key)
 
+        derived_priority = priority_from_score(item["score"])
+
+        if derived_priority == "P0" and item.get("has_direct_test_file", False):
+            derived_priority = "P1"
+
         backlog.append(
             {
-                "priority": priority_from_score(item["score"]),
+                "priority": derived_priority,
                 "type": "refactor",
                 "title": "High complexity module",
                 "module": item["module"],
                 "file": item["file"],
                 "score": item["score"],
+                "estimated_complexity": item["estimated_complexity"],
+                "branch_nodes": item["branch_nodes"],
                 "uncovered_public_symbols": item["uncovered_public_symbols"],
                 "has_direct_test_file": item["has_direct_test_file"],
                 "action": "refactor_module",
             }
         )
 
-    # 4. dead code candidati veri
+    # 5. dead code candidate
     for item in report.get("dead_code_candidates", []):
         key = ("dead_code", item["module"], item["symbol"])
         if key in seen:
@@ -123,13 +146,30 @@ def build_backlog(report):
             }
         )
 
+    # 6. shallow tests
+    for item in report.get("shallow_tests", []):
+        key = ("shallow_tests", item["file"])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        backlog.append(
+            {
+                "priority": "P2",
+                "type": "test_quality",
+                "title": "Shallow test file detected",
+                "file": item["file"],
+                "tests": item["tests"],
+                "action": "strengthen_tests",
+            }
+        )
+
     priority_order = {"P0": 0, "P1": 1, "P2": 2}
     backlog.sort(
         key=lambda x: (
             priority_order.get(x["priority"], 9),
             x["type"],
-            x.get("module", ""),
-            x.get("title", ""),
+            x.get("module", x.get("file", "")),
         )
     )
 
@@ -153,16 +193,22 @@ def save_markdown(backlog):
             lines.append(f"  - module: `{item['module']}`")
         if "file" in item:
             lines.append(f"  - file: `{item['file']}`")
+        if "modules" in item:
+            lines.append(f"  - modules: `{', '.join(item['modules'])}`")
         if "score" in item:
             lines.append(f"  - score: `{item['score']}`")
+        if "estimated_complexity" in item:
+            lines.append(f"  - estimated complexity: `{item['estimated_complexity']}`")
+        if "branch_nodes" in item:
+            lines.append(f"  - branch nodes: `{item['branch_nodes']}`")
         if "symbol" in item:
             lines.append(f"  - symbol: `{item['symbol']}`")
         if "symbols" in item:
             lines.append(f"  - symbols: `{', '.join(item['symbols'])}`")
         if "count" in item:
             lines.append(f"  - uncovered count: `{item['count']}`")
-        if "has_direct_test_file" in item:
-            lines.append(f"  - has direct test file: `{item['has_direct_test_file']}`")
+        if "tests" in item:
+            lines.append(f"  - tests: `{', '.join(item['tests'])}`")
 
         lines.append(f"  - action: `{item['action']}`")
         lines.append("")
