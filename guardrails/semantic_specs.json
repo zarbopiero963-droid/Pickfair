@@ -1,0 +1,67 @@
+{
+  "checks": [
+    {
+      "callable": "guardrails.guard_probes.dutching_controller_semantic_probe_case",
+      "args": [],
+      "kwargs": {},
+      "assertions": [
+        {
+          "path": "status",
+          "mode": "equals",
+          "expected": "ok"
+        },
+        {
+          "path": "total_stake",
+          "mode": "greater_than",
+          "expected": 0
+        },
+        {
+          "path": "book_pct",
+          "mode": "between",
+          "min": 0,
+          "max": 100
+        },
+        {
+          "path": "errors_count",
+          "mode": "equals",
+          "expected": 0
+        },
+        {
+          "path": "legs",
+          "mode": "contains_keys",
+          "expected": [
+            "runner_count",
+            "allocations"
+          ]
+        }
+      ]
+    },
+    {
+      "callable": "guardrails.guard_probes.telegram_listener_semantic_probe_case",
+      "args": [],
+      "kwargs": {},
+      "assertions": [
+        {
+          "path": "status",
+          "mode": "equals",
+          "expected": "ok"
+        },
+        {
+          "path": "action",
+          "mode": "equals",
+          "expected": "BACK"
+        },
+        {
+          "path": "selection_id",
+          "mode": "equals",
+          "expected": 101
+        },
+        {
+          "path": "price",
+          "mode": "equals",
+          "expected": 2.5
+        }
+      ]
+    }
+  ]
+}
