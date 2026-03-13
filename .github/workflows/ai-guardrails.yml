@@ -30,6 +30,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -62,26 +63,33 @@ jobs:
           echo "Changed files SPACE: $SPACE"
 
       - name: Build API snapshot baseline if missing
+        shell: bash
         run: |
+          mkdir -p guardrails
           if [ ! -f guardrails/public_api_snapshot.json ]; then
             python tools/repo_guardrail.py snapshot-api
           fi
 
       - name: Build dependency graph
+        shell: bash
         run: |
           python tools/repo_guardrail.py build-graph
 
       - name: Scope check
         if: steps.changes.outputs.files_space != ''
+        shell: bash
         run: |
           python tools/repo_guardrail.py check-scope ${{ steps.changes.outputs.files_space }}
 
       - name: Dependency check
+        shell: bash
         run: |
           python tools/repo_guardrail.py check-deps
 
       - name: Run repository intelligence report
+        shell: bash
         run: |
+          mkdir -p artifacts
           python scripts/repo_api_report_v4.py
           python scripts/generate_fix_backlog.py
 
@@ -110,6 +118,7 @@ jobs:
       - name: Run guardrail tests
         env:
           AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+        shell: bash
         run: |
           pytest -q tests/guardrails
 
@@ -117,10 +126,12 @@ jobs:
         if: steps.targeted.outputs.targeted_tests != ''
         env:
           AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+        shell: bash
         run: |
           pytest -q ${{ steps.targeted.outputs.targeted_tests }}
 
       - name: Run reasoning guard
+        if: always()
         env:
           AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
           LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
@@ -130,11 +141,97 @@ jobs:
           LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
         shell: bash
         run: |
+          set +e
+          mkdir -p guardrails
+
           if [ -n "${{ steps.changes.outputs.files_space }}" ]; then
-            python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }}
+            python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }} > guardrails/ai_reasoning_guard_stdout.log 2> guardrails/ai_reasoning_guard_stderr.log
+            EXIT_CODE=$?
           else
-            python tools/ai_reasoning_guard.py run
+            python tools/ai_reasoning_guard.py run > guardrails/ai_reasoning_guard_stdout.log 2> guardrails/ai_reasoning_guard_stderr.log
+            EXIT_CODE=$?
           fi
+
+          echo "AI_REASONING_GUARD_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_ENV"
+
+          if [ ! -f guardrails/ai_reasoning_guard_report.json ]; then
+            python << 'PY'
+            import json
+            from pathlib import Path
+
+            stdout_path = Path("guardrails/ai_reasoning_guard_stdout.log")
+            stderr_path = Path("guardrails/ai_reasoning_guard_stderr.log")
+            report_path = Path("guardrails/ai_reasoning_guard_report.json")
+
+            stdout_text = stdout_path.read_text(encoding="utf-8", errors="ignore") if stdout_path.exists() else ""
+            stderr_text = stderr_path.read_text(encoding="utf-8", errors="ignore") if stderr_path.exists() else ""
+
+            report = {
+                "changed_files": [],
+                "scope_check": {"ok": False, "violations": []},
+                "impact_analysis": {
+                    "changed_modules": [],
+                    "impacted_modules": [],
+                    "impacted_paths": []
+                },
+                "api_snapshot_diff": {
+                    "added_modules": [],
+                    "removed_modules": [],
+                    "changed_modules": []
+                },
+                "semantic_checks": {"ok": False, "checks": []},
+                "runtime_smokes": {"ok": False, "smokes": []},
+                "mutation_probes": {"ok": False, "probes": []},
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "category": "reasoning_guard_crash",
+                        "file": "tools/ai_reasoning_guard.py",
+                        "symbol": "workflow",
+                        "message": "ai_reasoning_guard.py crashed before producing its JSON report."
+                    }
+                ],
+                "ai_review": {
+                    "enabled": False,
+                    "ok": False,
+                    "error": "Reasoning guard crashed before report generation."
+                },
+                "decision": {
+                    "deterministic_risk": "CRITICAL",
+                    "ai_risk": None,
+                    "final_risk": "CRITICAL",
+                    "block_merge": True,
+                    "block_reasons": [
+                        "Reasoning guard crashed before generating report."
+                    ]
+                },
+                "status_summary": {
+                    "semantic_ok": False,
+                    "runtime_ok": False,
+                    "mutation_ok": False,
+                    "ai_review_ok": False,
+                    "failed_semantic_checks": [],
+                    "failed_runtime_smokes": [],
+                    "weak_mutation_paths": [],
+                    "final_risk": "CRITICAL",
+                    "block_merge": True,
+                    "block_reasons": [
+                        "Reasoning guard crashed before generating report."
+                    ]
+                },
+                "debug": {
+                    "stdout_tail": stdout_text[-4000:],
+                    "stderr_tail": stderr_text[-4000:]
+                }
+            }
+
+            report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            print("Fallback ai_reasoning_guard_report.json created.")
+            PY
+          fi
+
+          echo "Reasoning guard exit code: $EXIT_CODE"
+          exit 0
 
       - name: Print explicit guard status
         if: always()
@@ -148,7 +245,7 @@ jobs:
           p = Path("guardrails/ai_reasoning_guard_report.json")
 
           if not p.exists():
-              print("::error::Missing guardrails/ai_reasoning_guard_report.json")
+              print("::error::Missing guardrails/ai_reasoning_guard_report.json even after fallback generation")
               sys.exit(2)
 
           data = json.loads(p.read_text(encoding="utf-8"))
@@ -171,6 +268,15 @@ jobs:
 
           print("WEAK_MUTATIONS =", "; ".join(weak))
           print("BLOCK_REASONS =", "; ".join(s.get("block_reasons", [])))
+
+          debug = data.get("debug", {})
+          if debug.get("stderr_tail"):
+              print("----- STDERR TAIL -----")
+              print(debug["stderr_tail"][-2000:])
+
+          if debug.get("stdout_tail"):
+              print("----- STDOUT TAIL -----")
+              print(debug["stdout_tail"][-2000:])
           PY
 
       - name: Upload guardrail artifacts
@@ -181,6 +287,7 @@ jobs:
           path: |
             guardrails/*.json
             guardrails/*.md
+            guardrails/*.log
             artifacts/*.json
             artifacts/*.md
           if-no-files-found: warn
@@ -238,6 +345,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
         run: |
           python tools/pr_comment_report.py
 
@@ -265,7 +373,8 @@ jobs:
                   f"final_risk={d.get('final_risk')} | "
                   f"semantic_ok={s.get('semantic_ok')} | "
                   f"runtime_ok={s.get('runtime_ok')} | "
-                  f"mutation_ok={s.get('mutation_ok')}"
+                  f"mutation_ok={s.get('mutation_ok')} | "
+                  f"ai_review_ok={s.get('ai_review_ok')}"
               )
 
               reasons = d.get("block_reasons", [])
