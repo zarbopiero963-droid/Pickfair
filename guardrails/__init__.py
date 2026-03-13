@@ -1,1 +1,1 @@
-# Guardrails package marker for dynamic imports used by tools/ai_reasoning_guard.py
+# Makes guardrails importable as a Python package for dynamic probes.
