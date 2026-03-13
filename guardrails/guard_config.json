@@ -1,0 +1,12 @@
+{
+  "fail_on_deterministic_high": true,
+  "fail_on_deterministic_critical": true,
+  "fail_on_ai_high": false,
+  "fail_on_ai_critical": true,
+  "max_file_chars": 12000,
+  "max_files_for_ai": 8,
+  "hard_block_on_scope_violation": true,
+  "hard_block_on_runtime_smoke_failure": true,
+  "hard_block_on_semantic_failure": true,
+  "trace_max_events_per_call": 500
+}
