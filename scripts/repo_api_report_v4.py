@@ -4,7 +4,6 @@ from pathlib import Path
 from collections import defaultdict
 
 ROOT = Path(".")
-
 ARTIFACTS = ROOT / "artifacts"
 TEST_DIR = ROOT / "tests"
 
@@ -26,7 +25,7 @@ IGNORE_DIRS = {
 
 
 def should_skip(path):
-    return any(p in IGNORE_DIRS for p in path.parts)
+    return any(part in IGNORE_DIRS for part in path.parts)
 
 
 def iter_python_files():
@@ -67,11 +66,9 @@ def get_imports(tree):
 
 
 def get_classes(tree):
-
     classes = []
 
     for node in tree.body:
-
         if isinstance(node, ast.ClassDef):
 
             methods = []
@@ -91,11 +88,9 @@ def get_classes(tree):
 
 
 def get_functions(tree):
-
     funcs = []
 
     for node in tree.body:
-
         if isinstance(node, ast.FunctionDef):
             funcs.append(node.name)
 
@@ -105,7 +100,6 @@ def get_functions(tree):
 def analyze_repo():
 
     files = []
-
     dep_graph = defaultdict(set)
 
     for path in iter_python_files():
@@ -118,9 +112,7 @@ def analyze_repo():
         mod = module_name(path)
 
         imports = get_imports(tree)
-
         funcs = get_functions(tree)
-
         classes = get_classes(tree)
 
         for imp in imports:
@@ -146,13 +138,18 @@ def find_risky_modules(files):
 
     for f in files:
 
-        score = f["lines"] + len(f["imports"]) * 5 + len(f["classes"]) * 10
+        score = (
+            f["lines"]
+            + len(f["imports"]) * 5
+            + len(f["classes"]) * 10
+            + len(f["functions"]) * 2
+        )
 
         ranked.append((score, f["file"], f["module"]))
 
     ranked.sort(reverse=True)
 
-    return ranked[:20]
+    return ranked[:25]
 
 
 def load_tests():
@@ -174,21 +171,27 @@ def find_modules_without_tests(files, tests):
 
     for f in files:
 
-        name = f["module"].split(".")[-1]
+        module_short = f["module"].split(".")[-1]
 
         found = False
 
         for t in tests:
-            if name in t:
+            if module_short in t:
                 found = True
+                break
 
         if not found:
-            missing.append(f)
+            missing.append(
+                {
+                    "module": f["module"],
+                    "file": f["file"],
+                }
+            )
 
     return missing
 
 
-def find_dead_code(files, tests):
+def find_dead_code(files):
 
     dead = []
 
@@ -196,20 +199,15 @@ def find_dead_code(files, tests):
 
         for fn in f["functions"]:
 
-            found = False
+            if fn.startswith("_"):
+                continue
 
-            for t in tests:
-                if fn in t:
-                    found = True
-
-            if not found and not fn.startswith("_"):
-
-                dead.append(
-                    {
-                        "module": f["module"],
-                        "symbol": fn,
-                    }
-                )
+            dead.append(
+                {
+                    "module": f["module"],
+                    "symbol": fn,
+                }
+            )
 
     return dead
 
@@ -226,7 +224,7 @@ def main():
 
     missing_tests = find_modules_without_tests(files, tests)
 
-    dead = find_dead_code(files, tests)
+    dead = find_dead_code(files)
 
     report = {
         "summary": {
@@ -243,12 +241,11 @@ def main():
     ARTIFACTS.mkdir(exist_ok=True)
 
     (ARTIFACTS / "repo_api_report_v4.json").write_text(
-        json.dumps(report, indent=2)
+        json.dumps(report, indent=2),
+        encoding="utf-8",
     )
 
-    print("Report generated")
-
-    print("artifacts/repo_api_report_v4.json")
+    print("✔ repo_api_report_v4.json generated")
 
 
 if __name__ == "__main__":
