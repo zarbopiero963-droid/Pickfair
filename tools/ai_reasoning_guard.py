@@ -1,6 +1,7 @@
 import ast
 import copy
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -13,6 +14,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Fix reale: quando esegui "python tools/ai_reasoning_guard.py ..."
+# Python mette "tools/" in sys.path[0], non la root repo.
+# Così "guardrails.guard_probes" non si importa.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 GUARDRAILS_DIR = ROOT / "guardrails"
 
 EXCLUDED_DIRS = {
@@ -451,7 +459,7 @@ def compare_api_snapshot(current: Dict[str, Any], baseline: Dict[str, Any]) -> D
 
 def load_callable(dotted_path: str):
     module_name, attr = dotted_path.rsplit(".", 1)
-    module = __import__(module_name, fromlist=[attr])
+    module = importlib.import_module(module_name)
     return getattr(module, attr)
 
 
