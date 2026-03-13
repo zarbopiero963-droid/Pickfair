@@ -1,7 +1,7 @@
 import ast
 import json
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 ROOT = Path(".")
 ARTIFACTS = ROOT / "artifacts"
@@ -35,6 +35,17 @@ LOW_PRIORITY_FILES = {
     "theme.py",
     "trading_config.py",
 }
+
+UTILITY_PREFIXES = (
+    "get_",
+    "create_",
+    "build_",
+    "make_",
+    "load_",
+    "save_",
+    "parse_",
+    "format_",
+)
 
 
 def should_skip(path: Path) -> bool:
@@ -75,23 +86,23 @@ def get_imports(tree: ast.AST):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.append(alias.name)
-
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 imports.append(node.module)
 
-    return imports
+    return sorted(set(imports))
 
 
 def get_functions(tree: ast.Module):
     funcs = []
 
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             funcs.append(
                 {
                     "name": node.name,
                     "line": getattr(node, "lineno", None),
+                    "async": isinstance(node, ast.AsyncFunctionDef),
                 }
             )
 
@@ -106,11 +117,12 @@ def get_classes(tree: ast.Module):
             methods = []
 
             for item in node.body:
-                if isinstance(item, ast.FunctionDef):
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     methods.append(
                         {
                             "name": item.name,
                             "line": getattr(item, "lineno", None),
+                            "async": isinstance(item, ast.AsyncFunctionDef),
                         }
                     )
 
@@ -134,7 +146,6 @@ def get_call_names(tree: ast.AST):
 
             if isinstance(func, ast.Name):
                 names.add(func.id)
-
             elif isinstance(func, ast.Attribute):
                 names.add(func.attr)
 
@@ -151,6 +162,37 @@ def get_string_literals(tree: ast.AST):
                 out.add(value)
 
     return sorted(out)
+
+
+def estimate_complexity(text: str, tree: ast.Module):
+    branch_nodes = (
+        ast.If,
+        ast.For,
+        ast.AsyncFor,
+        ast.While,
+        ast.Try,
+        ast.With,
+        ast.AsyncWith,
+        ast.BoolOp,
+        ast.IfExp,
+        ast.Match,
+        ast.comprehension,
+        ast.ExceptHandler,
+    )
+
+    branch_count = 0
+    nesting_points = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, branch_nodes):
+            branch_count += 1
+            nesting_points.append(getattr(node, "lineno", 0))
+
+    return {
+        "branch_nodes": branch_count,
+        "line_count": len(text.splitlines()),
+        "estimated_complexity": 1 + branch_count,
+    }
 
 
 def build_public_symbols(file_info):
@@ -171,6 +213,20 @@ def build_public_symbols(file_info):
     return sorted(public)
 
 
+def build_symbol_locations(file_info):
+    locations = {}
+
+    for fn in file_info["functions"]:
+        locations[fn["name"]] = fn["line"]
+
+    for cls in file_info["classes"]:
+        locations[cls["name"]] = cls["line"]
+        for method in cls["methods"]:
+            locations[f"{cls['name']}.{method['name']}"] = method["line"]
+
+    return locations
+
+
 def analyze_repo():
     files = []
     dep_graph = defaultdict(set)
@@ -186,6 +242,7 @@ def analyze_repo():
         functions = get_functions(tree)
         classes = get_classes(tree)
         calls = get_call_names(tree)
+        metrics = estimate_complexity(text, tree)
 
         for imp in imports:
             dep_graph[mod].add(imp)
@@ -198,8 +255,11 @@ def analyze_repo():
             "imports": imports,
             "calls": calls,
             "lines": len(text.splitlines()),
+            "metrics": metrics,
         }
+
         file_info["public_symbols"] = build_public_symbols(file_info)
+        file_info["symbol_locations"] = build_symbol_locations(file_info)
 
         files.append(file_info)
 
@@ -221,7 +281,7 @@ def load_tests():
 
         test_names = []
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
                 test_names.append(node.name)
 
         tests.append(
@@ -244,15 +304,11 @@ def looks_like_direct_test_match(file_info, test_file):
     file_short = Path(file_info["file"]).stem.lower()
     test_path = test_file["file"].lower()
 
-    if module_short in LOW_PRIORITY_MODULES:
-        return True
-
-    if file_short in LOW_PRIORITY_MODULES:
-        return True
-
     patterns = {
         module_short,
         file_short,
+        module_short.replace("_", ""),
+        file_short.replace("_", ""),
     }
 
     return any(p and p in test_path for p in patterns)
@@ -270,8 +326,15 @@ def symbol_has_nominal_test(file_info, symbol, tests):
         names_blob = " ".join(test["test_names"]).lower()
         strings_blob = " ".join(test["strings"]).lower()
         text_blob = test["text_lower"]
+        test_path = test["file"].lower()
 
-        if module_name_full in imports_blob or module_short in test["file"].lower():
+        direct_context = (
+            module_name_full in imports_blob
+            or module_short in imports_blob
+            or module_short in test_path
+        )
+
+        if direct_context:
             if (
                 symbol_simple in calls_blob
                 or symbol_simple in names_blob
@@ -281,7 +344,7 @@ def symbol_has_nominal_test(file_info, symbol, tests):
             ):
                 return True
 
-        if symbol_simple in names_blob and module_short in test["file"].lower():
+        if symbol_simple in names_blob and module_short in test_path:
             return True
 
     return False
@@ -334,6 +397,7 @@ def find_uncovered_public_symbols(files, tests):
                         "module": file_info["module"],
                         "file": file_info["file"],
                         "symbol": symbol,
+                        "line": file_info["symbol_locations"].get(symbol),
                     }
                 )
 
@@ -349,6 +413,25 @@ def build_internal_usage_index(files):
             used_names[name].add(src)
 
     return used_names
+
+
+def is_low_confidence_dead_code(symbol_name: str) -> bool:
+    if symbol_name.startswith(UTILITY_PREFIXES):
+        return True
+
+    if symbol_name in {
+        "main",
+        "run",
+        "start",
+        "stop",
+        "setup",
+        "configure",
+        "initialize",
+        "init",
+    }:
+        return True
+
+    return False
 
 
 def find_dead_code_candidates(files, uncovered_symbols):
@@ -374,11 +457,13 @@ def find_dead_code_candidates(files, uncovered_symbols):
             if name.startswith("_"):
                 continue
 
+            if is_low_confidence_dead_code(name):
+                continue
+
             if (file_info["module"], name) not in uncovered_set:
                 continue
 
             internal_users = used_names.get(name, set())
-
             if internal_users:
                 continue
 
@@ -394,12 +479,63 @@ def find_dead_code_candidates(files, uncovered_symbols):
     return dead
 
 
-def find_risky_modules(files, uncovered_symbols, missing_modules):
-    uncovered_count = defaultdict(int)
-    for item in uncovered_symbols:
-        uncovered_count[item["module"]] += 1
+def build_dependency_graph_internal(files):
+    module_names = {f["module"] for f in files}
+    internal = defaultdict(set)
 
-    missing_modules_set = {item["module"] for item in missing_modules}
+    for file_info in files:
+        src = file_info["module"]
+        for imp in file_info["imports"]:
+            for mod in module_names:
+                if imp == mod or imp.startswith(mod + "."):
+                    internal[src].add(mod)
+
+    return {k: sorted(v) for k, v in internal.items()}
+
+
+def find_cycles(graph):
+    visited = set()
+    stack = []
+    on_stack = set()
+    cycles = []
+
+    def dfs(node):
+        visited.add(node)
+        stack.append(node)
+        on_stack.add(node)
+
+        for neigh in graph.get(node, []):
+            if neigh not in visited:
+                dfs(neigh)
+            elif neigh in on_stack:
+                try:
+                    idx = stack.index(neigh)
+                    cycle = stack[idx:] + [neigh]
+                    if cycle not in cycles:
+                        cycles.append(cycle)
+                except ValueError:
+                    pass
+
+        stack.pop()
+        on_stack.remove(node)
+
+    for node in graph:
+        if node not in visited:
+            dfs(node)
+
+    return cycles
+
+
+def test_density_by_module(uncovered_symbols):
+    counts = Counter()
+    for item in uncovered_symbols:
+        counts[item["module"]] += 1
+    return counts
+
+
+def find_risky_modules(files, missing_modules, uncovered_symbols):
+    missing_set = {m["module"] for m in missing_modules}
+    uncovered_count = test_density_by_module(uncovered_symbols)
 
     ranked = []
 
@@ -411,12 +547,13 @@ def find_risky_modules(files, uncovered_symbols, missing_modules):
             continue
 
         score = (
-            f["lines"]
-            + len(f["imports"]) * 5
+            f["metrics"]["line_count"]
+            + len(f["imports"]) * 4
             + len(f["classes"]) * 10
-            + len(f["functions"]) * 2
-            + uncovered_count[f["module"]] * 8
-            + (25 if f["module"] in missing_modules_set else 0)
+            + len(f["functions"]) * 3
+            + f["metrics"]["branch_nodes"] * 6
+            + uncovered_count[f["module"]] * 3
+            + (20 if f["module"] in missing_set else 0)
         )
 
         ranked.append(
@@ -424,14 +561,38 @@ def find_risky_modules(files, uncovered_symbols, missing_modules):
                 "score": score,
                 "file": f["file"],
                 "module": f["module"],
+                "has_direct_test_file": f["module"] not in missing_set,
                 "uncovered_public_symbols": uncovered_count[f["module"]],
-                "has_direct_test_file": f["module"] not in missing_modules_set,
+                "estimated_complexity": f["metrics"]["estimated_complexity"],
+                "branch_nodes": f["metrics"]["branch_nodes"],
             }
         )
 
     ranked.sort(key=lambda x: (-x["score"], x["file"]))
-
     return ranked[:25]
+
+
+def find_shallow_tests(tests):
+    flagged = []
+
+    for test in tests:
+        suspicious = []
+
+        for name in test["test_names"]:
+            lowered = name.lower()
+
+            if lowered.endswith("_init") or lowered.endswith("_exists") or lowered.endswith("_import"):
+                suspicious.append(name)
+
+        if suspicious:
+            flagged.append(
+                {
+                    "file": test["file"],
+                    "tests": suspicious,
+                }
+            )
+
+    return flagged
 
 
 def main():
@@ -443,11 +604,10 @@ def main():
     missing_direct_tests = find_modules_without_direct_tests(files, tests)
     uncovered_public_symbols = find_uncovered_public_symbols(files, tests)
     dead_code_candidates = find_dead_code_candidates(files, uncovered_public_symbols)
-    top_risky_modules = find_risky_modules(
-        files,
-        uncovered_public_symbols,
-        missing_direct_tests,
-    )
+    internal_dep_graph = build_dependency_graph_internal(files)
+    dependency_cycles = find_cycles(internal_dep_graph)
+    top_risky_modules = find_risky_modules(files, missing_direct_tests, uncovered_public_symbols)
+    shallow_tests = find_shallow_tests(tests)
 
     report = {
         "summary": {
@@ -456,13 +616,18 @@ def main():
             "modules_without_direct_tests": len(missing_direct_tests),
             "uncovered_public_symbols": len(uncovered_public_symbols),
             "dead_code_candidates": len(dead_code_candidates),
+            "dependency_cycles": len(dependency_cycles),
+            "shallow_test_files": len(shallow_tests),
         },
         "files": files,
         "dependency_graph": {k: sorted(list(v)) for k, v in deps.items()},
+        "internal_dependency_graph": internal_dep_graph,
+        "dependency_cycles": dependency_cycles,
         "top_risky_modules": top_risky_modules,
         "modules_without_direct_tests": missing_direct_tests,
         "uncovered_public_symbols": uncovered_public_symbols,
         "dead_code_candidates": dead_code_candidates,
+        "shallow_tests": shallow_tests,
     }
 
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
