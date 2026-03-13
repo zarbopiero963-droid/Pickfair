@@ -87,9 +87,23 @@ jobs:
 
       - name: Compute targeted tests
         id: targeted
+        shell: bash
         run: |
           python tools/compute_targeted_tests.py ${{ steps.changes.outputs.files_space }}
-          TARGETED="$(python -c "import json; from pathlib import Path; p=Path('guardrails/targeted_tests.json'); print(' '.join(json.loads(p.read_text(encoding='utf-8')).get('targeted_tests', [])) if p.exists() else '')")"
+
+          TARGETED="$(python - << 'PY'
+          import json
+          from pathlib import Path
+
+          p = Path("guardrails/targeted_tests.json")
+          if not p.exists():
+              print("")
+          else:
+              data = json.loads(p.read_text(encoding="utf-8"))
+              print(" ".join(data.get("targeted_tests", [])))
+          PY
+          )"
+
           echo "targeted_tests=$TARGETED" >> "$GITHUB_OUTPUT"
           echo "TARGETED_TESTS=$TARGETED" >> "$GITHUB_ENV"
 
@@ -114,6 +128,7 @@ jobs:
           LLM_GUARD_BASE_URL: ${{ secrets.LLM_GUARD_BASE_URL }}
           LLM_GUARD_SITE_URL: ${{ secrets.LLM_GUARD_SITE_URL }}
           LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
+        shell: bash
         run: |
           if [ -n "${{ steps.changes.outputs.files_space }}" ]; then
             python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }}
@@ -123,22 +138,40 @@ jobs:
 
       - name: Print explicit guard status
         if: always()
+        shell: bash
         run: |
-          python -c "import json; from pathlib import Path; p=Path('guardrails/ai_reasoning_guard_report.json'); \
-if not p.exists(): \
-    print('::error::Missing guardrails/ai_reasoning_guard_report.json'); \
-    raise SystemExit(2); \
-data=json.loads(p.read_text(encoding='utf-8')); s=data.get('status_summary', {}); \
-print(f'SEMANTIC_OK={s.get(\"semantic_ok\")}'); \
-print(f'RUNTIME_OK={s.get(\"runtime_ok\")}'); \
-print(f'MUTATION_OK={s.get(\"mutation_ok\")}'); \
-print(f'AI_REVIEW_OK={s.get(\"ai_review_ok\")}'); \
-print(f'FINAL_RISK={s.get(\"final_risk\")}'); \
-print(f'BLOCK_MERGE={s.get(\"block_merge\")}'); \
-print('FAILED_SEMANTIC=' + '; '.join(s.get('failed_semantic_checks', []))); \
-print('FAILED_RUNTIME=' + '; '.join(s.get('failed_runtime_smokes', []))); \
-print('WEAK_MUTATIONS=' + '; '.join([f'{x.get(\"callable\")}::{x.get(\"path\")}' for x in s.get('weak_mutation_paths', [])])); \
-print('BLOCK_REASONS=' + '; '.join(s.get('block_reasons', [])))"
+          python << 'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          p = Path("guardrails/ai_reasoning_guard_report.json")
+
+          if not p.exists():
+              print("::error::Missing guardrails/ai_reasoning_guard_report.json")
+              sys.exit(2)
+
+          data = json.loads(p.read_text(encoding="utf-8"))
+          s = data.get("status_summary", {})
+
+          print("SEMANTIC_OK =", s.get("semantic_ok"))
+          print("RUNTIME_OK =", s.get("runtime_ok"))
+          print("MUTATION_OK =", s.get("mutation_ok"))
+          print("AI_REVIEW_OK =", s.get("ai_review_ok"))
+          print("FINAL_RISK =", s.get("final_risk"))
+          print("BLOCK_MERGE =", s.get("block_merge"))
+
+          print("FAILED_SEMANTIC =", "; ".join(s.get("failed_semantic_checks", [])))
+          print("FAILED_RUNTIME =", "; ".join(s.get("failed_runtime_smokes", [])))
+
+          weak = [
+              f"{x.get('callable')}::{x.get('path')}"
+              for x in s.get("weak_mutation_paths", [])
+          ]
+
+          print("WEAK_MUTATIONS =", "; ".join(weak))
+          print("BLOCK_REASONS =", "; ".join(s.get("block_reasons", [])))
+          PY
 
       - name: Upload guardrail artifacts
         if: always()
@@ -156,26 +189,48 @@ print('BLOCK_REASONS=' + '; '.join(s.get('block_reasons', [])))"
         if: always()
         shell: bash
         run: |
-          python -c "import json; from pathlib import Path; \
-report_path=Path('guardrails/ai_reasoning_guard_report.json'); \
-summary_path=Path('guardrails/block_merge_summary.txt'); \
-data=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {}; \
-decision=data.get('decision', {}); \
-status=data.get('status_summary', {}); \
-findings=data.get('findings', []); \
-lines=[]; \
-lines.append(f'AI Guardrails final risk: {decision.get(\"final_risk\", \"UNKNOWN\")}'); \
-lines.append(f'Block merge: {decision.get(\"block_merge\", False)}'); \
-lines.append(f'Semantic OK: {status.get(\"semantic_ok\")}'); \
-lines.append(f'Runtime OK: {status.get(\"runtime_ok\")}'); \
-lines.append(f'Mutation OK: {status.get(\"mutation_ok\")}'); \
-lines.append(f'AI Review OK: {status.get(\"ai_review_ok\")}'); \
-reasons=decision.get('block_reasons', []); \
-lines.extend(['Reasons:'] + [f'- {r}' for r in reasons] if reasons else []); \
-top=findings[:10]; \
-lines.extend(['Top findings:'] + [f'- [{x.get(\"severity\",\"?\")}] {x.get(\"category\",\"?\")} :: {x.get(\"file\",\"?\")} -> {x.get(\"message\",\"\")}' for x in top] if top else []); \
-summary_path.write_text('\\n'.join(lines), encoding='utf-8'); \
-print(summary_path.read_text(encoding='utf-8'))"
+          python << 'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("guardrails/ai_reasoning_guard_report.json")
+          summary_path = Path("guardrails/block_merge_summary.txt")
+
+          if not report_path.exists():
+              summary_path.write_text("AI guard report missing.", encoding="utf-8")
+              print(summary_path.read_text(encoding="utf-8"))
+              raise SystemExit(0)
+
+          data = json.loads(report_path.read_text(encoding="utf-8"))
+          decision = data.get("decision", {})
+          status = data.get("status_summary", {})
+          findings = data.get("findings", [])
+
+          lines = []
+          lines.append(f"AI Guardrails final risk: {decision.get('final_risk', 'UNKNOWN')}")
+          lines.append(f"Block merge: {decision.get('block_merge', False)}")
+          lines.append(f"Semantic OK: {status.get('semantic_ok')}")
+          lines.append(f"Runtime OK: {status.get('runtime_ok')}")
+          lines.append(f"Mutation OK: {status.get('mutation_ok')}")
+          lines.append(f"AI Review OK: {status.get('ai_review_ok')}")
+
+          reasons = decision.get("block_reasons", [])
+          if reasons:
+              lines.append("Reasons:")
+              for r in reasons:
+                  lines.append(f"- {r}")
+
+          top = findings[:10]
+          if top:
+              lines.append("Top findings:")
+              for x in top:
+                  lines.append(
+                      f"- [{x.get('severity', '?')}] {x.get('category', '?')} :: {x.get('file', '?')} -> {x.get('message', '')}"
+                  )
+
+          summary_path.write_text("\n".join(lines), encoding="utf-8")
+          print(summary_path.read_text(encoding="utf-8"))
+          PY
 
       - name: Comment PR with report
         if: always() && github.event_name == 'pull_request'
@@ -188,19 +243,37 @@ print(summary_path.read_text(encoding='utf-8'))"
 
       - name: Fail with clear merge-block message
         if: always()
+        shell: bash
         run: |
-          python -c "import json,sys; from pathlib import Path; \
-p=Path('guardrails/ai_reasoning_guard_report.json'); \
-if not p.exists(): \
-    print('::error::Missing guardrails/ai_reasoning_guard_report.json'); \
-    sys.exit(2); \
-data=json.loads(p.read_text(encoding='utf-8')); \
-s=data.get('status_summary', {}); \
-d=data.get('decision', {}); \
-if d.get('block_merge', False): \
-    msg=f'AI Guardrails blocked merge | final_risk={d.get(\"final_risk\")} | semantic_ok={s.get(\"semantic_ok\")} | runtime_ok={s.get(\"runtime_ok\")} | mutation_ok={s.get(\"mutation_ok\")}'; \
-    reasons=d.get('block_reasons', []); \
-    msg += (' | reasons=' + '; '.join(reasons)) if reasons else ''; \
-    print(f'::error::{msg}'); \
-    sys.exit(2); \
-print('AI Guardrails: merge allowed.')"
+          python << 'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          p = Path("guardrails/ai_reasoning_guard_report.json")
+          if not p.exists():
+              print("::error::Missing guardrails/ai_reasoning_guard_report.json")
+              sys.exit(2)
+
+          data = json.loads(p.read_text(encoding="utf-8"))
+          s = data.get("status_summary", {})
+          d = data.get("decision", {})
+
+          if d.get("block_merge", False):
+              msg = (
+                  f"AI Guardrails blocked merge | "
+                  f"final_risk={d.get('final_risk')} | "
+                  f"semantic_ok={s.get('semantic_ok')} | "
+                  f"runtime_ok={s.get('runtime_ok')} | "
+                  f"mutation_ok={s.get('mutation_ok')}"
+              )
+
+              reasons = d.get("block_reasons", [])
+              if reasons:
+                  msg += " | reasons=" + "; ".join(reasons)
+
+              print(f"::error::{msg}")
+              sys.exit(2)
+
+          print("AI Guardrails: merge allowed.")
+          PY
