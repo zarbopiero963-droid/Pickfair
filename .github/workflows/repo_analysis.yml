@@ -1,4 +1,4 @@
-name: Repository Analysis
+name: Repo Analysis
 
 on:
   workflow_dispatch:
@@ -11,8 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -20,16 +19,36 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run repository analyzer
+      - name: Create artifacts dir
+        run: mkdir -p artifacts
+
+      - name: Run repo analyzer
+        run: python scripts/repo_api_report_v4.py
+
+      - name: Check report exists
         run: |
-          python scripts/repo_api_report_v4.py
+          test -f artifacts/repo_api_report_v4.json
+          ls -la artifacts
 
       - name: Generate fix backlog
-        run: |
-          python scripts/generate_fix_backlog.py
+        run: python scripts/generate_fix_backlog.py
 
-      - name: Upload artifacts
+      - name: Check all expected files exist
+        run: |
+          test -f artifacts/repo_api_report_v4.json
+          test -f artifacts/repo_fix_backlog.json
+          test -f artifacts/repo_fix_backlog_pretty.md
+          echo "==============================="
+          echo "ARTIFACT FILES"
+          echo "==============================="
+          ls -la artifacts
+
+      - name: Upload analysis artifacts
         uses: actions/upload-artifact@v4
         with:
           name: repo-analysis
-          path: artifacts/
+          path: |
+            artifacts/repo_api_report_v4.json
+            artifacts/repo_fix_backlog.json
+            artifacts/repo_fix_backlog_pretty.md
+          if-no-files-found: error
