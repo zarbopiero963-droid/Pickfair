@@ -50,19 +50,6 @@ jobs:
           echo "GUARDRAIL FILES"
           echo "==============================="
           ls -la guardrails || true
-          echo "==============================="
-          echo "SNAPSHOT PREVIEW"
-          echo "==============================="
-          python - <<'PY'
-          from pathlib import Path
-          for name in [
-              "guardrails/public_api_snapshot.json",
-              "guardrails/allowed_dependencies.json",
-              "guardrails/allowed_scope_files.json",
-          ]:
-              p = Path(name)
-              print(f"{name}: exists={p.exists()} size={p.stat().st_size if p.exists() else 0}")
-          PY
 
       - name: Run guardrail tests
         run: |
