@@ -24,7 +24,7 @@ IGNORE_DIRS = {
 }
 
 
-def should_skip(path):
+def should_skip(path: Path) -> bool:
     return any(part in IGNORE_DIRS for part in path.parts)
 
 
@@ -35,22 +35,23 @@ def iter_python_files():
         yield p
 
 
-def module_name(path):
+def module_name(path: Path) -> str:
     rel = str(path).replace("\\", "/")
-    rel = rel[:-3] if rel.endswith(".py") else rel
+    if rel.endswith(".py"):
+        rel = rel[:-3]
     rel = rel.replace("/", ".")
     if rel.endswith(".__init__"):
         rel = rel[:-9]
     return rel
 
 
-def parse_file(path):
+def parse_file(path: Path):
     text = path.read_text(encoding="utf-8", errors="ignore")
     tree = ast.parse(text)
     return text, tree
 
 
-def get_imports(tree):
+def get_imports(tree: ast.AST):
     imports = []
 
     for node in ast.walk(tree):
@@ -58,19 +59,18 @@ def get_imports(tree):
             for n in node.names:
                 imports.append(n.name)
 
-        if isinstance(node, ast.ImportFrom):
+        elif isinstance(node, ast.ImportFrom):
             if node.module:
                 imports.append(node.module)
 
     return imports
 
 
-def get_classes(tree):
+def get_classes(tree: ast.Module):
     classes = []
 
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-
             methods = []
 
             for item in node.body:
@@ -87,7 +87,7 @@ def get_classes(tree):
     return classes
 
 
-def get_functions(tree):
+def get_functions(tree: ast.Module):
     funcs = []
 
     for node in tree.body:
@@ -98,19 +98,16 @@ def get_functions(tree):
 
 
 def analyze_repo():
-
     files = []
     dep_graph = defaultdict(set)
 
     for path in iter_python_files():
-
         if "tests" in str(path):
             continue
 
         text, tree = parse_file(path)
 
         mod = module_name(path)
-
         imports = get_imports(tree)
         funcs = get_functions(tree)
         classes = get_classes(tree)
@@ -120,7 +117,7 @@ def analyze_repo():
 
         files.append(
             {
-                "file": str(path),
+                "file": str(path).replace("\\", "/"),
                 "module": mod,
                 "functions": funcs,
                 "classes": classes,
@@ -133,50 +130,42 @@ def analyze_repo():
 
 
 def find_risky_modules(files):
-
     ranked = []
 
     for f in files:
-
         score = (
             f["lines"]
             + len(f["imports"]) * 5
             + len(f["classes"]) * 10
             + len(f["functions"]) * 2
         )
-
         ranked.append((score, f["file"], f["module"]))
 
     ranked.sort(reverse=True)
-
     return ranked[:25]
 
 
 def load_tests():
-
     tests = []
 
     if not TEST_DIR.exists():
         return tests
 
     for p in TEST_DIR.rglob("test_*.py"):
-        tests.append(str(p))
+        tests.append(str(p).replace("\\", "/"))
 
     return tests
 
 
 def find_modules_without_tests(files, tests):
-
     missing = []
 
     for f in files:
-
-        module_short = f["module"].split(".")[-1]
+        short_name = f["module"].split(".")[-1]
 
         found = False
-
         for t in tests:
-            if module_short in t:
+            if short_name in t:
                 found = True
                 break
 
@@ -192,13 +181,10 @@ def find_modules_without_tests(files, tests):
 
 
 def find_dead_code(files):
-
     dead = []
 
     for f in files:
-
         for fn in f["functions"]:
-
             if fn.startswith("_"):
                 continue
 
@@ -213,17 +199,12 @@ def find_dead_code(files):
 
 
 def main():
-
     print("Scanning repository...")
 
     files, deps = analyze_repo()
-
     tests = load_tests()
-
     risky = find_risky_modules(files)
-
     missing_tests = find_modules_without_tests(files, tests)
-
     dead = find_dead_code(files)
 
     report = {
@@ -232,20 +213,21 @@ def main():
             "tests": len(tests),
         },
         "files": files,
-        "dependency_graph": {k: list(v) for k, v in deps.items()},
+        "dependency_graph": {k: sorted(list(v)) for k, v in deps.items()},
         "top_risky_modules": risky,
         "modules_without_tests": missing_tests,
         "dead_code_candidates": dead,
     }
 
-    ARTIFACTS.mkdir(exist_ok=True)
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
-    (ARTIFACTS / "repo_api_report_v4.json").write_text(
-        json.dumps(report, indent=2),
+    out_file = ARTIFACTS / "repo_api_report_v4.json"
+    out_file.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    print("✔ repo_api_report_v4.json generated")
+    print(f"Generated: {out_file}")
 
 
 if __name__ == "__main__":
