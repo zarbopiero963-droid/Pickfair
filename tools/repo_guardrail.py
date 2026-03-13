@@ -2,310 +2,337 @@ import ast
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from collections import defaultdict
 
-ROOT = Path(__file__).resolve().parent.parent
-EXCLUDED_DIRS = {
+ROOT = Path(".")
+GUARDRAILS_DIR = ROOT / "guardrails"
+SNAPSHOT_PATH = GUARDRAILS_DIR / "public_api_snapshot.json"
+DEPENDENCIES_PATH = GUARDRAILS_DIR / "allowed_dependencies.json"
+ALLOWED_FILES_PATH = GUARDRAILS_DIR / "allowed_scope_files.json"
+
+IGNORE_DIRS = {
     ".git",
     ".venv",
     "venv",
     "__pycache__",
     ".pytest_cache",
-    "build",
-    "dist",
     ".mypy_cache",
     ".ruff_cache",
+    "node_modules",
+    "dist",
+    "build",
+    "artifacts",
+    "scripts",
+    "tools",
+    ".github",
+    "tests",
+    "guardrails",
+}
+
+PUBLIC_API_ROOTS = {
+    "ai",
+    "app_modules",
+    "controllers",
+    "core",
+    "ui",
+}
+
+LOW_PRIORITY_ROOT_FILES = {
+    "build.py",
+    "theme.py",
+    "trading_config.py",
+    "main.py",
 }
 
 
-def _iter_python_files(root: Path) -> List[Path]:
-    files: List[Path] = []
-    for p in root.rglob("*.py"):
-        if any(part in EXCLUDED_DIRS for part in p.parts):
-            continue
-        files.append(p)
-    return sorted(files)
+def normalize_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
 
 
-def _module_name_from_path(path: Path, root: Path) -> str:
+def module_name_from_path(path: Path, root: Path = ROOT) -> str:
     rel = path.relative_to(root)
-    parts = list(rel.parts)
-    if parts[-1] == "__init__.py":
-        parts = parts[:-1]
-    else:
-        parts[-1] = parts[-1][:-3]
-    return ".".join(parts)
+    rel_str = normalize_path(rel)
+    if rel_str.endswith(".py"):
+        rel_str = rel_str[:-3]
+    rel_str = rel_str.replace("/", ".")
+    if rel_str.endswith(".__init__"):
+        rel_str = rel_str[:-9]
+    return rel_str
 
 
-def _safe_read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def should_skip(path: Path) -> bool:
+    return any(part in IGNORE_DIRS for part in path.parts)
 
 
-def _parse_file(path: Path) -> ast.AST:
-    return ast.parse(_safe_read_text(path), filename=str(path))
+def is_public_api_file(path: Path) -> bool:
+    if should_skip(path):
+        return False
+
+    rel = normalize_path(path)
+
+    if "/" not in rel:
+        return Path(rel).name not in LOW_PRIORITY_ROOT_FILES
+
+    top = rel.split("/", 1)[0]
+    return top in PUBLIC_API_ROOTS
 
 
-def _collect_imports(tree: ast.AST) -> Set[str]:
-    imports: Set[str] = set()
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.add(node.module)
-
-    return imports
+def iter_python_files(root: Path):
+    for path in root.rglob("*.py"):
+        if not is_public_api_file(path):
+            continue
+        yield path
 
 
-def _public_function_signature(node: ast.FunctionDef) -> Dict[str, Any]:
+def ast_signature(node):
+    def unparse_or_none(value):
+        if value is None:
+            return None
+        try:
+            return ast.unparse(value)
+        except Exception:
+            return None
+
     args = node.args
 
-    def arg_names(arg_list: List[ast.arg]) -> List[str]:
-        return [a.arg for a in arg_list]
+    positional = [a.arg for a in args.posonlyargs + args.args]
+    positional_with_defaults = []
 
-    defaults_count = len(args.defaults)
-    positional = arg_names(args.args)
-    positional_defaults = positional[-defaults_count:] if defaults_count else []
+    all_pos = args.posonlyargs + args.args
+    defaults = args.defaults or []
+    default_offset = len(all_pos) - len(defaults)
 
-    kwonly_defaults = []
-    for idx, a in enumerate(args.kwonlyargs):
-        has_default = args.kw_defaults[idx] is not None
-        kwonly_defaults.append({"name": a.arg, "has_default": has_default})
+    for idx, arg in enumerate(all_pos):
+        if idx >= default_offset:
+            positional_with_defaults.append(arg.arg)
+
+    kwonly = [a.arg for a in args.kwonlyargs]
 
     return {
         "name": node.name,
         "positional": positional,
-        "positional_with_defaults": positional_defaults,
+        "positional_with_defaults": positional_with_defaults,
+        "kwonly": kwonly,
         "vararg": args.vararg.arg if args.vararg else None,
-        "kwonly": kwonly_defaults,
         "kwarg": args.kwarg.arg if args.kwarg else None,
+        "returns": unparse_or_none(getattr(node, "returns", None)),
     }
 
 
-def _collect_public_api(tree: ast.AST) -> Dict[str, Any]:
-    api: Dict[str, Any] = {"functions": {}, "classes": {}}
+def build_public_api_snapshot(root: Path):
+    snapshot = {}
 
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            if not node.name.startswith("_"):
-                api["functions"][node.name] = _public_function_signature(node)
+    for path in sorted(iter_python_files(root)):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(text, filename=str(path))
+        module = module_name_from_path(path, root)
 
-        elif isinstance(node, ast.ClassDef):
-            if node.name.startswith("_"):
-                continue
+        classes = {}
+        functions = {}
 
-            methods: Dict[str, Any] = {}
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
-                    methods[item.name] = _public_function_signature(item)
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.startswith("_"):
+                    continue
+                functions[node.name] = ast_signature(node)
 
-            api["classes"][node.name] = {"methods": methods}
+            elif isinstance(node, ast.ClassDef):
+                if node.name.startswith("_"):
+                    continue
 
-    return api
+                methods = {}
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if item.name.startswith("_"):
+                            continue
+                        methods[item.name] = ast_signature(item)
 
+                classes[node.name] = {
+                    "methods": methods,
+                }
 
-def build_public_api_snapshot(root: Path) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
-
-    for pyfile in _iter_python_files(root):
-        module_name = _module_name_from_path(pyfile, root)
-        try:
-            tree = _parse_file(pyfile)
-        except SyntaxError as exc:
-            result[module_name] = {
-                "parse_error": f"{exc.__class__.__name__}: {exc}"
-            }
-            continue
-
-        result[module_name] = _collect_public_api(tree)
-
-    return result
-
-
-def build_dependency_graph(root: Path) -> Dict[str, Any]:
-    modules: Dict[str, Dict[str, Any]] = {}
-
-    for pyfile in _iter_python_files(root):
-        module_name = _module_name_from_path(pyfile, root)
-        try:
-            tree = _parse_file(pyfile)
-            imports = sorted(_collect_imports(tree))
-        except SyntaxError as exc:
-            imports = [f"PARSE_ERROR::{exc}"]
-
-        modules[module_name] = {
-            "path": str(pyfile.relative_to(root)),
-            "imports": imports,
+        snapshot[module] = {
+            "classes": classes,
+            "functions": functions,
         }
 
-    reverse: Dict[str, List[str]] = {m: [] for m in modules.keys()}
-
-    for src_module, data in modules.items():
-        for imported in data["imports"]:
-            if imported in reverse:
-                reverse[imported].append(src_module)
-            else:
-                for target in modules.keys():
-                    if imported == target or imported.startswith(target + "."):
-                        reverse[target].append(src_module)
-
-    reverse = {k: sorted(set(v)) for k, v in reverse.items()}
-
-    return {
-        "modules": modules,
-        "reverse_dependencies": reverse,
-    }
+    return snapshot
 
 
-def extract_top_level_dependencies(root: Path) -> List[str]:
-    deps: Set[str] = set()
+def extract_top_level_dependencies(root: Path):
+    deps = defaultdict(set)
 
-    for pyfile in _iter_python_files(root):
-        try:
-            tree = _parse_file(pyfile)
-        except SyntaxError:
-            continue
+    known_modules = {module_name_from_path(p, root) for p in iter_python_files(root)}
 
-        for imported in _collect_imports(tree):
-            top = imported.split(".")[0]
-            if not top:
-                continue
+    for path in iter_python_files(root):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(text, filename=str(path))
+        src_module = module_name_from_path(path, root)
 
-            if (root / f"{top}.py").exists() or (root / top).exists():
-                continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    for known in known_modules:
+                        if alias.name == known or alias.name.startswith(known + "."):
+                            deps[src_module].add(known)
 
-            deps.add(top)
+            elif isinstance(node, ast.ImportFrom):
+                if not node.module:
+                    continue
+                for known in known_modules:
+                    if node.module == known or node.module.startswith(known + "."):
+                        deps[src_module].add(known)
 
-    return sorted(deps)
-
-
-def impact_analysis(root: Path, changed_paths: List[str]) -> Dict[str, Any]:
-    graph = build_dependency_graph(root)
-    modules = graph["modules"]
-    reverse = graph["reverse_dependencies"]
-
-    changed_modules: List[str] = []
-    for rel_path in changed_paths:
-        path = (root / rel_path).resolve()
-        if not path.exists() or path.suffix != ".py":
-            continue
-        try:
-            changed_modules.append(_module_name_from_path(path, root))
-        except Exception:
-            continue
-
-    impacted: Set[str] = set(changed_modules)
-    queue = list(changed_modules)
-
-    while queue:
-        current = queue.pop(0)
-        for dep in reverse.get(current, []):
-            if dep not in impacted:
-                impacted.add(dep)
-                queue.append(dep)
-
-    impacted_paths = []
-    for mod in sorted(impacted):
-        if mod in modules:
-            impacted_paths.append(modules[mod]["path"])
-
-    return {
-        "changed_modules": sorted(changed_modules),
-        "impacted_modules": sorted(impacted),
-        "impacted_paths": impacted_paths,
-    }
+    return {k: sorted(v) for k, v in deps.items()}
 
 
-def load_json(path: Path) -> Any:
+def build_dependency_graph(root: Path):
+    return extract_top_level_dependencies(root)
+
+
+def load_json(path: Path):
+    if not path.exists():
+        return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def save_json(path: Path, data: Any) -> None:
+def save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def check_dependencies(allowed_dependencies_path: Path, root: Path):
+    expected = load_json(allowed_dependencies_path)
+    current = build_dependency_graph(root)
+
+    if not expected:
+        print("No allowed dependency snapshot found.")
+        print("Create it with: python tools/repo_guardrail.py snapshot-deps")
+        return 1
+
+    if current != expected:
+        print("Dependency graph changed.")
+        print("If intentional, regenerate with:")
+        print("python tools/repo_guardrail.py snapshot-deps")
+        return 1
+
+    print("Dependency graph OK")
+    return 0
+
+
+def check_scope(allowed_files_path: Path, changed_files):
+    allowed = load_json(allowed_files_path)
+
+    if not allowed:
+        print("No allowed scope file found.")
+        print("Create it with: python tools/repo_guardrail.py snapshot-scope")
+        return 1
+
+    allowed_files = set(allowed.get("allowed_files", []))
+    changed_files = [normalize_path(Path(f)) for f in changed_files]
+
+    violations = [f for f in changed_files if f not in allowed_files]
+
+    if violations:
+        print("Changed files out of allowed scope:")
+        for item in violations:
+            print(f" - {item}")
+        return 1
+
+    print("Scope OK")
+    return 0
+
+
+def impact_analysis(root: Path, changed_paths):
+    graph = build_dependency_graph(root)
+    changed_modules = set()
+
+    for path_str in changed_paths:
+        path = Path(path_str)
+        if path.exists() and path.suffix == ".py" and is_public_api_file(path):
+            changed_modules.add(module_name_from_path(path, root))
+        else:
+            rel = normalize_path(path)
+            if rel.endswith(".py"):
+                mod = rel[:-3].replace("/", ".")
+                if mod.endswith(".__init__"):
+                    mod = mod[:-9]
+                changed_modules.add(mod)
+
+    impacted = set(changed_modules)
+
+    changed = True
+    while changed:
+        changed = False
+        for src, deps in graph.items():
+            if any(dep in impacted for dep in deps) and src not in impacted:
+                impacted.add(src)
+                changed = True
+
+    result = {
+        "changed_modules": sorted(changed_modules),
+        "impacted_modules": sorted(impacted),
+    }
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def snapshot_api():
+    snapshot = build_public_api_snapshot(ROOT)
+    save_json(SNAPSHOT_PATH, snapshot)
+    print(f"Saved {SNAPSHOT_PATH}")
+    return 0
+
+
+def snapshot_deps():
+    deps = build_dependency_graph(ROOT)
+    save_json(DEPENDENCIES_PATH, deps)
+    print(f"Saved {DEPENDENCIES_PATH}")
+    return 0
+
+
+def snapshot_scope():
+    allowed_files = sorted(
+        normalize_path(path.relative_to(ROOT))
+        for path in ROOT.rglob("*")
+        if path.is_file() and not should_skip(path)
     )
+    save_json(ALLOWED_FILES_PATH, {"allowed_files": allowed_files})
+    print(f"Saved {ALLOWED_FILES_PATH}")
+    return 0
 
 
-def check_scope(allowed_files_path: Path, changed_files: List[str]) -> Tuple[bool, List[str]]:
-    data = load_json(allowed_files_path)
-    allowed = set(data.get("allowed_files", []))
-    violations = [f for f in changed_files if f not in allowed]
-    return (len(violations) == 0, violations)
-
-
-def check_dependencies(
-    allowed_dependencies_path: Path,
-    root: Path,
-) -> Tuple[bool, List[str], List[str]]:
-    allowed = set(load_json(allowed_dependencies_path).get("allowed_dependencies", []))
-    current = set(extract_top_level_dependencies(root))
-    unexpected = sorted(current - allowed)
-    missing = sorted(allowed - current)
-    return (len(unexpected) == 0, unexpected, missing)
-
-
-def main() -> int:
+def main():
     if len(sys.argv) < 2:
         print("Usage:")
         print("  python tools/repo_guardrail.py snapshot-api")
-        print("  python tools/repo_guardrail.py build-graph")
-        print("  python tools/repo_guardrail.py impact file1.py file2.py")
-        print("  python tools/repo_guardrail.py check-scope file1.py file2.py")
+        print("  python tools/repo_guardrail.py snapshot-deps")
+        print("  python tools/repo_guardrail.py snapshot-scope")
         print("  python tools/repo_guardrail.py check-deps")
+        print("  python tools/repo_guardrail.py check-scope <files...>")
+        print("  python tools/repo_guardrail.py impact <files...>")
         return 1
 
     cmd = sys.argv[1]
 
     if cmd == "snapshot-api":
-        snapshot = build_public_api_snapshot(ROOT)
-        save_json(ROOT / "guardrails" / "public_api_snapshot.json", snapshot)
-        print("Saved guardrails/public_api_snapshot.json")
-        return 0
+        return snapshot_api()
 
-    if cmd == "build-graph":
-        graph = build_dependency_graph(ROOT)
-        save_json(ROOT / "guardrails" / "dependency_graph.json", graph)
-        print("Saved guardrails/dependency_graph.json")
-        return 0
+    if cmd == "snapshot-deps":
+        return snapshot_deps()
 
-    if cmd == "impact":
-        changed = sys.argv[2:]
-        result = impact_analysis(ROOT, changed)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0
-
-    if cmd == "check-scope":
-        changed = sys.argv[2:]
-        ok, violations = check_scope(ROOT / "guardrails" / "allowed_files.json", changed)
-        if ok:
-            print("Scope OK")
-            return 0
-        print("Scope violation detected:")
-        for item in violations:
-            print(f" - {item}")
-        return 2
+    if cmd == "snapshot-scope":
+        return snapshot_scope()
 
     if cmd == "check-deps":
-        ok, unexpected, missing = check_dependencies(
-            ROOT / "guardrails" / "allowed_dependencies.json",
-            ROOT,
-        )
-        if not ok:
-            print("Unexpected dependencies found:")
-            for dep in unexpected:
-                print(f" - {dep}")
-            return 2
+        return check_dependencies(DEPENDENCIES_PATH, ROOT)
 
-        print("Dependencies OK")
-        if missing:
-            print("Declared but not detected:")
-            for dep in missing:
-                print(f" - {dep}")
-        return 0
+    if cmd == "check-scope":
+        return check_scope(ALLOWED_FILES_PATH, sys.argv[2:])
+
+    if cmd == "impact":
+        return impact_analysis(ROOT, sys.argv[2:])
 
     print(f"Unknown command: {cmd}")
     return 1
