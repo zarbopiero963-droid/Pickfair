@@ -1,13 +1,18 @@
-import pytest
-
 from automation_engine import AutomationEngine
 
 
-class DummyController:
-    pass
+def test_automation_engine_initialization():
+    engine = AutomationEngine()
+
+    assert engine.running is False
+    assert isinstance(engine.rules, list)
 
 
-def test_automation_engine_init():
-    engine = AutomationEngine(controller=DummyController())
+def test_automation_engine_start_stop():
+    engine = AutomationEngine()
 
-    assert engine.controller is not None
+    engine.start()
+    assert engine.running is True
+
+    engine.stop()
+    assert engine.running is False
