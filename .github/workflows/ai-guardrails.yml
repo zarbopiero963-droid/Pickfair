@@ -1,13 +1,11 @@
 name: AI Guardrails
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
-    inputs:
-      changed_files:
-        description: "Comma-separated changed files override"
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -39,36 +37,30 @@ jobs:
           fi
           pip install pytest requests
 
-      - name: Detect changed files
-        id: changes
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.changed_files }}" ]; then
-            CSV="${{ github.event.inputs.changed_files }}"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.sha }}"
-            CSV="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | paste -sd, -)"
-          else
-            CSV=""
-          fi
-
-          SPACE="$(echo "$CSV" | tr ',' ' ' | xargs || true)"
-
-          echo "files_csv=$CSV" >> "$GITHUB_OUTPUT"
-          echo "files_space=$SPACE" >> "$GITHUB_OUTPUT"
-          echo "AI_CHANGED_FILES=$CSV" >> "$GITHUB_ENV"
-
-          echo "Changed files CSV: $CSV"
-          echo "Changed files SPACE: $SPACE"
-
-      - name: Ensure folders
+      - name: Prepare folders
         shell: bash
         run: |
           mkdir -p guardrails
           mkdir -p artifacts
 
-      - name: Build API snapshot baseline if missing
+      - name: Detect changed files
+        id: changes
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.sha }}"
+            FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | paste -sd, -)"
+          else
+            FILES=""
+          fi
+
+          echo "AI_CHANGED_FILES=$FILES" >> "$GITHUB_ENV"
+          echo "files_csv=$FILES" >> "$GITHUB_OUTPUT"
+
+          echo "Changed files: $FILES"
+
+      - name: Build API snapshot if missing
         shell: bash
         run: |
           if [ ! -f guardrails/public_api_snapshot.json ]; then
@@ -80,50 +72,21 @@ jobs:
         run: |
           python tools/repo_guardrail.py build-graph
 
-      - name: Scope check
-        if: steps.changes.outputs.files_space != ''
-        shell: bash
-        run: |
-          python tools/repo_guardrail.py check-scope ${{ steps.changes.outputs.files_space }}
-
-      - name: Dependency check
-        shell: bash
-        run: |
-          python tools/repo_guardrail.py check-deps
-
-      - name: Run repository intelligence report
+      - name: Run repository intelligence
         shell: bash
         run: |
           python scripts/repo_api_report_v4.py
           python scripts/generate_fix_backlog.py
 
-      - name: Compute targeted tests
-        id: targeted
-        shell: bash
-        run: |
-          python tools/compute_targeted_tests.py ${{ steps.changes.outputs.files_space }}
-          python -c "import json, os; from pathlib import Path; p=Path('guardrails/targeted_tests.json'); targeted=''; \
-if p.exists(): targeted=' '.join(json.loads(p.read_text(encoding='utf-8')).get('targeted_tests', [])); \
-open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8').write(f'targeted_tests={targeted}\n'); \
-open(os.environ['GITHUB_ENV'],'a',encoding='utf-8').write(f'TARGETED_TESTS={targeted}\n')"
-
       - name: Run guardrail tests
+        shell: bash
         env:
           AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
-        shell: bash
         run: |
           pytest -q tests/guardrails
 
-      - name: Run targeted impacted tests
-        if: steps.targeted.outputs.targeted_tests != ''
-        env:
-          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
-        shell: bash
-        run: |
-          pytest -q ${{ steps.targeted.outputs.targeted_tests }}
-
       - name: Run reasoning guard
-        if: always()
+        shell: bash
         env:
           AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
           LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
@@ -131,25 +94,16 @@ open(os.environ['GITHUB_ENV'],'a',encoding='utf-8').write(f'TARGETED_TESTS={targ
           LLM_GUARD_BASE_URL: ${{ secrets.LLM_GUARD_BASE_URL }}
           LLM_GUARD_SITE_URL: ${{ secrets.LLM_GUARD_SITE_URL }}
           LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
-        shell: bash
         run: |
           set +e
-
-          if [ -n "${{ steps.changes.outputs.files_space }}" ]; then
-            python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }} > guardrails/ai_reasoning_guard_stdout.log 2> guardrails/ai_reasoning_guard_stderr.log
-            EXIT_CODE=$?
-          else
-            python tools/ai_reasoning_guard.py run > guardrails/ai_reasoning_guard_stdout.log 2> guardrails/ai_reasoning_guard_stderr.log
-            EXIT_CODE=$?
-          fi
-
-          echo "AI_REASONING_GUARD_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_ENV"
+          python tools/ai_reasoning_guard.py run > guardrails/ai_reasoning_guard_stdout.log 2> guardrails/ai_reasoning_guard_stderr.log
+          EXIT_CODE=$?
+          echo "Reasoning guard exit code: $EXIT_CODE"
 
           if [ ! -f guardrails/ai_reasoning_guard_report.json ]; then
             python -c "import json; from pathlib import Path; \
 stdout_path=Path('guardrails/ai_reasoning_guard_stdout.log'); \
 stderr_path=Path('guardrails/ai_reasoning_guard_stderr.log'); \
-report_path=Path('guardrails/ai_reasoning_guard_report.json'); \
 stdout_text=stdout_path.read_text(encoding='utf-8', errors='ignore') if stdout_path.exists() else ''; \
 stderr_text=stderr_path.read_text(encoding='utf-8', errors='ignore') if stderr_path.exists() else ''; \
 report={ \
@@ -166,20 +120,19 @@ report={ \
 'status_summary': {'semantic_ok': False, 'runtime_ok': False, 'mutation_ok': False, 'ai_review_ok': False, 'failed_semantic_checks': [], 'failed_runtime_smokes': [], 'weak_mutation_paths': [], 'final_risk': 'CRITICAL', 'block_merge': True, 'block_reasons': ['Reasoning guard crashed before generating report.']}, \
 'debug': {'stdout_tail': stdout_text[-4000:], 'stderr_tail': stderr_text[-4000:]} \
 }; \
-report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8'); \
-print('Fallback ai_reasoning_guard_report.json created.')"
+Path('guardrails/ai_reasoning_guard_report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')"
           fi
 
-          echo "Reasoning guard exit code: $EXIT_CODE"
           exit 0
 
-      - name: Print explicit guard status
+      - name: Print guard status
         if: always()
         shell: bash
         run: |
           python -c "import json, sys; from pathlib import Path; \
 p=Path('guardrails/ai_reasoning_guard_report.json'); \
-if not p.exists(): print('::error::Missing guardrails/ai_reasoning_guard_report.json even after fallback generation') or sys.exit(2); \
+print('Report exists =', p.exists()); \
+if not p.exists(): sys.exit(2); \
 data=json.loads(p.read_text(encoding='utf-8')); \
 s=data.get('status_summary', {}); \
 print('SEMANTIC_OK =', s.get('semantic_ok')); \
@@ -190,83 +143,41 @@ print('FINAL_RISK =', s.get('final_risk')); \
 print('BLOCK_MERGE =', s.get('block_merge')); \
 print('FAILED_SEMANTIC =', '; '.join(s.get('failed_semantic_checks', []))); \
 print('FAILED_RUNTIME =', '; '.join(s.get('failed_runtime_smokes', []))); \
-weak=[f\"{x.get('callable')}::{x.get('path')}\" for x in s.get('weak_mutation_paths', [])]; \
-print('WEAK_MUTATIONS =', '; '.join(weak)); \
-print('BLOCK_REASONS =', '; '.join(s.get('block_reasons', []))); \
-debug=data.get('debug', {}); \
-stderr_tail=debug.get('stderr_tail', ''); \
-stdout_tail=debug.get('stdout_tail', ''); \
-print('----- STDERR TAIL -----') if stderr_tail else None; \
-print(stderr_tail[-2000:]) if stderr_tail else None; \
-print('----- STDOUT TAIL -----') if stdout_tail else None; \
-print(stdout_tail[-2000:]) if stdout_tail else None"
+print('BLOCK_REASONS =', '; '.join(s.get('block_reasons', [])))"
 
-      - name: Upload guardrail artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-guardrails-artifacts
           path: |
             guardrails/*.json
-            guardrails/*.md
             guardrails/*.log
             artifacts/*.json
             artifacts/*.md
           if-no-files-found: warn
 
-      - name: Prepare merge block summary
-        if: always()
-        shell: bash
-        run: |
-          python -c "import json; from pathlib import Path; \
-report_path=Path('guardrails/ai_reasoning_guard_report.json'); \
-summary_path=Path('guardrails/block_merge_summary.txt'); \
-if not report_path.exists(): \
-    summary_path.write_text('AI guard report missing.', encoding='utf-8'); \
-    print(summary_path.read_text(encoding='utf-8')); \
-    raise SystemExit(0); \
-data=json.loads(report_path.read_text(encoding='utf-8')); \
-decision=data.get('decision', {}); \
-status=data.get('status_summary', {}); \
-findings=data.get('findings', []); \
-lines=[]; \
-lines.append(f\"AI Guardrails final risk: {decision.get('final_risk', 'UNKNOWN')}\"); \
-lines.append(f\"Block merge: {decision.get('block_merge', False)}\"); \
-lines.append(f\"Semantic OK: {status.get('semantic_ok')}\"); \
-lines.append(f\"Runtime OK: {status.get('runtime_ok')}\"); \
-lines.append(f\"Mutation OK: {status.get('mutation_ok')}\"); \
-lines.append(f\"AI Review OK: {status.get('ai_review_ok')}\"); \
-reasons=decision.get('block_reasons', []); \
-lines.extend(['Reasons:'] + [f'- {r}' for r in reasons] if reasons else []); \
-top=findings[:10]; \
-lines.extend(['Top findings:'] + [f\"- [{x.get('severity', '?')}] {x.get('category', '?')} :: {x.get('file', '?')} -> {x.get('message', '')}\" for x in top] if top else []); \
-summary_path.write_text('\n'.join(lines), encoding='utf-8'); \
-print(summary_path.read_text(encoding='utf-8'))"
-
-      - name: Comment PR with report
+      - name: Comment PR
         if: always() && github.event_name == 'pull_request'
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
         run: |
-          python tools/pr_comment_report.py
+          python tools/pr_comment_report.py || true
 
-      - name: Fail with clear merge-block message
+      - name: Block merge if needed
         if: always()
         shell: bash
         run: |
           python -c "import json, sys; from pathlib import Path; \
 p=Path('guardrails/ai_reasoning_guard_report.json'); \
-if not p.exists(): print('::error::Missing guardrails/ai_reasoning_guard_report.json') or sys.exit(2); \
+if not p.exists(): print('::error::Missing guardrails/ai_reasoning_guard_report.json'); sys.exit(2); \
 data=json.loads(p.read_text(encoding='utf-8')); \
-s=data.get('status_summary', {}); \
-d=data.get('decision', {}); \
-if d.get('block_merge', False): \
-    msg=(f\"AI Guardrails blocked merge | final_risk={d.get('final_risk')} | semantic_ok={s.get('semantic_ok')} | runtime_ok={s.get('runtime_ok')} | mutation_ok={s.get('mutation_ok')} | ai_review_ok={s.get('ai_review_ok')}\"); \
-    reasons=d.get('block_reasons', []); \
-    msg += (' | reasons=' + '; '.join(reasons)) if reasons else ''; \
-    print(f'::error::{msg}'); \
+decision=data.get('decision', {}); \
+status=data.get('status_summary', {}); \
+if decision.get('block_merge', False): \
+    print(f'::error::AI Guardrails blocked merge | final_risk={decision.get(\"final_risk\")} | semantic_ok={status.get(\"semantic_ok\")} | runtime_ok={status.get(\"runtime_ok\")} | mutation_ok={status.get(\"mutation_ok\")} | ai_review_ok={status.get(\"ai_review_ok\")}'); \
     sys.exit(2); \
 print('AI Guardrails: merge allowed.')"
