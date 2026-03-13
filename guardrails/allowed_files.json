@@ -1,0 +1,6 @@
+{
+  "allowed_files": [
+    "controllers/dutching_controller.py",
+    "telegram_listener.py"
+  ]
+}
