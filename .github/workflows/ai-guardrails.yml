@@ -7,12 +7,81 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  smoke:
+  basic:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Test workflow loads
-        run: echo "AI Guardrails workflow is valid"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+
+          pip install pytest requests
+
+      - name: Create folders
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          mkdir -p guardrails
+
+      - name: Build public API snapshot if missing
+        shell: bash
+        run: |
+          if [ ! -f guardrails/public_api_snapshot.json ]; then
+            python tools/repo_guardrail.py snapshot-api
+          else
+            echo "public_api_snapshot.json already exists"
+          fi
+
+      - name: Build dependency graph
+        shell: bash
+        run: |
+          python tools/repo_guardrail.py build-graph
+
+      - name: Run repository API report
+        shell: bash
+        run: |
+          python scripts/repo_api_report_v4.py
+
+      - name: Generate fix backlog
+        shell: bash
+        run: |
+          python scripts/generate_fix_backlog.py
+
+      - name: Show generated files
+        shell: bash
+        run: |
+          echo "Artifacts:"
+          ls -la artifacts || true
+          echo "Guardrails:"
+          ls -la guardrails || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-guardrails-phase2
+          path: |
+            artifacts/*.json
+            artifacts/*.md
+            guardrails/*.json
+          if-no-files-found: warn
