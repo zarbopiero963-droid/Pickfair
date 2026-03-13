@@ -39,36 +39,36 @@ PUBLIC_API_ROOTS = {
 }
 
 
-def normalize(p: Path):
-    return str(p).replace("\\", "/")
+def normalize(path: Path) -> str:
+    return str(path).replace("\\", "/")
 
 
-def should_skip(path: Path):
+def should_skip(path: Path) -> bool:
     return any(part in IGNORE_DIRS for part in path.parts)
 
 
-def is_public_api_file(path: Path):
+def is_public_api_file(path: Path) -> bool:
     if should_skip(path):
         return False
 
-    rel = normalize(path)
+    rel = normalize(path.relative_to(ROOT) if path.is_absolute() else path)
 
     if "/" not in rel:
         return True
 
-    top = rel.split("/")[0]
+    top = rel.split("/", 1)[0]
     return top in PUBLIC_API_ROOTS
 
 
-def iter_python_files():
-    for p in ROOT.rglob("*.py"):
-        if not is_public_api_file(p):
+def iter_python_files(root: Path = ROOT):
+    for path in root.rglob("*.py"):
+        if not is_public_api_file(path):
             continue
-        yield p
+        yield path
 
 
-def module_name(path: Path):
-    rel = normalize(path.relative_to(ROOT))
+def module_name(path: Path, root: Path = ROOT) -> str:
+    rel = normalize(path.relative_to(root))
 
     if rel.endswith(".py"):
         rel = rel[:-3]
@@ -96,19 +96,19 @@ def ast_signature(node):
     }
 
 
-def build_public_api_snapshot():
+def build_public_api_snapshot(root: Path = ROOT):
     snapshot = {}
 
-    for path in sorted(iter_python_files()):
+    for path in sorted(iter_python_files(root)):
         text = path.read_text(encoding="utf-8", errors="ignore")
-        tree = ast.parse(text)
-        module = module_name(path)
+        tree = ast.parse(text, filename=str(path))
+        mod = module_name(path, root)
 
         classes = {}
         functions = {}
 
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name.startswith("_"):
                     continue
                 functions[node.name] = ast_signature(node)
@@ -120,14 +120,14 @@ def build_public_api_snapshot():
                 methods = {}
 
                 for item in node.body:
-                    if isinstance(item, ast.FunctionDef):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         if item.name.startswith("_"):
                             continue
                         methods[item.name] = ast_signature(item)
 
                 classes[node.name] = {"methods": methods}
 
-        snapshot[module] = {
+        snapshot[mod] = {
             "classes": classes,
             "functions": functions,
         }
@@ -135,20 +135,20 @@ def build_public_api_snapshot():
     return snapshot
 
 
-def build_dependency_graph():
+def extract_top_level_dependencies(root: Path = ROOT):
     deps = defaultdict(set)
 
-    modules = {module_name(p) for p in iter_python_files()}
+    public_modules = {module_name(p, root) for p in iter_python_files(root)}
 
-    for path in iter_python_files():
+    for path in iter_python_files(root):
         text = path.read_text(encoding="utf-8", errors="ignore")
-        tree = ast.parse(text)
-        src = module_name(path)
+        tree = ast.parse(text, filename=str(path))
+        src = module_name(path, root)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    for mod in modules:
+                    for mod in public_modules:
                         if alias.name == mod or alias.name.startswith(mod + "."):
                             deps[src].add(mod)
 
@@ -156,32 +156,49 @@ def build_dependency_graph():
                 if not node.module:
                     continue
 
-                for mod in modules:
+                for mod in public_modules:
                     if node.module == mod or node.module.startswith(mod + "."):
                         deps[src].add(mod)
 
     return {k: sorted(v) for k, v in deps.items()}
 
 
-def save_json(path, data):
+def build_dependency_graph(root: Path = ROOT):
+    return extract_top_level_dependencies(root)
+
+
+def reverse_dependency_graph(graph: dict):
+    reverse = defaultdict(set)
+
+    for src, targets in graph.items():
+        for tgt in targets:
+            reverse[tgt].add(src)
+
+    return {k: sorted(v) for k, v in reverse.items()}
+
+
+def save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
-def load_json(path):
+def load_json(path: Path):
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def snapshot_api():
-    data = build_public_api_snapshot()
+    data = build_public_api_snapshot(ROOT)
     save_json(API_SNAPSHOT, data)
     print("Saved:", API_SNAPSHOT)
 
 
 def snapshot_deps():
-    data = build_dependency_graph()
+    data = build_dependency_graph(ROOT)
     save_json(DEPS_SNAPSHOT, data)
     print("Saved:", DEPS_SNAPSHOT)
 
@@ -189,9 +206,9 @@ def snapshot_deps():
 def snapshot_scope():
     files = []
 
-    for p in ROOT.rglob("*"):
-        if p.is_file() and not should_skip(p):
-            files.append(normalize(p.relative_to(ROOT)))
+    for path in ROOT.rglob("*"):
+        if path.is_file() and not should_skip(path):
+            files.append(normalize(path.relative_to(ROOT)))
 
     save_json(SCOPE_SNAPSHOT, {"allowed_files": sorted(files)})
     print("Saved:", SCOPE_SNAPSHOT)
@@ -199,7 +216,7 @@ def snapshot_scope():
 
 def check_deps():
     expected = load_json(DEPS_SNAPSHOT)
-    current = build_dependency_graph()
+    current = build_dependency_graph(ROOT)
 
     if expected != current:
         print("Dependency graph changed")
@@ -209,6 +226,70 @@ def check_deps():
     print("Dependency graph OK")
 
 
+def check_scope(allowed_files_path: Path, changed_files):
+    allowed = load_json(allowed_files_path)
+
+    if not allowed:
+        print("No allowed scope snapshot found.")
+        print("Run: python tools/repo_guardrail.py snapshot-scope")
+        return 1
+
+    allowed_files = set(allowed.get("allowed_files", []))
+    changed_files = [normalize(Path(p)) for p in changed_files]
+
+    violations = [p for p in changed_files if p not in allowed_files]
+
+    if violations:
+        print("Changed files out of allowed scope:")
+        for item in violations:
+            print(f" - {item}")
+        return 1
+
+    print("Scope OK")
+    return 0
+
+
+def impact_analysis(root: Path, changed_paths):
+    graph = build_dependency_graph(root)
+    reverse_graph = reverse_dependency_graph(graph)
+
+    changed_modules = set()
+
+    for raw_path in changed_paths:
+        p = Path(raw_path)
+
+        # Caso 1: path reale esistente
+        if p.exists() and p.suffix == ".py" and is_public_api_file(p):
+            changed_modules.add(module_name(p, root))
+            continue
+
+        # Caso 2: path relativo stringa stile repo
+        normalized = normalize(p)
+        if normalized.endswith(".py"):
+            guess = normalized[:-3].replace("/", ".")
+            if guess.endswith(".__init__"):
+                guess = guess[:-9]
+            changed_modules.add(guess)
+
+    impacted = set(changed_modules)
+    queue = list(changed_modules)
+
+    while queue:
+        current = queue.pop(0)
+
+        for caller in reverse_graph.get(current, []):
+            if caller not in impacted:
+                impacted.add(caller)
+                queue.append(caller)
+
+    result = {
+        "changed_modules": sorted(changed_modules),
+        "impacted_modules": sorted(impacted),
+    }
+
+    return result
+
+
 def main():
     if len(sys.argv) < 2:
         print("Commands:")
@@ -216,18 +297,32 @@ def main():
         print("snapshot-deps")
         print("snapshot-scope")
         print("check-deps")
+        print("check-scope <files...>")
+        print("impact <files...>")
         sys.exit(1)
 
     cmd = sys.argv[1]
 
     if cmd == "snapshot-api":
         snapshot_api()
+
     elif cmd == "snapshot-deps":
         snapshot_deps()
+
     elif cmd == "snapshot-scope":
         snapshot_scope()
+
     elif cmd == "check-deps":
         check_deps()
+
+    elif cmd == "check-scope":
+        code = check_scope(SCOPE_SNAPSHOT, sys.argv[2:])
+        sys.exit(code)
+
+    elif cmd == "impact":
+        result = impact_analysis(ROOT, sys.argv[2:])
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
     else:
         print("Unknown command:", cmd)
         sys.exit(1)
