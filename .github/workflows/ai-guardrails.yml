@@ -1,0 +1,102 @@
+name: AI Guardrails
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      changed_files:
+        description: "Comma-separated changed files override"
+        required: false
+        default: ""
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+
+      - name: Detect changed files
+        id: changes
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.changed_files }}" ]; then
+            CSV="${{ github.event.inputs.changed_files }}"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.sha }}"
+            CSV="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | paste -sd, -)"
+          else
+            CSV=""
+          fi
+
+          SPACE="$(echo "$CSV" | tr ',' ' ' | xargs || true)"
+
+          echo "files_csv=$CSV" >> "$GITHUB_OUTPUT"
+          echo "files_space=$SPACE" >> "$GITHUB_OUTPUT"
+
+          echo "AI_CHANGED_FILES=$CSV" >> "$GITHUB_ENV"
+
+          echo "Changed files CSV: $CSV"
+          echo "Changed files SPACE: $SPACE"
+
+      - name: Build API snapshot baseline if missing
+        run: |
+          if [ ! -f guardrails/public_api_snapshot.json ]; then
+            python tools/repo_guardrail.py snapshot-api
+          fi
+
+      - name: Build dependency graph
+        run: |
+          python tools/repo_guardrail.py build-graph
+
+      - name: Scope check
+        if: steps.changes.outputs.files_space != ''
+        run: |
+          python tools/repo_guardrail.py check-scope ${{ steps.changes.outputs.files_space }}
+
+      - name: Dependency check
+        run: |
+          python tools/repo_guardrail.py check-deps
+
+      - name: Run guardrail tests
+        env:
+          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+        run: |
+          pytest -q tests/guardrails
+
+      - name: Print impact analysis
+        if: steps.changes.outputs.files_space != ''
+        run: |
+          python tools/repo_guardrail.py impact ${{ steps.changes.outputs.files_space }}
+
+      - name: Run reasoning guard
+        env:
+          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+          LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
+          LLM_GUARD_MODEL: ${{ secrets.LLM_GUARD_MODEL }}
+          LLM_GUARD_BASE_URL: ${{ secrets.LLM_GUARD_BASE_URL }}
+          LLM_GUARD_SITE_URL: ${{ secrets.LLM_GUARD_SITE_URL }}
+          LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
+        run: |
+          if [ -n "${{ steps.changes.outputs.files_space }}" ]; then
+            python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }}
+          else
+            python tools/ai_reasoning_guard.py run
+          fi
