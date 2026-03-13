@@ -1,0 +1,35 @@
+name: Repository Analysis
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run repository analyzer
+        run: |
+          python scripts/repo_api_report_v4.py
+
+      - name: Generate fix backlog
+        run: |
+          python scripts/generate_fix_backlog.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-analysis
+          path: artifacts/
