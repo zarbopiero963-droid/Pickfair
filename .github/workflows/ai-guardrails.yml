@@ -2,101 +2,92 @@ name: AI Guardrails
 
 on:
   pull_request:
-  workflow_dispatch:
-    inputs:
-      changed_files:
-        description: "Comma-separated changed files override"
-        required: false
-        default: ""
 
 jobs:
   guardrails:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      - name: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: setup python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-          fi
+          pip install pytest requests
 
-      - name: Detect changed files
+      - name: detect changed files
         id: changes
-        shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.changed_files }}" ]; then
-            CSV="${{ github.event.inputs.changed_files }}"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.sha }}"
-            CSV="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | paste -sd, -)"
-          else
-            CSV=""
-          fi
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.sha }}
 
-          SPACE="$(echo "$CSV" | tr ',' ' ' | xargs || true)"
+          FILES=$(git diff --name-only $BASE $HEAD)
 
-          echo "files_csv=$CSV" >> "$GITHUB_OUTPUT"
-          echo "files_space=$SPACE" >> "$GITHUB_OUTPUT"
+          echo "AI_CHANGED_FILES=$(echo $FILES | tr '\n' ',')" >> $GITHUB_ENV
+          echo "files=$(echo $FILES | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
-          echo "AI_CHANGED_FILES=$CSV" >> "$GITHUB_ENV"
-
-          echo "Changed files CSV: $CSV"
-          echo "Changed files SPACE: $SPACE"
-
-      - name: Build API snapshot baseline if missing
-        run: |
-          if [ ! -f guardrails/public_api_snapshot.json ]; then
-            python tools/repo_guardrail.py snapshot-api
-          fi
-
-      - name: Build dependency graph
+      - name: build dependency graph
         run: |
           python tools/repo_guardrail.py build-graph
 
-      - name: Scope check
-        if: steps.changes.outputs.files_space != ''
+      - name: compute targeted tests
         run: |
-          python tools/repo_guardrail.py check-scope ${{ steps.changes.outputs.files_space }}
+          python tools/compute_targeted_tests.py ${{ steps.changes.outputs.files }}
 
-      - name: Dependency check
-        run: |
-          python tools/repo_guardrail.py check-deps
-
-      - name: Run guardrail tests
-        env:
-          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+      - name: run guardrail tests
         run: |
           pytest -q tests/guardrails
 
-      - name: Print impact analysis
-        if: steps.changes.outputs.files_space != ''
+      - name: run targeted tests
         run: |
-          python tools/repo_guardrail.py impact ${{ steps.changes.outputs.files_space }}
-
-      - name: Run reasoning guard
-        env:
-          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
-          LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
-          LLM_GUARD_MODEL: ${{ secrets.LLM_GUARD_MODEL }}
-          LLM_GUARD_BASE_URL: ${{ secrets.LLM_GUARD_BASE_URL }}
-          LLM_GUARD_SITE_URL: ${{ secrets.LLM_GUARD_SITE_URL }}
-          LLM_GUARD_APP_NAME: ${{ secrets.LLM_GUARD_APP_NAME }}
-        run: |
-          if [ -n "${{ steps.changes.outputs.files_space }}" ]; then
-            python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files_space }}
-          else
-            python tools/ai_reasoning_guard.py run
+          TARGET=$(python - <<EOF
+import json
+print(" ".join(json.load(open("guardrails/targeted_tests.json"))["targeted_tests"]))
+EOF
+)
+          if [ ! -z "$TARGET" ]; then
+            pytest -q $TARGET
           fi
+
+      - name: run reasoning guard
+        env:
+          LLM_GUARD_API_KEY: ${{ secrets.LLM_GUARD_API_KEY }}
+        run: |
+          python tools/ai_reasoning_guard.py run ${{ steps.changes.outputs.files }}
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrails
+          path: |
+            guardrails/*.json
+            artifacts/*.json
+
+      - name: comment PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python tools/pr_comment_report.py
+
+      - name: block merge if needed
+        run: |
+          python - <<EOF
+import json,sys
+r=json.load(open("guardrails/ai_reasoning_guard_report.json"))
+if r["decision"]["block_merge"]:
+    print("Merge blocked by AI guardrails")
+    sys.exit(1)
+EOF
