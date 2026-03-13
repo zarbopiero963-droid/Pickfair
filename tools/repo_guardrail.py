@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
-ROOT = Path(".")
+ROOT = Path(".").resolve()
 GUARDRAILS_DIR = ROOT / "guardrails"
 
 API_SNAPSHOT = GUARDRAILS_DIR / "public_api_snapshot.json"
@@ -43,15 +43,22 @@ def normalize(path: Path) -> str:
     return str(path).replace("\\", "/")
 
 
+def resolve_root(root: Path) -> Path:
+    return Path(root).resolve()
+
+
 def should_skip(path: Path) -> bool:
     return any(part in IGNORE_DIRS for part in path.parts)
 
 
-def is_public_api_file(path: Path) -> bool:
+def is_public_api_file(path: Path, root: Path = ROOT) -> bool:
+    root = resolve_root(root)
+    path = Path(path).resolve()
+
     if should_skip(path):
         return False
 
-    rel = normalize(path.relative_to(ROOT) if path.is_absolute() else path)
+    rel = normalize(path.relative_to(root))
 
     if "/" not in rel:
         return True
@@ -61,13 +68,18 @@ def is_public_api_file(path: Path) -> bool:
 
 
 def iter_python_files(root: Path = ROOT):
+    root = resolve_root(root)
+
     for path in root.rglob("*.py"):
-        if not is_public_api_file(path):
+        if not is_public_api_file(path, root):
             continue
         yield path
 
 
 def module_name(path: Path, root: Path = ROOT) -> str:
+    root = resolve_root(root)
+    path = Path(path).resolve()
+
     rel = normalize(path.relative_to(root))
 
     if rel.endswith(".py"):
@@ -97,6 +109,7 @@ def ast_signature(node):
 
 
 def build_public_api_snapshot(root: Path = ROOT):
+    root = resolve_root(root)
     snapshot = {}
 
     for path in sorted(iter_python_files(root)):
@@ -136,6 +149,7 @@ def build_public_api_snapshot(root: Path = ROOT):
 
 
 def extract_top_level_dependencies(root: Path = ROOT):
+    root = resolve_root(root)
     deps = defaultdict(set)
 
     public_modules = {module_name(p, root) for p in iter_python_files(root)}
@@ -164,6 +178,7 @@ def extract_top_level_dependencies(root: Path = ROOT):
 
 
 def build_dependency_graph(root: Path = ROOT):
+    root = resolve_root(root)
     return extract_top_level_dependencies(root)
 
 
@@ -250,6 +265,7 @@ def check_scope(allowed_files_path: Path, changed_files):
 
 
 def impact_analysis(root: Path, changed_paths):
+    root = resolve_root(root)
     graph = build_dependency_graph(root)
     reverse_graph = reverse_dependency_graph(graph)
 
@@ -258,12 +274,12 @@ def impact_analysis(root: Path, changed_paths):
     for raw_path in changed_paths:
         p = Path(raw_path)
 
-        # Caso 1: path reale esistente
-        if p.exists() and p.suffix == ".py" and is_public_api_file(p):
-            changed_modules.add(module_name(p, root))
+        if p.exists() and p.suffix == ".py":
+            p = p.resolve()
+            if is_public_api_file(p, root):
+                changed_modules.add(module_name(p, root))
             continue
 
-        # Caso 2: path relativo stringa stile repo
         normalized = normalize(p)
         if normalized.endswith(".py"):
             guess = normalized[:-3].replace("/", ".")
@@ -282,12 +298,10 @@ def impact_analysis(root: Path, changed_paths):
                 impacted.add(caller)
                 queue.append(caller)
 
-    result = {
+    return {
         "changed_modules": sorted(changed_modules),
         "impacted_modules": sorted(impacted),
     }
-
-    return result
 
 
 def main():
