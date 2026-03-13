@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  basic:
+  phase3:
     runs-on: ubuntu-latest
 
     steps:
@@ -44,6 +44,23 @@ jobs:
           mkdir -p artifacts
           mkdir -p guardrails
 
+      - name: Detect changed files
+        id: changes
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.sha }}"
+            FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | paste -sd, -)"
+          else
+            FILES=""
+          fi
+
+          echo "AI_CHANGED_FILES=$FILES" >> "$GITHUB_ENV"
+          echo "files_csv=$FILES" >> "$GITHUB_OUTPUT"
+
+          echo "Changed files: $FILES"
+
       - name: Build public API snapshot if missing
         shell: bash
         run: |
@@ -68,7 +85,20 @@ jobs:
         run: |
           python scripts/generate_fix_backlog.py
 
+      - name: Run guardrail tests
+        shell: bash
+        env:
+          AI_CHANGED_FILES: ${{ steps.changes.outputs.files_csv }}
+        run: |
+          if [ -d tests/guardrails ]; then
+            pytest -q tests/guardrails
+          else
+            echo "tests/guardrails not found"
+            exit 1
+          fi
+
       - name: Show generated files
+        if: always()
         shell: bash
         run: |
           echo "Artifacts:"
@@ -77,9 +107,10 @@ jobs:
           ls -la guardrails || true
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-guardrails-phase2
+          name: ai-guardrails-phase3
           path: |
             artifacts/*.json
             artifacts/*.md
