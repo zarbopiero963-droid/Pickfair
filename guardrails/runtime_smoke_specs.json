@@ -1,0 +1,14 @@
+{
+  "smokes": [
+    {
+      "callable": "guardrails.guard_probes.telegram_listener_runtime_smoke",
+      "args": [],
+      "kwargs": {}
+    },
+    {
+      "callable": "guardrails.guard_probes.dutching_controller_runtime_smoke",
+      "args": [],
+      "kwargs": {}
+    }
+  ]
+}
