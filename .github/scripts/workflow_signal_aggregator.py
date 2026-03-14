@@ -47,17 +47,21 @@ def extract_error_signals(pytest_log: str, limit: int = 50) -> list[str]:
         r".*NameError.*",
     ]
 
-    found = []
+    found: list[str] = []
+
     for raw in pytest_log.splitlines():
         line = raw.strip()
         if not line:
             continue
+
         for pattern in patterns:
             if re.match(pattern, line):
                 found.append(line)
                 break
+
         if len(found) >= limit:
             break
+
     return found
 
 
@@ -65,6 +69,7 @@ def build_context() -> dict:
     audit_machine = read_json(AUDIT_OUT / "audit_machine.json")
     ai_reasoning = read_json(AUDIT_OUT / "ai_reasoning.json")
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
+
     pytest_log = read_text(AUDIT_RAW / "pytest.log")
     priority_fix_order = read_text(AUDIT_OUT / "priority_fix_order.md")
     root_cause = read_text(AUDIT_OUT / "root_cause.md")
@@ -93,7 +98,7 @@ def build_context() -> dict:
 
 
 def render_markdown(context: dict) -> str:
-    lines = []
+    lines: list[str] = []
     lines.append("Global Workflow Context")
     lines.append("")
     lines.append("Questo file aggrega i segnali principali prodotti dalla pipeline di audit.")
@@ -119,7 +124,9 @@ def render_markdown(context: dict) -> str:
     root_causes = context.get("ai_root_causes", [])
     if root_causes:
         for item in root_causes[:10]:
-            lines.append(f"- {item.get('title', 'Root cause')}: {item.get('why_it_happens', '')}")
+            title = item.get("title", "Root cause")
+            why = item.get("why_it_happens", "")
+            lines.append(f"- {title}: {why}")
     else:
         lines.append("- Nessuna root cause disponibile.")
     lines.append("")
@@ -128,7 +135,11 @@ def render_markdown(context: dict) -> str:
     fix_contexts = context.get("fix_contexts", [])
     if fix_contexts:
         for item in fix_contexts[:20]:
-            lines.append(f"- {item.get('target_file', 'unknown')} | priority={item.get('priority', 'P?')} | symbols={item.get('required_symbols', [])}")
+            lines.append(
+                f"- {item.get('target_file', 'unknown')} | "
+                f"priority={item.get('priority', 'P?')} | "
+                f"symbols={item.get('required_symbols', [])}"
+            )
     else:
         lines.append("- Nessun fix context disponibile.")
     lines.append("")
