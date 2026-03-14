@@ -146,6 +146,26 @@ jobs:
           echo "============================================================"
           echo ""
 
+      - name: Build priority fix order
+        if: always()
+        run: |
+          python .github/scripts/build_priority_fix_order.py
+        continue-on-error: true
+
+      - name: Show priority fix order
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PRIORITY FIX ORDER ========================"
+          if [ -f audit_out/priority_fix_order.md ]; then
+            cat audit_out/priority_fix_order.md
+          else
+            echo "priority_fix_order.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
