@@ -9,6 +9,7 @@ permissions:
   contents: write
   actions: read
   pull-requests: write
+  issues: write
 
 jobs:
   ultra-audit:
@@ -59,6 +60,7 @@ jobs:
           test -f .github/scripts/patch_verifier.py
           test -f .github/scripts/apply_patch_candidate.py
           test -f .github/scripts/post_patch_review.py
+          test -f .github/scripts/build_pr_comment.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -106,12 +108,10 @@ jobs:
         if: always()
         run: |
           mkdir -p audit_raw
-
           cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
           cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
-
           if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
             cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
           fi
@@ -280,6 +280,7 @@ jobs:
         if: always()
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
         run: |
           python .github/scripts/post_patch_review.py
         continue-on-error: true
@@ -296,6 +297,53 @@ jobs:
             echo "post_patch_review.md not found"
           fi
           echo "===================================================="
+
+      - name: Evaluate post patch review gate
+        if: always()
+        id: review_gate
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          path = Path("audit_out/post_patch_review.json")
+
+          if not path.exists():
+              print("Post patch review missing -> allow_pr=false")
+              with output_path.open("a", encoding="utf-8") as f:
+                  f.write("allow_pr=false\n")
+              raise SystemExit(0)
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+          verdict = str(data.get("final_verdict", "")).strip().lower()
+          allow = "false" if verdict == "reject" else "true"
+
+          print(f"Post patch review verdict: {verdict}")
+          with output_path.open("a", encoding="utf-8") as f:
+              f.write(f"allow_pr={allow}\n")
+          PY
+
+      - name: Build PR comment files
+        if: always()
+        run: |
+          python .github/scripts/build_pr_comment.py
+        continue-on-error: true
+
+      - name: Show PR comment preview
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PR COMMENT PREVIEW ========================"
+          if [ -f audit_out/pr_comment.md ]; then
+            cat audit_out/pr_comment.md
+          else
+            echo "pr_comment.md not found"
+          fi
+          echo "============================================================"
 
       - name: Fail workflow if post patch review rejects
         if: always()
@@ -323,49 +371,65 @@ jobs:
           PY
 
       - name: Create AI fix branch
-        if: always()
+        if: always() && github.event_name != 'pull_request' && steps.review_gate.outputs.allow_pr == 'true'
+        id: create_ai_branch
         shell: bash
         run: |
           BRANCH="ai-fix-${{ github.run_id }}"
+          echo "ai_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
           git config --global user.name "repo-ai-bot"
           git config --global user.email "ai-bot@users.noreply.github.com"
 
-          echo "Creating branch $BRANCH"
-
-          git checkout -b "$BRANCH"
-
           git add -A
 
           if git diff --cached --quiet; then
-            echo "No changes detected, skipping branch push"
-            echo "AI_BRANCH=" >> $GITHUB_ENV
+            echo "No staged changes detected, skipping branch creation"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "Creating branch $BRANCH"
+          git checkout -B "$BRANCH"
           git commit -m "AI automated patch candidate"
+          git push --force-with-lease origin "$BRANCH"
 
-          git push origin "$BRANCH"
-
-          echo "AI_BRANCH=$BRANCH" >> $GITHUB_ENV
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
-      - name: Create Pull Request
-        if: always() && env.AI_BRANCH != ''
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ env.AI_BRANCH }}
-          base: main
-          title: "AI automated patch"
-          body: |
-            This PR was generated automatically by the AI repair pipeline.
+      - name: Create or update Pull Request
+        if: always() && github.event_name != 'pull_request' && steps.create_ai_branch.outputs.has_changes == 'true'
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_BRANCH: ${{ steps.create_ai_branch.outputs.ai_branch }}
+        shell: bash
+        run: |
+          set -e
 
-            Includes:
-            - root cause analysis
-            - generated patch
-            - patch verification
-            - AI post patch review
+          EXISTING="$(gh pr list --head "$AI_BRANCH" --json number --jq '.[0].number')"
+
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "Existing PR found: #$EXISTING"
+            gh pr edit "$EXISTING" --title "AI automated patch" --body-file audit_out/pr_body.md
+            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          URL="$(gh pr create --base main --head "$AI_BRANCH" --title "AI automated patch" --body-file audit_out/pr_body.md)"
+          NUMBER="${URL##*/}"
+
+          echo "Created PR #$NUMBER"
+          echo "pr_number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Post AI comment to PR
+        if: always() && github.event_name != 'pull_request' && steps.create_pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
+        shell: bash
+        run: |
+          gh pr comment "$PR_NUMBER" --body-file audit_out/pr_comment.md
 
       - name: Upload artifacts
         if: always()
