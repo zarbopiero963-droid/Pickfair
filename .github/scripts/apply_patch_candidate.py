@@ -2,7 +2,6 @@
 
 import json
 import re
-import subprocess
 from pathlib import Path
 
 ROOT = Path(".").resolve()
@@ -28,83 +27,112 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str]:
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cwd or ROOT),
-            capture_output=True,
-            text=True,
-            check=False,
+def write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def extract_patch_body(target_file: str, patch_text: str) -> str:
+    patch_text = patch_text.strip()
+
+    if "*** Begin Patch" in patch_text:
+        match = re.search(
+            rf"\*\*\*\s+Update File:\s+{re.escape(target_file)}\s*(.*?)(\*\*\*\s+End Patch|$)",
+            patch_text,
+            re.S,
         )
-        out = (proc.stdout or "") + ("\n" if proc.stdout and proc.stderr else "") + (proc.stderr or "")
-        return proc.returncode, out
-    except Exception as exc:
-        return 999, f"{type(exc).__name__}: {exc}"
+        if match:
+            return match.group(1).strip()
+
+    return patch_text
 
 
-def extract_target_file_and_new_block(diff_text: str) -> tuple[str, str]:
-    """
-    Supporta patch candidate semplici nel formato:
-    *** Update File: path.py
-    @@
-    ... eventuale contesto ...
-    + nuove righe
-
-    Estrae:
-    - target_file
-    - blocco di righe aggiunte consecutive dopo il primo hunk
-    """
-    target_match = re.search(r"^\*\*\*\s+Update File:\s+(.+)$", diff_text, flags=re.MULTILINE)
-    if not target_match:
-        raise ValueError("Impossibile trovare '*** Update File:' nella patch candidate.")
-
-    target_file = target_match.group(1).strip()
-
-    lines = diff_text.splitlines()
-    inside_hunk = False
-    added_lines: list[str] = []
+def split_hunks(patch_body: str) -> list[list[str]]:
+    lines = patch_body.splitlines()
+    hunks = []
+    current = []
 
     for line in lines:
         if line.startswith("@@"):
-            inside_hunk = True
+            if current:
+                hunks.append(current)
+            current = []
             continue
+        current.append(line)
 
-        if not inside_hunk:
-            continue
+    if current:
+        hunks.append(current)
 
-        if line.startswith("*** End Patch"):
-            break
-
-        if line.startswith("+") and not line.startswith("+++"):
-            added_lines.append(line[1:])
-
-    if not added_lines:
-        raise ValueError("Nessuna riga aggiunta trovata nella patch candidate.")
-
-    return target_file, "\n".join(added_lines).rstrip() + "\n"
+    return hunks
 
 
-def insert_after_anchor(file_text: str, block: str) -> str:
-    anchor = 'DEFAULT_UPDATE_URL = "https://api.github.com/repos/petiro/Pickfair/releases/latest"'
-    if anchor not in file_text:
-        raise ValueError("Anchor DEFAULT_UPDATE_URL non trovato nel file target.")
-    if "class AutoUpdater:" in file_text:
-        return file_text
+def apply_custom_hunks_to_text(original_text: str, patch_text: str, target_file: str) -> str:
+    patch_body = extract_patch_body(target_file, patch_text)
+    hunks = split_hunks(patch_body)
 
-    replacement = anchor + "\n\n" + block.rstrip() + "\n"
-    return file_text.replace(anchor, replacement, 1)
+    if not hunks:
+        raise ValueError(f"Nessun hunk applicabile trovato per {target_file}")
+
+    updated_text = original_text
+
+    for hunk in hunks:
+        original_lines = []
+        new_lines = []
+
+        for line in hunk:
+            if line.startswith("-"):
+                original_lines.append(line[1:])
+            elif line.startswith("+"):
+                new_lines.append(line[1:])
+            elif line.startswith(" "):
+                original_lines.append(line[1:])
+                new_lines.append(line[1:])
+            else:
+                original_lines.append(line)
+                new_lines.append(line)
+
+        original_chunk = "\n".join(original_lines).strip("\n")
+        new_chunk = "\n".join(new_lines).strip("\n")
+
+        if not original_chunk:
+            raise ValueError(f"Hunk senza contesto utile per {target_file}")
+
+        replaced = False
+        candidates = [
+            original_chunk,
+            original_chunk + "\n",
+            "\n" + original_chunk,
+            "\n" + original_chunk + "\n",
+        ]
+
+        for candidate in candidates:
+            if candidate in updated_text:
+                replacement = new_chunk
+                if candidate.startswith("\n") and not replacement.startswith("\n"):
+                    replacement = "\n" + replacement
+                if candidate.endswith("\n") and not replacement.endswith("\n"):
+                    replacement = replacement + "\n"
+
+                updated_text = updated_text.replace(candidate, replacement, 1)
+                replaced = True
+                break
+
+        if not replaced:
+            raise ValueError(
+                f"Impossibile trovare il contesto del patch nel file {target_file}"
+            )
+
+    return updated_text
 
 
-def apply_auto_updater_patch(target_file: str, diff_text: str) -> str:
+def apply_patch_to_file(target_file: str, patch_text: str) -> str:
     path = ROOT / target_file
     if not path.exists():
         raise FileNotFoundError(f"File target non trovato: {target_file}")
 
-    original = read_text(path)
-    _, block = extract_target_file_and_new_block(diff_text)
-    updated = insert_after_anchor(original, block)
-    path.write_text(updated, encoding="utf-8")
+    original_text = read_text(path)
+    updated_text = apply_custom_hunks_to_text(original_text, patch_text, target_file)
+    path.write_text(updated_text, encoding="utf-8")
     return str(path.relative_to(ROOT)).replace("\\", "/")
 
 
@@ -115,33 +143,10 @@ def load_patch_and_verification() -> tuple[dict, dict]:
 
 
 def should_apply(verification: dict) -> tuple[bool, str]:
-    verdict = (verification.get("verdict") or "").strip().lower()
+    verdict = str(verification.get("verdict", "")).strip().lower()
     if verdict in {"approve", "weak-approve"}:
         return True, verdict
     return False, verdict or "unknown"
-
-
-def git_commit(target_file: str, summary: str) -> dict:
-    result = {}
-
-    code, out = run(["git", "status", "--short"])
-    result["git_status_before"] = out
-    if code != 0:
-        result["git_status_before_code"] = code
-        return result
-
-    code, out = run(["git", "add", target_file])
-    result["git_add_code"] = code
-    result["git_add_output"] = out
-    if code != 0:
-        return result
-
-    commit_msg = f"Apply AI patch candidate: {summary[:72]}".strip()
-    code, out = run(["git", "commit", "-m", commit_msg])
-    result["git_commit_code"] = code
-    result["git_commit_output"] = out
-    result["git_commit_message"] = commit_msg
-    return result
 
 
 def main() -> int:
@@ -150,6 +155,7 @@ def main() -> int:
     if not patch_candidate:
         msg = "Patch candidate mancante."
         write_text(AUDIT_OUT / "patch_apply_report.md", msg + "\n")
+        write_json(AUDIT_OUT / "patch_apply_report.json", {"applied": False, "error": msg})
         print(msg)
         return 0
 
@@ -157,16 +163,33 @@ def main() -> int:
     if not approved:
         msg = f"Patch non applicata. Verdict verifier: {verdict}"
         write_text(AUDIT_OUT / "patch_apply_report.md", msg + "\n")
+        write_json(
+            AUDIT_OUT / "patch_apply_report.json",
+            {
+                "applied": False,
+                "verdict": verdict,
+                "error": msg,
+            },
+        )
         print(msg)
         return 0
 
-    target_file = (patch_candidate.get("target_file") or "").strip()
-    proposed_patch = patch_candidate.get("proposed_patch") or ""
+    target_files = patch_candidate.get("target_files", []) or []
+    proposed_patches = patch_candidate.get("proposed_patches", []) or []
     summary = patch_candidate.get("summary") or "no-summary"
 
-    if not target_file or not proposed_patch:
-        msg = "Patch candidate incompleta: target_file o proposed_patch mancanti."
+    if not target_files or not proposed_patches:
+        msg = "Patch candidate incompleta: target_files o proposed_patches mancanti."
         write_text(AUDIT_OUT / "patch_apply_report.md", msg + "\n")
+        write_json(
+            AUDIT_OUT / "patch_apply_report.json",
+            {
+                "applied": False,
+                "verdict": verdict,
+                "summary": summary,
+                "error": msg,
+            },
+        )
         print(msg)
         return 0
 
@@ -174,52 +197,71 @@ def main() -> int:
     report.append("Patch Apply Report")
     report.append("")
     report.append(f"Verifier verdict: {verdict}")
-    report.append(f"Target file: {target_file}")
     report.append(f"Summary: {summary}")
     report.append("")
+    report.append("Target files:")
+    for file in target_files:
+        report.append(f"- {file}")
+    report.append("")
 
-    try:
-        applied_target = apply_auto_updater_patch(target_file, proposed_patch)
-        report.append(f"Patch applicata a: {applied_target}")
+    applied_targets = []
+    errors = []
+
+    for item in proposed_patches:
+        target_file = str(item.get("target_file", "")).strip()
+        patch_text = str(item.get("patch", "")).strip()
+
+        if not target_file or not patch_text:
+            errors.append(f"Patch item non valido: {item}")
+            continue
+
+        try:
+            applied_target = apply_patch_to_file(target_file, patch_text)
+            applied_targets.append(applied_target)
+        except Exception as exc:
+            errors.append(f"{target_file}: {type(exc).__name__}: {exc}")
+
+    applied = len(applied_targets) > 0 and not errors
+
+    report.append("Applied targets:")
+    if applied_targets:
+        for target in applied_targets:
+            report.append(f"- {target}")
+    else:
+        report.append("- Nessun file applicato.")
+    report.append("")
+
+    if errors:
+        report.append("Errors:")
+        for err in errors:
+            report.append(f"- {err}")
         report.append("")
 
-        git_info = git_commit(applied_target, summary)
-        report.append("Git results")
-        report.append(f"- git_add_code: {git_info.get('git_add_code')}")
-        report.append(f"- git_commit_code: {git_info.get('git_commit_code')}")
-        report.append("")
-        report.append("git commit output")
-        report.append(git_info.get("git_commit_output", ""))
+    if applied:
+        report.append("La patch multi-file è stata applicata nel workspace del runner.")
+        report.append("Il commit/push verrà fatto successivamente dallo step branch/PR del workflow.")
+    else:
+        report.append("La patch multi-file non è stata applicata completamente.")
 
-        write_text(AUDIT_OUT / "patch_apply_report.md", "\n".join(report) + "\n")
-        write_json(
-            AUDIT_OUT / "patch_apply_report.json",
-            {
-                "applied": True,
-                "target_file": applied_target,
-                "verdict": verdict,
-                "summary": summary,
-                "git": git_info,
-            },
-        )
-        print(f"Patch applicata a {applied_target}")
-        return 0
+    write_text(AUDIT_OUT / "patch_apply_report.md", "\n".join(report) + "\n")
+    write_json(
+        AUDIT_OUT / "patch_apply_report.json",
+        {
+            "applied": applied,
+            "applied_targets": applied_targets,
+            "target_files": target_files,
+            "verdict": verdict,
+            "summary": summary,
+            "errors": errors,
+        },
+    )
 
-    except Exception as exc:
-        report.append(f"Errore applicazione patch: {type(exc).__name__}: {exc}")
-        write_text(AUDIT_OUT / "patch_apply_report.md", "\n".join(report) + "\n")
-        write_json(
-            AUDIT_OUT / "patch_apply_report.json",
-            {
-                "applied": False,
-                "target_file": target_file,
-                "verdict": verdict,
-                "summary": summary,
-                "error": f"{type(exc).__name__}: {exc}",
-            },
-        )
-        print(f"Errore applicazione patch: {exc}")
-        return 0
+    if applied:
+        print(f"Patch multi-file applicata a {len(applied_targets)} file.")
+    else:
+        print("Patch multi-file non applicata completamente.")
+
+    return 0
 
 
 if __name__ == "__main__":
