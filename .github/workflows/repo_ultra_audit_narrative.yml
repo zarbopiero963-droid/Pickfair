@@ -100,8 +100,10 @@ jobs:
         if: always()
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
           OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
+          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
         run: |
           python .github/scripts/ai_reasoning_layer.py
         continue-on-error: true
