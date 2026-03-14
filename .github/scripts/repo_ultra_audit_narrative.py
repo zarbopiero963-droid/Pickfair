@@ -1,363 +1,358 @@
 #!/usr/bin/env python3
 
+import ast
+import compileall
 import json
-import os
 import re
+import subprocess
 import sys
 from pathlib import Path
-
-import requests
+from collections import defaultdict, Counter
 
 ROOT = Path(".").resolve()
-AUDIT_OUT = ROOT / "audit_out"
-AUDIT_RAW = ROOT / "audit_raw"
 
-AUDIT_OUT.mkdir(exist_ok=True)
-AUDIT_RAW.mkdir(exist_ok=True)
+OUT = ROOT / "audit_out"
+RAW = ROOT / "audit_raw"
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OUT.mkdir(exist_ok=True)
+RAW.mkdir(exist_ok=True)
+
+SKIP_SCAN_PREFIX = (
+    ".venv/",
+    "__pycache__",
+)
+
+SKIP_ANALYSIS_PREFIX = (
+    ".github/",
+    "tests/",
+)
+
+PYTEST_CMD = [sys.executable, "-m", "pytest", "-q"]
 
 
-def read_text(path: Path) -> str:
+def read(path: Path):
     try:
         return path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
 
 
-def write_text(path: Path, text: str) -> None:
+def write(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def write_json(path: Path, data) -> None:
+def write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def load_audit_machine() -> dict:
-    path = AUDIT_OUT / "audit_machine.json"
-    if not path.exists():
-        return {}
+def run(cmd):
     try:
-        return json.loads(read_text(path))
-    except Exception:
-        return {}
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except Exception as e:
+        return 999, str(e)
 
 
-def load_pytest_log() -> str:
-    return read_text(AUDIT_RAW / "pytest.log")
-
-
-def extract_top_pytest_lines(pytest_log: str, max_lines: int = 40) -> list[str]:
-    lines = []
-
-    patterns = [
-        r"^ERROR collecting .*$",
-        r"^FAILED .*$",
-        r".*ModuleNotFoundError.*",
-        r".*ImportError.*",
-        r".*AttributeError.*",
-        r".*TypeError.*",
-        r".*RuntimeError.*",
-        r".*AssertionError.*",
-        r".*KeyError.*",
-    ]
-
-    for raw in pytest_log.splitlines():
-        line = raw.strip()
-        if not line:
+def list_python_files():
+    files = []
+    for p in ROOT.rglob("*.py"):
+        rel = str(p.relative_to(ROOT)).replace("\\", "/")
+        if rel.startswith(SKIP_SCAN_PREFIX):
             continue
-        for pattern in patterns:
-            if re.match(pattern, line):
-                lines.append(line)
-                break
-        if len(lines) >= max_lines:
-            break
-
-    return lines
+        files.append(p)
+    return sorted(files)
 
 
-def reduce_context(audit_machine: dict, pytest_log: str) -> dict:
-    contracts = audit_machine.get("contracts", [])[:10]
-    smells = audit_machine.get("smells", {})
-    ranking = audit_machine.get("ranking", [])[:10]
-
-    reduced = {
-        "compile_ok": audit_machine.get("compile_ok"),
-        "pytest_code": audit_machine.get("pytest_code"),
-        "contracts": contracts,
-        "smells": smells,
-        "ranking_top10": ranking,
-        "pytest_signals": extract_top_pytest_lines(pytest_log, max_lines=40),
-    }
-    return reduced
+def compile_repo():
+    ok = compileall.compile_dir(str(ROOT), quiet=1)
+    write(RAW / "compile.log", f"compileall: {ok}\n")
+    return ok
 
 
-def build_messages(reduced: dict) -> list[dict]:
-    system_prompt = """You are a senior Python repository auditor working on a GitHub Actions CI pipeline.
+def run_pytest():
+    code, out = run(PYTEST_CMD)
+    write(RAW / "pytest.log", out)
+    return code, out
 
-Goals:
-1. Be precise and conservative.
-2. Do not invent files, symbols, or fixes.
-3. Use ONLY the provided reduced audit context.
-4. Focus on the highest-value root cause(s), not everything.
-5. Keep output concise but actionable.
-6. Prefer backward-compatible fixes where tests expect old public symbols.
-7. Assume the team wants minimal-risk fixes on a separate PR, never direct changes to main.
 
-Return STRICT JSON with this schema:
-{
-  "summary": "short paragraph",
-  "root_causes": [
-    {
-      "title": "string",
-      "why_it_happens": "string",
-      "evidence": ["string", "..."],
-      "severity": "P0|P1|P2"
-    }
-  ],
-  "fix_suggestions": [
-    {
-      "title": "string",
-      "files": ["file1.py", "file2.py"],
-      "change": "string",
-      "risk": "low|medium|high"
-    }
-  ],
-  "targeted_tests": [
-    {
-      "reason": "string",
-      "tests": ["tests/...", "..."]
-    }
-  ]
-}
-""".strip()
+def parse_ast(py_files):
+    classes = defaultdict(list)
+    functions = defaultdict(list)
+    symbol_index = {}
 
-    user_payload = {
-        "task": "Analyze the reduced repository audit context and identify the most important root causes and lowest-risk fixes.",
-        "context": reduced,
-    }
+    for f in py_files:
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        try:
+            tree = ast.parse(read(f))
+        except Exception:
+            continue
 
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                classes[node.name].append(rel)
+                symbol_index[node.name] = rel
+            elif isinstance(node, ast.FunctionDef):
+                functions[node.name].append(rel)
+                symbol_index[node.name] = rel
+            elif isinstance(node, ast.AsyncFunctionDef):
+                functions[node.name].append(rel)
+                symbol_index[node.name] = rel
+
+    return classes, functions, symbol_index
+
+
+def detect_references(py_files):
+    refs = Counter()
+    for f in py_files:
+        txt = read(f)
+        tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]+", txt)
+        for t in tokens:
+            refs[t] += 1
+    return refs
+
+
+def detect_unused(classes, functions, references):
+    unused_classes = []
+    unused_functions = []
+
+    for name, files in classes.items():
+        file = files[0]
+        if file.startswith(SKIP_ANALYSIS_PREFIX):
+            continue
+        if references[name] <= 1:
+            unused_classes.append((name, file))
+
+    for name, files in functions.items():
+        file = files[0]
+        if file.startswith(SKIP_ANALYSIS_PREFIX):
+            continue
+        if references[name] <= 1:
+            unused_functions.append((name, file))
+
+    unused_classes.sort(key=lambda x: (x[1], x[0]))
+    unused_functions.sort(key=lambda x: (x[1], x[0]))
+
+    return unused_classes[:20], unused_functions[:20]
+
+
+def smell_scan(py_files):
+    smells = Counter()
+    file_scores = {}
+
+    for f in py_files:
+        rel = str(f.relative_to(ROOT)).replace("\\", "/")
+        if rel.startswith(SKIP_ANALYSIS_PREFIX):
+            continue
+
+        txt = read(f)
+        score = 0
+
+        if "except Exception" in txt:
+            smells["except_exception"] += 1
+            score += 2
+
+        if re.search(r"except\s*:", txt):
+            smells["bare_except"] += 1
+            score += 3
+
+        if "print(" in txt:
+            smells["print"] += 1
+            score += 1
+
+        if "TODO" in txt or "FIXME" in txt:
+            smells["todo"] += 1
+            score += 1
+
+        if score:
+            file_scores[rel] = score
+
+    return smells, file_scores
+
+
+def fragility_ranking(file_scores):
+    return Counter(file_scores).most_common(20)
+
+
+def check_contracts(symbol_index):
+    issues = []
+
+    checks = [
+        ("auto_updater.py", "AutoUpdater"),
+        ("executor_manager.py", "ExecutorManager"),
+        ("ui/mini_ladder.py", "OneClickLadder"),
+        ("ui/mini_ladder.py", "LiveMiniLadder"),
     ]
 
+    for file, symbol in checks:
+        if symbol not in symbol_index:
+            issues.append((file, symbol))
 
-def call_openrouter(model: str, messages: list[dict], api_key: str) -> dict:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    fixture = ROOT / "tests/fixtures/system_payloads.py"
+    if fixture.exists():
+        if "SYSTEM_PAYLOAD" not in read(fixture):
+            issues.append(("tests/fixtures/system_payloads.py", "SYSTEM_PAYLOAD"))
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.1,
-    }
-
-    response = requests.post(
-        OPENROUTER_URL,
-        headers=headers,
-        json=payload,
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()
+    return issues
 
 
-def extract_content(resp_json: dict) -> str:
-    try:
-        return resp_json["choices"][0]["message"]["content"]
-    except Exception:
-        return ""
+def human_summary(compile_ok, pytest_code, contracts, smells):
+    lines = []
 
+    lines.append("Sì. Ho fatto un’analisi reale del repository, non teorica.")
+    lines.append("")
+    lines.append("Ho eseguito:")
+    lines.append("- compileall su tutta la codebase")
+    lines.append("- pytest completo")
+    lines.append("- scansione dei contratti tra test e moduli")
+    lines.append("- ranking dei moduli fragili")
+    lines.append("- scansione smells")
+    lines.append("- controllo dead code probabile")
+    lines.append("")
+    lines.append("Verdetto ultra sintetico")
+    lines.append("")
 
-def parse_json_content(content: str) -> dict:
-    content = content.strip()
+    if compile_ok:
+        lines.append("Il repository compila, quindi la base sintattica è sana.")
+    else:
+        lines.append("Il repository non è pulito a livello sintattico.")
 
-    # raw JSON
-    try:
-        return json.loads(content)
-    except Exception:
-        pass
-
-    # fenced JSON
-    fence_match = re.search(r"```json\s*(.*?)\s*```", content, re.S)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1))
-        except Exception:
-            pass
-
-    # generic fenced block
-    fence_match = re.search(r"```\s*(.*?)\s*```", content, re.S)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1))
-        except Exception:
-            pass
-
-    return {
-        "summary": "AI response was not valid JSON.",
-        "root_causes": [],
-        "fix_suggestions": [],
-        "targeted_tests": [],
-        "raw_content": content,
-    }
-
-
-def fallback_outputs(reduced: dict) -> dict:
-    contracts = reduced.get("contracts", [])
-    ranking = reduced.get("ranking_top10", [])
-
-    summary = (
-        "Il layer AI non è disponibile oppure non ha restituito un JSON valido. "
-        "Il verdetto resta basato sull’audit deterministico."
-    )
-
-    root_causes = []
     if contracts:
-        root_causes.append({
-            "title": "Rottura dei contratti pubblici",
-            "why_it_happens": "I test si aspettano simboli pubblici che i moduli non esportano più.",
-            "evidence": [f"{file} -> {symbol}" for file, symbol in contracts[:5]],
-            "severity": "P0",
-        })
+        lines.append("Il problema dominante non è la sintassi ma la rottura dei contratti tra moduli e test.")
+    elif pytest_code != 0:
+        lines.append("La base sintattica tiene, ma la suite non è ancora verde.")
+    else:
+        lines.append("Non emergono rotture contrattuali immediate nella scansione attuale.")
 
-    fix_suggestions = []
-    for file, symbol in contracts[:5]:
-        fix_suggestions.append({
-            "title": f"Ripristinare {symbol}",
-            "files": [file],
-            "change": f"Aggiungere o ripristinare il simbolo pubblico {symbol} con compatibilità retroattiva minima.",
-            "risk": "low",
-        })
-
-    targeted_tests = [{
-        "reason": "Rilanciare prima i test direttamente collegati ai contract mismatch.",
-        "tests": [
-            "tests/test_auto_updater.py",
-            "tests/test_executor_manager_shutdown.py",
-            "tests/test_new_components.py",
-            "tests/test_toolbar_live.py",
-            "tests/contracts/test_payload_snapshots.py",
-        ],
-    }]
-
-    return {
-        "summary": summary,
-        "root_causes": root_causes,
-        "fix_suggestions": fix_suggestions,
-        "targeted_tests": targeted_tests,
-        "ranking_top10": ranking,
-    }
-
-
-def render_root_cause_md(data: dict) -> str:
-    lines = []
-    lines.append("AI Root Cause Analysis")
     lines.append("")
-    lines.append(data.get("summary", "Nessun sommario disponibile."))
+    lines.append("Stato reale misurato")
+    lines.append(f"- compileall: {'OK' if compile_ok else 'FAIL'}")
+    lines.append(f"- pytest exit code: {pytest_code}")
+    lines.append(f"- contract mismatches: {len(contracts)}")
+    lines.append(f"- except Exception: {smells.get('except_exception', 0)}")
+    lines.append(f"- bare except: {smells.get('bare_except', 0)}")
+    lines.append(f"- print: {smells.get('print', 0)}")
     lines.append("")
 
-    lines.append("Root causes")
-    for item in data.get("root_causes", []):
-        lines.append(f"- {item.get('title', 'Sconosciuto')} [{item.get('severity', 'P?')}]")
-        lines.append(f"  - perché: {item.get('why_it_happens', '')}")
-        for ev in item.get("evidence", []):
-            lines.append(f"  - evidenza: {ev}")
-    if not data.get("root_causes"):
-        lines.append("- Nessuna root cause disponibile.")
-    lines.append("")
-
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
-def render_fix_suggestions_md(data: dict) -> str:
-    lines = []
-    lines.append("AI Fix Suggestions")
-    lines.append("")
+def build_report(
+    compile_ok,
+    pytest_code,
+    contracts,
+    smells,
+    ranking,
+    unused_classes,
+    unused_functions,
+):
+    r = []
 
-    for item in data.get("fix_suggestions", []):
-        lines.append(f"- {item.get('title', 'Fix suggestion')}")
-        files = item.get("files", [])
-        if files:
-            lines.append(f"  - file: {', '.join(files)}")
-        lines.append(f"  - modifica: {item.get('change', '')}")
-        lines.append(f"  - rischio: {item.get('risk', 'unknown')}")
-    if not data.get("fix_suggestions"):
-        lines.append("- Nessun fix suggestion disponibile.")
-    lines.append("")
+    r.append(human_summary(compile_ok, pytest_code, contracts, smells))
 
-    return "\n".join(lines) + "\n"
+    r.append("P0 — contract mismatch")
+    if contracts:
+        for file, symbol in contracts:
+            r.append(f"- {file} -> simbolo mancante: {symbol}")
+    else:
+        r.append("Nessun mismatch contrattuale rilevato.")
+
+    r.append("")
+    r.append("P1 — top moduli fragili")
+    if ranking:
+        for f, s in ranking:
+            r.append(f"- {f} (score {s})")
+    else:
+        r.append("Nessun modulo fragile evidenziato.")
+
+    r.append("")
+    r.append("P2 — smells")
+    if smells:
+        for k, v in smells.items():
+            r.append(f"- {k}: {v}")
+    else:
+        r.append("Nessuno smell rilevato.")
+
+    r.append("")
+    r.append("Classi probabilmente inutilizzate")
+    if unused_classes:
+        for name, file in unused_classes:
+            r.append(f"- {name} ({file})")
+    else:
+        r.append("Nessuna.")
+
+    r.append("")
+    r.append("Funzioni probabilmente inutilizzate")
+    if unused_functions:
+        for name, file in unused_functions:
+            r.append(f"- {name} ({file})")
+    else:
+        r.append("Nessuna.")
+
+    r.append("")
+    r.append("Verdettissimo finale")
+    if contracts:
+        r.append("Il repository non è rotto ovunque, ma resta in stato giallo/rosso finché questi contratti pubblici non vengono riallineati.")
+    elif pytest_code != 0:
+        r.append("Il repository è più vicino a uno stato sano, ma la suite non è ancora verde.")
+    else:
+        r.append("Il repository appare stabile nella scansione attuale.")
+
+    return "\n".join(r)
 
 
-def render_targeted_tests_md(data: dict) -> str:
-    lines = []
-    lines.append("AI Targeted Tests")
-    lines.append("")
+def main():
+    py_files = list_python_files()
 
-    for item in data.get("targeted_tests", []):
-        lines.append(f"- motivo: {item.get('reason', '')}")
-        for test in item.get("tests", []):
-            lines.append(f"  - {test}")
-    if not data.get("targeted_tests"):
-        lines.append("- Nessun targeted test disponibile.")
-    lines.append("")
+    compile_ok = compile_repo()
+    pytest_code, _ = run_pytest()
 
-    return "\n".join(lines) + "\n"
+    classes, functions, symbol_index = parse_ast(py_files)
+    references = detect_references(py_files)
+    unused_classes, unused_functions = detect_unused(classes, functions, references)
 
+    smells, file_scores = smell_scan(py_files)
+    ranking = fragility_ranking(file_scores)
+    contracts = check_contracts(symbol_index)
 
-def main() -> int:
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    model_triage = os.getenv("OPENROUTER_MODEL_TRIAGE", "qwen/qwen3-coder-next").strip()
+    report = build_report(
+        compile_ok,
+        pytest_code,
+        contracts,
+        smells,
+        ranking,
+        unused_classes,
+        unused_functions,
+    )
 
-    audit_machine = load_audit_machine()
-    pytest_log = load_pytest_log()
+    write(OUT / "repo_ultra_audit_narrative.md", report)
 
-    reduced = reduce_context(audit_machine, pytest_log)
-    write_json(AUDIT_OUT / "ai_reduced_context.json", reduced)
+    write_json(
+        OUT / "audit_machine.json",
+        {
+            "compile_ok": compile_ok,
+            "pytest_code": pytest_code,
+            "contracts": contracts,
+            "smells": dict(smells),
+            "ranking": ranking,
+            "unused_classes": unused_classes,
+            "unused_functions": unused_functions,
+        },
+    )
 
-    if not api_key:
-        fallback = fallback_outputs(reduced)
-        write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback))
-        print("OPENROUTER_API_KEY non trovato: scritto fallback locale.")
-        return 0
+    print(report)
 
-    try:
-        messages = build_messages(reduced)
-        resp_json = call_openrouter(model_triage, messages, api_key)
-        write_json(AUDIT_OUT / "openrouter_raw_response.json", resp_json)
+    exit_code = 0
+    if contracts:
+        exit_code = 2
+    elif not compile_ok:
+        exit_code = 3
+    elif pytest_code != 0:
+        exit_code = 4
 
-        content = extract_content(resp_json)
-        parsed = parse_json_content(content)
-
-        write_json(AUDIT_OUT / "ai_reasoning.json", parsed)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(parsed))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(parsed))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(parsed))
-
-        print("AI reasoning layer completato.")
-        return 0
-
-    except Exception as exc:
-        fallback = fallback_outputs(reduced)
-        fallback["summary"] = (
-            f"Il layer AI ha fallito ({type(exc).__name__}: {exc}). "
-            "È stato scritto un fallback locale basato sull’audit deterministico."
-        )
-        write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback))
-        print(f"AI reasoning layer fallito: {exc}")
-        return 0
+    return exit_code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
