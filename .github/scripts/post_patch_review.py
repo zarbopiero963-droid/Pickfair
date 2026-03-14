@@ -50,7 +50,7 @@ def load_context() -> dict:
             related_fix_context = item
             break
 
-    target_file_text = read_text(target_path)[:25000] if target_path and target_path.exists() else ""
+    target_file_text = read_text(target_path)[:30000] if target_path and target_path.exists() else ""
 
     return {
         "patch_candidate": patch_candidate,
@@ -70,17 +70,19 @@ def build_messages(ctx: dict) -> list[dict]:
     system_prompt = """
 You are a senior Python post-patch reviewer working on the Pickfair repository.
 
-You must verify whether the applied patch actually appears to have done the right thing.
-
-You must answer these questions:
-1. Did the patch restore the required contract or missing symbol?
-2. Did it change only the minimal required code?
-3. Did it preserve the existing logic and avoid likely side effects?
-4. Is the result consistent with the earlier patch verifier assessment?
+Your task is to decide whether the already-applied patch is strong enough to justify creating a PR.
 
 Be conservative.
-Do not assume success only because the patch is small.
-If evidence is incomplete, prefer 'review' instead of 'approve'.
+Prefer "review" over "approve" whenever evidence is incomplete.
+Use "approve" ONLY if all of the following appear true from the provided evidence:
+1. The required contract or symbol appears restored.
+2. The change is minimal and localized.
+3. The existing logic appears preserved.
+4. The patch verifier was positive and consistent.
+5. The applied file content reflects the intended fix.
+
+If any of those are uncertain, use "review".
+If the patch appears wrong, incomplete, unrelated, or risky, use "reject".
 
 Return STRICT JSON with this schema:
 {
@@ -95,7 +97,7 @@ Return STRICT JSON with this schema:
 """.strip()
 
     user_payload = {
-        "task": "Review the applied patch result and determine whether it looks correct and safe.",
+        "task": "Review the applied patch result and determine whether it is strong enough to open a PR.",
         "patch_candidate": ctx["patch_candidate"],
         "patch_verification": ctx["patch_verification"],
         "patch_apply_report": ctx["patch_apply_report"],
@@ -144,6 +146,53 @@ def parse_json_content(content: str) -> dict:
     }
 
 
+def normalize_review(data: dict) -> dict:
+    contract_restored = bool(data.get("contract_restored", False))
+    minimal_change = bool(data.get("minimal_change", False))
+    logic_preserved = bool(data.get("logic_preserved", False))
+    verifier_consistent = bool(data.get("verifier_consistent", False))
+    final_verdict = str(data.get("final_verdict", "review")).strip().lower()
+    confidence = str(data.get("confidence", "low")).strip().lower()
+    notes = data.get("notes", [])
+
+    if not isinstance(notes, list):
+        notes = [str(notes)]
+
+    if final_verdict not in {"approve", "review", "reject"}:
+        final_verdict = "review"
+
+    if confidence not in {"low", "medium", "high"}:
+        confidence = "low"
+
+    # Gate ultra-rigido:
+    # approve solo se tutte le condizioni sono vere.
+    if final_verdict == "approve":
+        if not (contract_restored and minimal_change and logic_preserved and verifier_consistent):
+            final_verdict = "review"
+            notes.append("Approve downgraded to review because the evidence was not strong enough on all required dimensions.")
+
+    # Se non è ripristinato il contratto, reject.
+    if not contract_restored:
+        final_verdict = "reject"
+        if "Required contract or symbol does not appear restored." not in notes:
+            notes.append("Required contract or symbol does not appear restored.")
+
+    # Se la patch non è coerente col verifier, almeno review.
+    if final_verdict == "approve" and not verifier_consistent:
+        final_verdict = "review"
+        notes.append("Approve downgraded because the result was not clearly consistent with the verifier.")
+
+    return {
+        "contract_restored": contract_restored,
+        "minimal_change": minimal_change,
+        "logic_preserved": logic_preserved,
+        "verifier_consistent": verifier_consistent,
+        "final_verdict": final_verdict,
+        "confidence": confidence,
+        "notes": notes,
+    }
+
+
 def render_md(data: dict, model_used: str) -> str:
     lines = []
     lines.append("Post Patch Review")
@@ -174,29 +223,34 @@ def render_md(data: dict, model_used: str) -> str:
 def fallback_review(ctx: dict) -> dict:
     patch_candidate = ctx.get("patch_candidate", {})
     patch_verification = ctx.get("patch_verification", {})
+    patch_apply_report = ctx.get("patch_apply_report", {})
 
-    verdict = str(patch_verification.get("verdict", "")).strip().lower()
+    verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower()
+    applied = bool(patch_apply_report.get("applied", False))
+    target_file = patch_candidate.get("target_file", "")
 
-    if verdict == "approve":
+    if verifier_verdict == "approve" and applied:
         final_verdict = "review"
-    elif verdict == "weak-approve":
+    elif verifier_verdict == "weak-approve" and applied:
         final_verdict = "review"
-    elif verdict == "reject":
+    elif verifier_verdict == "reject":
         final_verdict = "reject"
     else:
         final_verdict = "review"
 
     return {
         "contract_restored": False,
-        "minimal_change": True,
-        "logic_preserved": True,
-        "verifier_consistent": True,
+        "minimal_change": True if applied else False,
+        "logic_preserved": True if applied else False,
+        "verifier_consistent": verifier_verdict in {"approve", "weak-approve", "reject"},
         "final_verdict": final_verdict,
         "confidence": "low",
         "notes": [
             "Fallback locale usato perché il post patch review AI non era disponibile.",
-            f"Patch target: {patch_candidate.get('target_file', '')}",
-            f"Verifier precedente: {verdict or 'unknown'}",
+            f"Patch target: {target_file}",
+            f"Verifier precedente: {verifier_verdict or 'unknown'}",
+            f"Patch applied: {applied}",
+            "Fallback non concede mai approve automatico; al massimo review.",
         ],
     }
 
@@ -232,10 +286,11 @@ def main() -> int:
         raw = resp.get("raw", {})
 
         parsed = parse_json_content(content)
+        normalized = normalize_review(parsed)
 
         write_json(AUDIT_OUT / "post_patch_review_raw_response.json", raw)
-        write_json(AUDIT_OUT / "post_patch_review.json", parsed)
-        write_text(AUDIT_OUT / "post_patch_review.md", render_md(parsed, model_used))
+        write_json(AUDIT_OUT / "post_patch_review.json", normalized)
+        write_text(AUDIT_OUT / "post_patch_review.md", render_md(normalized, model_used))
 
         print(f"Post patch AI review completed. Model used: {model_used}")
         return 0
