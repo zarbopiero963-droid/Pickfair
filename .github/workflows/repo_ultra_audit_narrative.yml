@@ -1,0 +1,72 @@
+name: Repo Ultra Audit Narrative
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ultra-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          set +e
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+          pip install pytest requests telethon customtkinter
+          set -e
+
+      - name: Prepare output folders
+        run: |
+          mkdir -p audit_out
+          mkdir -p audit_raw
+
+      - name: Run Ultra Audit
+        env:
+          GITHUB_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA_NOW: ${{ github.sha }}
+        run: |
+          python .github/scripts/repo_ultra_audit_narrative.py
+
+      - name: Print Narrative Report
+        if: always()
+        run: |
+          echo ""
+          echo "================ ULTRA AUDIT REPORT ================"
+          cat audit_out/repo_ultra_audit_narrative.md || true
+          echo "===================================================="
+          echo ""
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-ultra-audit-${{ github.run_id }}
+          path: |
+            audit_out/**
+            audit_raw/**
