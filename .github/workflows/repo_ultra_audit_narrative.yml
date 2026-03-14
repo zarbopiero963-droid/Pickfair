@@ -46,7 +46,7 @@ jobs:
           mkdir -p audit_out
           mkdir -p audit_raw
 
-      - name: Run Ultra Audit
+      - name: Run Ultra Audit Narrative
         env:
           GITHUB_BEFORE: ${{ github.event.before }}
           GITHUB_SHA_NOW: ${{ github.sha }}
