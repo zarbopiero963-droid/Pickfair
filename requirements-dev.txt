@@ -9,9 +9,11 @@ coverage[toml]>=7.3.0
 ruff>=0.6.0
 mypy>=1.11.0
 
-# Mutation testing / graph analysis
+# Mutation testing
 mutmut>=2.4.4
+
+# Dependency graph
 networkx>=3.3
 
-# HTTP client (used by ai_reasoning_guard)
+# HTTP client used by ai_reasoning_guard
 requests>=2.31.0,<3
