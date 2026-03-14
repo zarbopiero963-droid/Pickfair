@@ -193,6 +193,7 @@ def run_guard(files=None):
             "semantic_checks": semantic_checks,
             "runtime_smokes": runtime_smokes,
             "mutation_probes": mutation_probes,
+            "findings": [],
             "issues": [],
         }
         report["artifact"] = _write_artifact("ai_reasoning_guard.json", report)
@@ -222,6 +223,7 @@ def run_guard(files=None):
         "semantic_checks": semantic_checks,
         "runtime_smokes": runtime_smokes,
         "mutation_probes": mutation_probes,
+        "findings": [],
         "issues": [] if ok else ["remote_guard_failed"],
         "status_code": resp.get("status_code"),
         "message": str(resp.get("text", ""))[:500],
