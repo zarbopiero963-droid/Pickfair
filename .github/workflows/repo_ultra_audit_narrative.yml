@@ -51,6 +51,7 @@ jobs:
           test -f .github/scripts/ai_reasoning_layer.py
           test -f .github/scripts/build_priority_fix_order.py
           test -f .github/scripts/build_fix_context.py
+          test -f .github/scripts/openrouter_model_router.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -96,6 +97,40 @@ jobs:
           echo "============================================================"
           echo ""
 
+      - name: Load AI Governance Docs
+        if: always()
+        run: |
+          mkdir -p audit_raw
+
+          echo "Loading AI governance docs..."
+
+          cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
+          echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
+
+          cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
+          echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
+
+          if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
+            cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
+          fi
+
+          echo "AI governance context prepared."
+
+      - name: Show AI governance context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI GOVERNANCE CONTEXT ====================="
+          if [ -f audit_raw/ai_governance_context.md ]; then
+            head -c 4000 audit_raw/ai_governance_context.md || true
+            echo ""
+          else
+            echo "ai_governance_context.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
       - name: Run AI reasoning layer
         if: always()
         env:
@@ -104,6 +139,7 @@ jobs:
           OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
           OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
           OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
         run: |
           python .github/scripts/ai_reasoning_layer.py
         continue-on-error: true
