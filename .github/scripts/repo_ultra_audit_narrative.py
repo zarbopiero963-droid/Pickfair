@@ -17,9 +17,18 @@ RAW = ROOT / "audit_raw"
 OUT.mkdir(exist_ok=True)
 RAW.mkdir(exist_ok=True)
 
-EXCLUDED_PREFIXES = (
+SKIP_SCAN_PREFIX = (
     ".venv/",
     "__pycache__",
+)
+
+SKIP_RANK_PREFIX = (
+    ".github/",
+    "tests/",
+)
+
+SKIP_DEADCODE_PREFIX = (
+    "tests/",
 )
 
 PYTEST_CMD = [sys.executable, "-m", "pytest", "-q"]
@@ -63,7 +72,7 @@ def list_python_files():
 
         rel = str(p.relative_to(ROOT)).replace("\\", "/")
 
-        if rel.startswith(EXCLUDED_PREFIXES):
+        if rel.startswith(SKIP_SCAN_PREFIX):
             continue
 
         files.append(p)
@@ -87,6 +96,19 @@ def run_pytest():
     write(RAW / "pytest.log", out)
 
     return code, out
+
+
+def parse_pytest_errors(text):
+
+    errors = []
+
+    blocks = re.findall(r"ERROR collecting .*?\n(.*?)\n\n", text, re.S)
+
+    for b in blocks[:10]:
+
+        errors.append(b.strip())
+
+    return errors
 
 
 def parse_ast(py_files):
@@ -129,7 +151,6 @@ def parse_ast(py_files):
             elif isinstance(node, ast.Import):
 
                 for name in node.names:
-
                     imports[rel].append(name.name)
 
             elif isinstance(node, ast.ImportFrom):
@@ -137,7 +158,6 @@ def parse_ast(py_files):
                 module = node.module or ""
 
                 for name in node.names:
-
                     imports[rel].append(f"{module}.{name.name}")
 
     return classes, functions, imports, symbol_index
@@ -149,13 +169,14 @@ def detect_references(py_files):
 
     for f in py_files:
 
+        txt = read(f)
+
         tokens = re.findall(
             r"[A-Za-z_][A-Za-z0-9_]+",
-            read(f)
+            txt
         )
 
         for t in tokens:
-
             refs[t] += 1
 
     return refs
@@ -168,15 +189,23 @@ def detect_unused(classes, functions, references):
 
     for name, files in classes.items():
 
-        if references[name] <= 1:
+        file = files[0]
 
-            unused_classes.append((name, files[0]))
+        if file.startswith(SKIP_DEADCODE_PREFIX):
+            continue
+
+        if references[name] <= 1:
+            unused_classes.append((name, file))
 
     for name, files in functions.items():
 
-        if references[name] <= 1:
+        file = files[0]
 
-            unused_functions.append((name, files[0]))
+        if file.startswith(SKIP_DEADCODE_PREFIX):
+            continue
+
+        if references[name] <= 1:
+            unused_functions.append((name, file))
 
     return unused_classes[:20], unused_functions[:20]
 
@@ -207,7 +236,6 @@ def detect_circular_imports(graph):
         for b in graph[a]:
 
             if b in graph and a in graph[b]:
-
                 circular.add(tuple(sorted((a, b))))
 
     return sorted(circular)
@@ -216,14 +244,16 @@ def detect_circular_imports(graph):
 def smell_scan(py_files):
 
     smells = Counter()
-
     file_scores = {}
 
     for f in py_files:
 
-        txt = read(f)
-
         rel = str(f.relative_to(ROOT)).replace("\\", "/")
+
+        if rel.startswith(SKIP_RANK_PREFIX):
+            continue
+
+        txt = read(f)
 
         score = 0
 
@@ -244,7 +274,6 @@ def smell_scan(py_files):
             score += 1
 
         if score:
-
             file_scores[rel] = score
 
     return smells, file_scores
@@ -269,7 +298,6 @@ def check_contracts(symbol_index):
     for file, symbol in checks:
 
         if symbol not in symbol_index:
-
             issues.append((file, symbol))
 
     fixture = ROOT / "tests/fixtures/system_payloads.py"
@@ -291,7 +319,8 @@ def build_report(
     ranking,
     unused_classes,
     unused_functions,
-    circular_imports
+    circular_imports,
+    pytest_errors
 ):
 
     r = []
@@ -306,12 +335,20 @@ def build_report(
 
     r.append("")
 
+    if pytest_errors:
+
+        r.append("PYTEST COLLECTION ERRORS")
+
+        for e in pytest_errors:
+            r.append(f"- {e}")
+
+        r.append("")
+
     r.append("CONTRACT MISMATCH")
 
     if contracts:
 
         for file, symbol in contracts:
-
             r.append(f"- {file} -> simbolo mancante: {symbol}")
 
     else:
@@ -323,7 +360,6 @@ def build_report(
     r.append("TOP MODULI FRAGILI")
 
     for f, s in ranking:
-
         r.append(f"- {f} (score {s})")
 
     r.append("")
@@ -331,7 +367,6 @@ def build_report(
     r.append("SMELLS")
 
     for k, v in smells.items():
-
         r.append(f"- {k}: {v}")
 
     r.append("")
@@ -339,7 +374,6 @@ def build_report(
     r.append("CLASSI PROBABILMENTE INUTILIZZATE")
 
     for name, file in unused_classes:
-
         r.append(f"- {name} ({file})")
 
     r.append("")
@@ -347,7 +381,6 @@ def build_report(
     r.append("FUNZIONI PROBABILMENTE INUTILIZZATE")
 
     for name, file in unused_functions:
-
         r.append(f"- {name} ({file})")
 
     r.append("")
@@ -355,13 +388,9 @@ def build_report(
     r.append("CIRCULAR IMPORTS")
 
     if circular_imports:
-
         for a, b in circular_imports:
-
             r.append(f"- {a} <-> {b}")
-
     else:
-
         r.append("nessuno")
 
     r.append("")
@@ -381,7 +410,9 @@ def main():
 
     compile_ok = compile_repo()
 
-    pytest_code, _ = run_pytest()
+    pytest_code, pytest_output = run_pytest()
+
+    pytest_errors = parse_pytest_errors(pytest_output)
 
     classes, functions, imports, symbol_index = parse_ast(py_files)
 
@@ -411,7 +442,8 @@ def main():
         ranking,
         unused_classes,
         unused_functions,
-        circular_imports
+        circular_imports,
+        pytest_errors
     )
 
     write(OUT / "repo_ultra_audit_narrative.md", report)
