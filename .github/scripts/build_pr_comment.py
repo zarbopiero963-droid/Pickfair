@@ -23,6 +23,7 @@ def main() -> int:
     fix_suggestions = read_text(AUDIT_OUT / "fix_suggestions.md").strip()
     patch_candidate = read_text(AUDIT_OUT / "patch_candidate.md").strip()
     patch_verification = read_text(AUDIT_OUT / "patch_verification.md").strip()
+    patch_apply_report = read_text(AUDIT_OUT / "patch_apply_report.md").strip()
     post_patch_review = read_text(AUDIT_OUT / "post_patch_review.md").strip()
 
     pr_body = """# AI automated patch
@@ -36,6 +37,10 @@ Included pipeline stages:
 - patch verification
 - patch apply
 - post patch AI review
+
+This PR is created only when:
+- the patch was actually applied
+- post_patch_review returned approve
 
 Please review the artifacts and checks before merging.
 """
@@ -54,6 +59,9 @@ Please review the artifacts and checks before merging.
         "",
         "## Patch verification",
         patch_verification or "_Missing patch verification report._",
+        "",
+        "## Patch apply report",
+        patch_apply_report or "_Missing patch apply report._",
         "",
         "## Post patch AI review",
         post_patch_review or "_Missing post patch review report._",
