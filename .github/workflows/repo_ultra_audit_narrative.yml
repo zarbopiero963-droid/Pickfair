@@ -45,10 +45,54 @@ jobs:
           mkdir -p audit_out
           mkdir -p audit_raw
 
+      - name: Verify scripts exist
+        run: |
+          test -f .github/scripts/repo_ultra_audit_narrative.py
+          test -f .github/scripts/ai_reasoning_layer.py
+          echo "Scripts found."
+
       - name: Run deterministic repo audit
         run: |
           python .github/scripts/repo_ultra_audit_narrative.py
         continue-on-error: true
+
+      - name: Inspect deterministic outputs
+        if: always()
+        shell: bash
+        run: |
+          echo "================ audit_out ================="
+          ls -R audit_out || true
+          echo "================ audit_raw ================="
+          ls -R audit_raw || true
+          echo "============================================"
+
+      - name: Show deterministic report file
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ DETERMINISTIC AUDIT REPORT ================"
+          if [ -f audit_out/repo_ultra_audit_narrative.md ]; then
+            cat audit_out/repo_ultra_audit_narrative.md
+          else
+            echo "repo_ultra_audit_narrative.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
+      - name: Show deterministic machine file
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ DETERMINISTIC MACHINE JSON ================"
+          if [ -f audit_out/audit_machine.json ]; then
+            cat audit_out/audit_machine.json
+          else
+            echo "audit_machine.json not found"
+          fi
+          echo "============================================================"
+          echo ""
 
       - name: Run AI reasoning layer
         if: always()
@@ -60,21 +104,45 @@ jobs:
           python .github/scripts/ai_reasoning_layer.py
         continue-on-error: true
 
-      - name: Print deterministic report
+      - name: Show AI root cause
         if: always()
+        shell: bash
         run: |
           echo ""
-          echo "================ DETERMINISTIC AUDIT REPORT ================"
-          cat audit_out/repo_ultra_audit_narrative.md || true
+          echo "================ AI ROOT CAUSE REPORT ======================"
+          if [ -f audit_out/root_cause.md ]; then
+            cat audit_out/root_cause.md
+          else
+            echo "root_cause.md not found"
+          fi
           echo "============================================================"
           echo ""
 
-      - name: Print AI root cause
+      - name: Show AI fix suggestions
         if: always()
+        shell: bash
         run: |
           echo ""
-          echo "================ AI ROOT CAUSE REPORT ======================="
-          cat audit_out/root_cause.md || true
+          echo "================ AI FIX SUGGESTIONS ========================"
+          if [ -f audit_out/fix_suggestions.md ]; then
+            cat audit_out/fix_suggestions.md
+          else
+            echo "fix_suggestions.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
+      - name: Show AI targeted tests
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI TARGETED TESTS ========================="
+          if [ -f audit_out/targeted_tests.md ]; then
+            cat audit_out/targeted_tests.md
+          else
+            echo "targeted_tests.md not found"
+          fi
           echo "============================================================"
           echo ""
 
