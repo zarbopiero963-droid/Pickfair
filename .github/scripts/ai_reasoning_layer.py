@@ -61,6 +61,7 @@ def extract_top_pytest_lines(pytest_log: str, max_lines: int = 40) -> list[str]:
         r".*RuntimeError.*",
         r".*AssertionError.*",
         r".*KeyError.*",
+        r".*NameError.*",
     ]
 
     for raw in pytest_log.splitlines():
@@ -81,6 +82,8 @@ def reduce_context(audit_machine: dict, pytest_log: str) -> dict:
     contracts = audit_machine.get("contracts", [])[:10]
     smells = audit_machine.get("smells", {})
     ranking = audit_machine.get("ranking", [])[:10]
+    unused_classes = audit_machine.get("unused_classes", [])[:10]
+    unused_functions = audit_machine.get("unused_functions", [])[:10]
 
     return {
         "compile_ok": audit_machine.get("compile_ok"),
@@ -88,6 +91,8 @@ def reduce_context(audit_machine: dict, pytest_log: str) -> dict:
         "contracts": contracts,
         "smells": smells,
         "ranking_top10": ranking,
+        "unused_classes_top10": unused_classes,
+        "unused_functions_top10": unused_functions,
         "pytest_signals": extract_top_pytest_lines(pytest_log, max_lines=40),
     }
 
@@ -102,6 +107,7 @@ Rules:
 4. Focus on the most important root causes first.
 5. Prefer backward-compatible fixes when tests expect old public symbols.
 6. Never suggest direct changes to main; assume changes go through a PR.
+7. Prefer the minimum viable fix that restores the public contract.
 
 Return STRICT JSON with this schema:
 {
@@ -146,12 +152,17 @@ def call_openrouter(model: str, messages: list[dict], api_key: str) -> dict:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/zarbopiero963-droid/Pickfair",
+        "X-Title": "Pickfair Repo Ultra Audit",
     }
 
     payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
+        "provider": {
+            "allow_fallbacks": False
+        },
     }
 
     response = requests.post(
@@ -238,6 +249,7 @@ def fallback_outputs(reduced: dict) -> dict:
             "tests": [
                 "tests/test_auto_updater.py",
                 "tests/test_executor_manager_shutdown.py",
+                "tests/test_executor_manager_parallel.py",
                 "tests/test_new_components.py",
                 "tests/test_toolbar_live.py",
                 "tests/contracts/test_payload_snapshots.py",
@@ -253,9 +265,11 @@ def fallback_outputs(reduced: dict) -> dict:
     }
 
 
-def render_root_cause_md(data: dict) -> str:
+def render_root_cause_md(data: dict, model_used: str) -> str:
     lines = []
     lines.append("AI Root Cause Analysis")
+    lines.append("")
+    lines.append(f"Model used: {model_used}")
     lines.append("")
     lines.append(data.get("summary", "Nessun sommario disponibile."))
     lines.append("")
@@ -274,9 +288,11 @@ def render_root_cause_md(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_fix_suggestions_md(data: dict) -> str:
+def render_fix_suggestions_md(data: dict, model_used: str) -> str:
     lines = []
     lines.append("AI Fix Suggestions")
+    lines.append("")
+    lines.append(f"Model used: {model_used}")
     lines.append("")
 
     if data.get("fix_suggestions"):
@@ -294,9 +310,11 @@ def render_fix_suggestions_md(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_targeted_tests_md(data: dict) -> str:
+def render_targeted_tests_md(data: dict, model_used: str) -> str:
     lines = []
     lines.append("AI Targeted Tests")
+    lines.append("")
+    lines.append(f"Model used: {model_used}")
     lines.append("")
 
     if data.get("targeted_tests"):
@@ -323,10 +341,11 @@ def main() -> int:
 
     if not api_key:
         fallback = fallback_outputs(reduced)
+        model_used = "fallback-local-no-api-key"
         write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback))
+        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback, model_used))
+        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback, model_used))
+        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback, model_used))
         print("OPENROUTER_API_KEY non trovato: scritto fallback locale.")
         return 0
 
@@ -338,24 +357,27 @@ def main() -> int:
         content = extract_content(resp_json)
         parsed = parse_json_content(content)
 
-        write_json(AUDIT_OUT / "ai_reasoning.json", parsed)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(parsed))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(parsed))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(parsed))
+        model_used = resp_json.get("model", model_triage)
 
-        print("AI reasoning layer completato.")
+        write_json(AUDIT_OUT / "ai_reasoning.json", parsed)
+        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(parsed, model_used))
+        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(parsed, model_used))
+        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(parsed, model_used))
+
+        print(f"AI reasoning layer completato. Model used: {model_used}")
         return 0
 
     except Exception as exc:
         fallback = fallback_outputs(reduced)
+        model_used = f"fallback-local-error-{type(exc).__name__}"
         fallback["summary"] = (
             f"Il layer AI ha fallito ({type(exc).__name__}: {exc}). "
             "È stato scritto un fallback locale basato sull’audit deterministico."
         )
         write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback))
+        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback, model_used))
+        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback, model_used))
+        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback, model_used))
         print(f"AI reasoning layer fallito: {exc}")
         return 0
 
