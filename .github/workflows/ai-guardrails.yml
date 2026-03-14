@@ -18,43 +18,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - run: |
+      - name: Install dependencies
+        run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt || true; fi
+          pip install pytest || true
+          pip install requests || true
 
-      - run: mkdir -p guardrails
+      - name: Ensure guardrails directory exists
+        run: mkdir -p guardrails
 
-      - name: Refresh snapshots
+      - name: Refresh guardrail snapshots automatically
         run: |
           python tools/repo_guardrail.py snapshot-api
           python tools/repo_guardrail.py snapshot-deps
           python tools/repo_guardrail.py snapshot-scope
 
+      - name: Show guardrail files
+        run: |
+          echo "==============================="
+          echo "GUARDRAIL FILES"
+          echo "==============================="
+          ls -la guardrails || true
+
       - name: Run guardrail tests
         run: |
           if [ -d tests/guardrails ]; then
             pytest -q tests/guardrails
+          else
+            echo "No guardrail tests found"
           fi
 
-      - name: Auto commit guardrails
+      - name: Auto-commit refreshed guardrail snapshots on main
         if: github.event_name != 'pull_request'
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add guardrails/*.json
+          git add guardrails/public_api_snapshot.json guardrails/allowed_dependencies.json guardrails/allowed_scope_files.json
 
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "No guardrail snapshot changes to commit"
           else
-            git commit -m "auto update guardrails"
+            git commit -m "auto-update guardrail snapshots"
             git push
           fi
