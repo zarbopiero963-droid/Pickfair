@@ -6,8 +6,9 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
   actions: read
+  pull-requests: write
 
 jobs:
   ultra-audit:
@@ -320,6 +321,51 @@ jobs:
 
           print("Post patch review did not reject. Workflow continues.")
           PY
+
+      - name: Create AI fix branch
+        if: always()
+        shell: bash
+        run: |
+          BRANCH="ai-fix-${{ github.run_id }}"
+
+          git config --global user.name "repo-ai-bot"
+          git config --global user.email "ai-bot@users.noreply.github.com"
+
+          echo "Creating branch $BRANCH"
+
+          git checkout -b "$BRANCH"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes detected, skipping branch push"
+            echo "AI_BRANCH=" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          git commit -m "AI automated patch candidate"
+
+          git push origin "$BRANCH"
+
+          echo "AI_BRANCH=$BRANCH" >> $GITHUB_ENV
+        continue-on-error: true
+
+      - name: Create Pull Request
+        if: always() && env.AI_BRANCH != ''
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.AI_BRANCH }}
+          base: main
+          title: "AI automated patch"
+          body: |
+            This PR was generated automatically by the AI repair pipeline.
+
+            Includes:
+            - root cause analysis
+            - generated patch
+            - patch verification
+            - AI post patch review
 
       - name: Upload artifacts
         if: always()
