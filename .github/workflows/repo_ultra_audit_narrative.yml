@@ -49,6 +49,8 @@ jobs:
         run: |
           test -f .github/scripts/repo_ultra_audit_narrative.py
           test -f .github/scripts/ai_reasoning_layer.py
+          test -f .github/scripts/build_priority_fix_order.py
+          test -f .github/scripts/build_fix_context.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -162,6 +164,26 @@ jobs:
             cat audit_out/priority_fix_order.md
           else
             echo "priority_fix_order.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
+      - name: Build fix context
+        if: always()
+        run: |
+          python .github/scripts/build_fix_context.py
+        continue-on-error: true
+
+      - name: Show fix context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FIX CONTEXT ==============================="
+          if [ -f audit_out/fix_context.json ]; then
+            cat audit_out/fix_context.json
+          else
+            echo "fix_context.json not found"
           fi
           echo "============================================================"
           echo ""
