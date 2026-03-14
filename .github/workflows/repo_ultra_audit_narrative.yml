@@ -3,6 +3,7 @@ name: Repo Ultra Audit Narrative
 on:
   push:
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
@@ -56,6 +57,7 @@ jobs:
           test -f .github/scripts/patch_candidate_generator.py
           test -f .github/scripts/patch_verifier.py
           test -f .github/scripts/apply_patch_candidate.py
+          test -f .github/scripts/post_patch_review.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -272,6 +274,52 @@ jobs:
           fi
           echo "============================================================"
           echo ""
+
+      - name: Post patch AI review
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python .github/scripts/post_patch_review.py
+        continue-on-error: true
+
+      - name: Show post patch review
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ POST PATCH REVIEW ================="
+          if [ -f audit_out/post_patch_review.md ]; then
+            cat audit_out/post_patch_review.md
+          else
+            echo "post_patch_review.md not found"
+          fi
+          echo "===================================================="
+
+      - name: Fail workflow if post patch review rejects
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("audit_out/post_patch_review.json")
+          if not path.exists():
+              print("post_patch_review.json not found -> failing for safety")
+              raise SystemExit(1)
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+          verdict = str(data.get("final_verdict", "")).strip().lower()
+
+          print(f"Post patch review verdict: {verdict}")
+
+          if verdict == "reject":
+              print("Blocking merge because post_patch_review returned reject.")
+              raise SystemExit(1)
+
+          print("Post patch review did not reject. Workflow continues.")
+          PY
 
       - name: Upload artifacts
         if: always()
