@@ -9,6 +9,7 @@
     "CONTRIBUTING.md",
     "Makefile",
     "Pickfair.spec",
+    "README.md",
     "README.txt",
     "ai/__init__.py",
     "ai/ai_guardrail.py",
