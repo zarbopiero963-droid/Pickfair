@@ -1,1 +1,5741 @@
-{}
+{
+  "ai": {
+    "classes": {},
+    "functions": {}
+  },
+  "ai.ai_guardrail": {
+    "classes": {
+      "GuardrailLevel": {
+        "methods": {}
+      },
+      "BlockReason": {
+        "methods": {}
+      },
+      "GuardrailConfig": {
+        "methods": {}
+      },
+      "OrderRecord": {
+        "methods": {}
+      },
+      "GuardrailState": {
+        "methods": {}
+      },
+      "AIGuardrail": {
+        "methods": {
+          "check_market_ready": {
+            "name": "check_market_ready",
+            "positional": [
+              "self",
+              "market_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_wom_data": {
+            "name": "check_wom_data",
+            "positional": [
+              "self",
+              "tick_count",
+              "confidence"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_volatility": {
+            "name": "check_volatility",
+            "positional": [
+              "self",
+              "volatility"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_auto_green_grace": {
+            "name": "check_auto_green_grace",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_order_for_auto_green": {
+            "name": "register_order_for_auto_green",
+            "positional": [
+              "self",
+              "bet_id",
+              "placed_at"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_order_rate": {
+            "name": "check_order_rate",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_error_state": {
+            "name": "check_error_state",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_order": {
+            "name": "record_order",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "side",
+              "stake",
+              "success"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "full_check": {
+            "name": "full_check",
+            "positional": [
+              "self",
+              "market_type",
+              "tick_count",
+              "wom_confidence",
+              "volatility"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_auto_green_delay": {
+            "name": "get_auto_green_delay",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_status": {
+            "name": "get_status",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_guardrail": {
+        "name": "get_guardrail",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "ai.ai_pattern_engine": {
+    "classes": {
+      "AIPatternEngine": {
+        "methods": {
+          "calculate_wom": {
+            "name": "calculate_wom",
+            "positional": [
+              "self",
+              "selection"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "decide": {
+            "name": "decide",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_wom_analysis": {
+            "name": "get_wom_analysis",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_enhanced_analysis": {
+            "name": "get_enhanced_analysis",
+            "positional": [
+              "self",
+              "selections",
+              "wom_engine"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "ai.wom_engine": {
+    "classes": {
+      "TickData": {
+        "methods": {}
+      },
+      "WoMResult": {
+        "methods": {}
+      },
+      "SelectionWoMHistory": {
+        "methods": {
+          "add_tick": {
+            "name": "add_tick",
+            "positional": [
+              "self",
+              "tick"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_recent_from_snapshot": {
+            "name": "get_recent_from_snapshot",
+            "positional": [
+              "self",
+              "ticks_snapshot",
+              "max_age_sec",
+              "now"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_recent": {
+            "name": "get_recent",
+            "positional": [
+              "self",
+              "max_age_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "WoMEngine": {
+        "methods": {
+          "record_tick": {
+            "name": "record_tick",
+            "positional": [
+              "self",
+              "selection_id",
+              "back_price",
+              "back_volume",
+              "lay_price",
+              "lay_volume"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_wom": {
+            "name": "calculate_wom",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_ai_edge_score": {
+            "name": "get_ai_edge_score",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_mixed_suggestions": {
+            "name": "get_mixed_suggestions",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_history": {
+            "name": "clear_history",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_wom_window": {
+            "name": "calculate_wom_window",
+            "positional": [
+              "self",
+              "selection_id",
+              "window_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_multi_window_wom": {
+            "name": "calculate_multi_window_wom",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_delta_pressure": {
+            "name": "calculate_delta_pressure",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_momentum": {
+            "name": "calculate_momentum",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_volatility": {
+            "name": "calculate_volatility",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_enhanced_wom": {
+            "name": "calculate_enhanced_wom",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_time_window_signal": {
+            "name": "get_time_window_signal",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_wom_engine": {
+        "name": "get_wom_engine",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "app_modules": {
+    "classes": {},
+    "functions": {}
+  },
+  "app_modules.betting_module": {
+    "classes": {
+      "BettingModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "app_modules.monitoring_module": {
+    "classes": {
+      "MonitoringModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "app_modules.simulation_module": {
+    "classes": {
+      "SimulationModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "app_modules.streaming_module": {
+    "classes": {
+      "StreamingModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "app_modules.telegram_module": {
+    "classes": {
+      "TelegramModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "app_modules.ui_module": {
+    "classes": {
+      "UIModule": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "auto_throttle": {
+    "classes": {
+      "AutoThrottle": {
+        "methods": {
+          "wait": {
+            "name": "wait",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_call": {
+            "name": "record_call",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_current_rate": {
+            "name": "get_current_rate",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update": {
+            "name": "update",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "is_blocked": {
+            "name": "is_blocked",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "auto_updater": {
+    "classes": {
+      "UpdateDialog": {
+        "methods": {
+          "show": {
+            "name": "show",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "parse_version": {
+        "name": "parse_version",
+        "positional": [
+          "version_str"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "compare_versions": {
+        "name": "compare_versions",
+        "positional": [
+          "current",
+          "latest"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "check_for_updates": {
+        "name": "check_for_updates",
+        "positional": [
+          "current_version",
+          "callback",
+          "update_url"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "open_download_page": {
+        "name": "open_download_page",
+        "positional": [
+          "url"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "download_update": {
+        "name": "download_update",
+        "positional": [
+          "download_url",
+          "progress_callback"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "install_update": {
+        "name": "install_update",
+        "positional": [
+          "update_path",
+          "current_exe_path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "get_current_exe_path": {
+        "name": "get_current_exe_path",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "show_update_dialog": {
+        "name": "show_update_dialog",
+        "positional": [
+          "parent",
+          "update_info"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "automation_engine": {
+    "classes": {
+      "AutomationEngine": {
+        "methods": {
+          "process_tick": {
+            "name": "process_tick",
+            "positional": [
+              "self",
+              "market_id",
+              "market_data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "should_auto_green": {
+        "name": "should_auto_green",
+        "positional": [
+          "order",
+          "market_status"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "get_auto_green_remaining_delay": {
+        "name": "get_auto_green_remaining_delay",
+        "positional": [
+          "order"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "automation_optimizer": {
+    "classes": {
+      "SkipReason": {
+        "methods": {}
+      },
+      "AutomationState": {
+        "methods": {}
+      },
+      "AutomationOptimizer": {
+        "methods": {
+          "enabled": {
+            "name": "enabled",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "should_evaluate": {
+            "name": "should_evaluate",
+            "positional": [
+              "self",
+              "order_id",
+              "auto_green_enabled",
+              "has_open_orders",
+              "market_status",
+              "placed_at",
+              "current_pnl",
+              "simulation"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "mark_processed": {
+            "name": "mark_processed",
+            "positional": [
+              "self",
+              "order_id",
+              "skip_duration"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "remove_order": {
+            "name": "remove_order",
+            "positional": [
+              "self",
+              "order_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_automation_optimizer": {
+        "name": "get_automation_optimizer",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "betfair_client": {
+    "classes": {
+      "PriceStreamListener": {
+        "methods": {
+          "on_data": {
+            "name": "on_data",
+            "positional": [
+              "self",
+              "raw_data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "BetfairClient": {
+        "methods": {
+          "login": {
+            "name": "login",
+            "positional": [
+              "self",
+              "password"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "logout": {
+            "name": "logout",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_account_funds": {
+            "name": "get_account_funds",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_football_events": {
+            "name": "get_football_events",
+            "positional": [
+              "self",
+              "include_inplay"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_available_markets": {
+            "name": "get_available_markets",
+            "positional": [
+              "self",
+              "event_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_market_with_prices": {
+            "name": "get_market_with_prices",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_market_book": {
+            "name": "get_market_book",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_correct_score_market": {
+            "name": "get_correct_score_market",
+            "positional": [
+              "self",
+              "event_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "start_streaming": {
+            "name": "start_streaming",
+            "positional": [
+              "self",
+              "market_ids",
+              "price_callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop_streaming": {
+            "name": "stop_streaming",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "is_streaming": {
+            "name": "is_streaming",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "place_bet": {
+            "name": "place_bet",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "side",
+              "price",
+              "size",
+              "persistence_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "place_bets": {
+            "name": "place_bets",
+            "positional": [
+              "self",
+              "market_id",
+              "instructions"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_current_orders": {
+            "name": "get_current_orders",
+            "positional": [
+              "self",
+              "market_ids"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "cancel_orders": {
+            "name": "cancel_orders",
+            "positional": [
+              "self",
+              "market_id",
+              "bet_ids"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_markets": {
+            "name": "get_markets",
+            "positional": [
+              "self",
+              "event_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "place_back_bet": {
+            "name": "place_back_bet",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "price",
+              "size"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "place_lay_bet": {
+            "name": "place_lay_bet",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "price",
+              "size"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "replace_orders": {
+            "name": "replace_orders",
+            "positional": [
+              "self",
+              "market_id",
+              "bet_id",
+              "new_price"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "cashout": {
+            "name": "cashout",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "side",
+              "price",
+              "size"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_cashout": {
+            "name": "calculate_cashout",
+            "positional": [
+              "self",
+              "original_stake",
+              "original_odds",
+              "current_odds",
+              "side"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_position": {
+            "name": "get_position",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_settled_bets": {
+            "name": "get_settled_bets",
+            "positional": [
+              "self",
+              "days"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_market_profit_and_loss": {
+            "name": "get_market_profit_and_loss",
+            "positional": [
+              "self",
+              "market_ids"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "execute_cashout": {
+            "name": "execute_cashout",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "cashout_side",
+              "cashout_stake",
+              "cashout_price",
+              "max_retries",
+              "slippage_ticks",
+              "use_fresh_price"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_live_events": {
+            "name": "get_live_events",
+            "positional": [
+              "self",
+              "event_type_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_live_events_only": {
+            "name": "get_live_events_only",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_live_markets": {
+            "name": "get_live_markets",
+            "positional": [
+              "self",
+              "event_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "with_retry": {
+        "name": "with_retry",
+        "positional": [
+          "func"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "build": {
+    "classes": {},
+    "functions": {
+      "build": {
+        "name": "build",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "circuit_breaker": {
+    "classes": {
+      "TransientError": {
+        "methods": {}
+      },
+      "PermanentError": {
+        "methods": {}
+      },
+      "CircuitBreaker": {
+        "methods": {
+          "call": {
+            "name": "call",
+            "positional": [
+              "self",
+              "fn"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          },
+          "is_open": {
+            "name": "is_open",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "controllers": {
+    "classes": {},
+    "functions": {}
+  },
+  "controllers.dutching_controller": {
+    "classes": {
+      "PreflightResult": {
+        "methods": {}
+      },
+      "DutchingController": {
+        "methods": {
+          "submit_dutching": {
+            "name": "submit_dutching",
+            "positional": [
+              "self",
+              "market_id",
+              "market_type",
+              "selections",
+              "total_stake",
+              "mode",
+              "ai_enabled",
+              "ai_wom_enabled",
+              "auto_green",
+              "commission",
+              "use_best_price",
+              "stop_loss",
+              "take_profit",
+              "trailing",
+              "dry_run"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_selections": {
+            "name": "validate_selections",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_simulation": {
+            "name": "set_simulation",
+            "positional": [
+              "self",
+              "enabled"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_ai_analysis": {
+            "name": "get_ai_analysis",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "preflight_check": {
+            "name": "preflight_check",
+            "positional": [
+              "self",
+              "selections",
+              "total_stake",
+              "mode"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_market_tick": {
+            "name": "record_market_tick",
+            "positional": [
+              "self",
+              "selection_id",
+              "back_price",
+              "back_volume",
+              "lay_price",
+              "lay_volume"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_wom_analysis": {
+            "name": "get_wom_analysis",
+            "positional": [
+              "self",
+              "selections",
+              "use_historical"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_wom_stats": {
+            "name": "get_wom_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_guardrail": {
+            "name": "check_guardrail",
+            "positional": [
+              "self",
+              "market_type",
+              "tick_count",
+              "wom_confidence",
+              "volatility"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_auto_green_ready": {
+            "name": "check_auto_green_ready",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_for_auto_green": {
+            "name": "register_for_auto_green",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_time_window_signal": {
+            "name": "get_time_window_signal",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_guardrail_status": {
+            "name": "get_guardrail_status",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "controllers.telegram_controller": {
+    "classes": {
+      "TelegramController": {
+        "methods": {
+          "save_settings": {
+            "name": "save_settings",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "send_code": {
+            "name": "send_code",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "verify_code": {
+            "name": "verify_code",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_session": {
+            "name": "reset_session",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "load_dialogs": {
+            "name": "load_dialogs",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "core": {
+    "classes": {},
+    "functions": {}
+  },
+  "core.async_db_writer": {
+    "classes": {
+      "AsyncDBWriter": {
+        "methods": {
+          "start": {
+            "name": "start",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop": {
+            "name": "stop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "submit": {
+            "name": "submit",
+            "positional": [
+              "self",
+              "kind",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "core.event_bus": {
+    "classes": {
+      "EventBus": {
+        "methods": {
+          "subscribe": {
+            "name": "subscribe",
+            "positional": [
+              "self",
+              "event_type",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "unsubscribe": {
+            "name": "unsubscribe",
+            "positional": [
+              "self",
+              "event_type",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "publish": {
+            "name": "publish",
+            "positional": [
+              "self",
+              "event_type",
+              "data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "core.fast_analytics": {
+    "classes": {
+      "FastWoMState": {
+        "methods": {
+          "push": {
+            "name": "push",
+            "positional": [
+              "self",
+              "tick"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "wom": {
+            "name": "wom",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "imbalance": {
+            "name": "imbalance",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "snapshot": {
+            "name": "snapshot",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "core.perf_counters": {
+    "classes": {
+      "PerfCounters": {
+        "methods": {
+          "add": {
+            "name": "add",
+            "positional": [
+              "self",
+              "key",
+              "elapsed_ns"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stats": {
+            "name": "stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "now_ns": {
+        "name": "now_ns",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "core.risk_middleware": {
+    "classes": {
+      "RiskMiddleware": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "core.safety_layer": {
+    "classes": {
+      "SafetyLayerError": {
+        "methods": {}
+      },
+      "PayloadValidationError": {
+        "methods": {}
+      },
+      "RiskInvariantError": {
+        "methods": {}
+      },
+      "MarketSanityError": {
+        "methods": {}
+      },
+      "SchemaField": {
+        "methods": {}
+      },
+      "WatchdogState": {
+        "methods": {}
+      },
+      "PendingSagaRecord": {
+        "methods": {}
+      },
+      "SafetyLayer": {
+        "methods": {
+          "validate_quick_bet_request": {
+            "name": "validate_quick_bet_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_quick_bet_success": {
+            "name": "validate_quick_bet_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_dutching_request": {
+            "name": "validate_dutching_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_dutching_success": {
+            "name": "validate_dutching_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_cashout_request": {
+            "name": "validate_cashout_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_cashout_success": {
+            "name": "validate_cashout_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_market_book": {
+            "name": "validate_market_book",
+            "positional": [
+              "self",
+              "market_book"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_selection_prices": {
+            "name": "validate_selection_prices",
+            "positional": [
+              "self",
+              "back_price",
+              "lay_price",
+              "max_spread_ratio"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "inspect_pending_sagas": {
+            "name": "inspect_pending_sagas",
+            "positional": [
+              "self",
+              "db",
+              "stale_after_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stale_pending_sagas": {
+            "name": "get_stale_pending_sagas",
+            "positional": [
+              "self",
+              "db",
+              "stale_after_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_watchdog": {
+            "name": "register_watchdog",
+            "positional": [
+              "self",
+              "name",
+              "timeout_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "unregister_watchdog": {
+            "name": "unregister_watchdog",
+            "positional": [
+              "self",
+              "name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "watchdog_ping": {
+            "name": "watchdog_ping",
+            "positional": [
+              "self",
+              "name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_watchdog_status": {
+            "name": "get_watchdog_status",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_watchdog_callback": {
+            "name": "set_watchdog_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "start_watchdog": {
+            "name": "start_watchdog",
+            "positional": [
+              "self",
+              "interval_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop_watchdog": {
+            "name": "stop_watchdog",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_quick_bet_request": {
+            "name": "safe_validate_quick_bet_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_quick_bet_success": {
+            "name": "safe_validate_quick_bet_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_dutching_request": {
+            "name": "safe_validate_dutching_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_dutching_success": {
+            "name": "safe_validate_dutching_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_cashout_request": {
+            "name": "safe_validate_cashout_request",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_validate_cashout_success": {
+            "name": "safe_validate_cashout_success",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_safety_layer": {
+        "name": "get_safety_layer",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "core.tick_ring_buffer": {
+    "classes": {
+      "TickRingBuffer": {
+        "methods": {
+          "push": {
+            "name": "push",
+            "positional": [
+              "self",
+              "item"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "pop": {
+            "name": "pop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "drain": {
+            "name": "drain",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "peek": {
+            "name": "peek",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "core.trading_engine": {
+    "classes": {
+      "TradingEngine": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "database": {
+    "classes": {
+      "Database": {
+        "methods": {
+          "get_settings": {
+            "name": "get_settings",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_settings": {
+            "name": "save_settings",
+            "positional": [
+              "self",
+              "settings"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": "kwargs"
+          },
+          "save_credentials": {
+            "name": "save_credentials",
+            "positional": [
+              "self",
+              "username",
+              "app_key",
+              "certificate",
+              "private_key"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_password": {
+            "name": "save_password",
+            "positional": [
+              "self",
+              "password"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_session": {
+            "name": "save_session",
+            "positional": [
+              "self",
+              "session_token",
+              "expiry"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_session": {
+            "name": "clear_session",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_sessions": {
+            "name": "clear_sessions",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_update_url": {
+            "name": "save_update_url",
+            "positional": [
+              "self",
+              "update_url"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_skipped_version": {
+            "name": "save_skipped_version",
+            "positional": [
+              "self",
+              "version"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_telegram_settings": {
+            "name": "get_telegram_settings",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_telegram_settings": {
+            "name": "save_telegram_settings",
+            "positional": [
+              "self",
+              "settings"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": "kwargs"
+          },
+          "get_telegram_chats": {
+            "name": "get_telegram_chats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_telegram_chat": {
+            "name": "save_telegram_chat",
+            "positional": [
+              "self",
+              "chat_id",
+              "title",
+              "username",
+              "is_active"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "replace_telegram_chats": {
+            "name": "replace_telegram_chats",
+            "positional": [
+              "self",
+              "chats"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "delete_telegram_chat": {
+            "name": "delete_telegram_chat",
+            "positional": [
+              "self",
+              "chat_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_signal_patterns": {
+            "name": "get_signal_patterns",
+            "positional": [
+              "self",
+              "enabled_only"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_signal_pattern": {
+            "name": "save_signal_pattern",
+            "positional": [
+              "self",
+              "pattern",
+              "label",
+              "enabled"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_signal_pattern": {
+            "name": "update_signal_pattern",
+            "positional": [
+              "self",
+              "pattern_id",
+              "pattern",
+              "label"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "toggle_signal_pattern": {
+            "name": "toggle_signal_pattern",
+            "positional": [
+              "self",
+              "pattern_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "delete_signal_pattern": {
+            "name": "delete_signal_pattern",
+            "positional": [
+              "self",
+              "pattern_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_received_signal": {
+            "name": "save_received_signal",
+            "positional": [
+              "self",
+              "selection",
+              "action",
+              "price",
+              "stake",
+              "status"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_received_signals": {
+            "name": "get_received_signals",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_received_signals": {
+            "name": "clear_received_signals",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_telegram_outbox_log": {
+            "name": "save_telegram_outbox_log",
+            "positional": [
+              "self",
+              "chat_id",
+              "message_type",
+              "text",
+              "status",
+              "message_id",
+              "error",
+              "flood_wait"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_telegram_outbox_log": {
+            "name": "get_telegram_outbox_log",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_telegram_outbox_log": {
+            "name": "clear_telegram_outbox_log",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "create_pending_saga": {
+            "name": "create_pending_saga",
+            "positional": [
+              "self",
+              "customer_ref",
+              "market_id",
+              "selection_id",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_pending_sagas": {
+            "name": "get_pending_sagas",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "mark_saga_reconciled": {
+            "name": "mark_saga_reconciled",
+            "positional": [
+              "self",
+              "customer_ref"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "mark_saga_failed": {
+            "name": "mark_saga_failed",
+            "positional": [
+              "self",
+              "customer_ref"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_bet": {
+            "name": "save_bet",
+            "positional": [
+              "self",
+              "event_name",
+              "market_id",
+              "market_name",
+              "bet_type",
+              "selections",
+              "total_stake",
+              "potential_profit",
+              "status"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_recent_bets": {
+            "name": "get_recent_bets",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_bet_history": {
+            "name": "get_bet_history",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_today_profit_loss": {
+            "name": "get_today_profit_loss",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_active_bets_count": {
+            "name": "get_active_bets_count",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_simulation_bet": {
+            "name": "save_simulation_bet",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": "kwargs"
+          },
+          "add_simulated_bet": {
+            "name": "add_simulated_bet",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          },
+          "get_simulation_bets": {
+            "name": "get_simulation_bets",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_simulation_bet_history": {
+            "name": "get_simulation_bet_history",
+            "positional": [
+              "self",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_simulation_settings": {
+            "name": "get_simulation_settings",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "increment_simulation_bet_count": {
+            "name": "increment_simulation_bet_count",
+            "positional": [
+              "self",
+              "new_balance"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_cashout_transaction": {
+            "name": "save_cashout_transaction",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "original_bet_id",
+              "cashout_bet_id",
+              "original_side",
+              "original_stake",
+              "original_price",
+              "cashout_side",
+              "cashout_stake",
+              "cashout_price",
+              "profit_loss"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "close": {
+            "name": "close",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_db_path": {
+        "name": "get_db_path",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "dutching": {
+    "classes": {},
+    "functions": {
+      "round_step": {
+        "name": "round_step",
+        "positional": [
+          "value"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "format_currency": {
+        "name": "format_currency",
+        "positional": [
+          "value"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "validate_selections": {
+        "name": "validate_selections",
+        "positional": [
+          "results",
+          "bet_type"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "calculate_dutching_stakes": {
+        "name": "calculate_dutching_stakes",
+        "positional": [
+          "selections",
+          "total_stake",
+          "bet_type",
+          "commission",
+          "side"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
+      "dynamic_cashout_single": {
+        "name": "dynamic_cashout_single",
+        "positional": [
+          "matched_stake",
+          "matched_price",
+          "current_price",
+          "commission"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
+      "calculate_mixed_dutching": {
+        "name": "calculate_mixed_dutching",
+        "positional": [
+          "selections",
+          "amount",
+          "commission"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
+      "calculate_ai_mixed_stakes": {
+        "name": "calculate_ai_mixed_stakes",
+        "positional": [
+          "selections",
+          "amount",
+          "commission",
+          "total_stake"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
+      "calculate_ai_mixed_dutching": {
+        "name": "calculate_ai_mixed_dutching",
+        "positional": [
+          "selections",
+          "amount",
+          "commission"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      }
+    }
+  },
+  "dutching_cache": {
+    "classes": {
+      "CachedDutchResult": {
+        "methods": {}
+      },
+      "DutchingCache": {
+        "methods": {
+          "get": {
+            "name": "get",
+            "positional": [
+              "self",
+              "selections",
+              "total_stake",
+              "bet_type",
+              "commission"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "put": {
+            "name": "put",
+            "positional": [
+              "self",
+              "selections",
+              "total_stake",
+              "bet_type",
+              "commission",
+              "stakes",
+              "profit",
+              "book_percentage"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "invalidate_for_market": {
+            "name": "invalidate_for_market",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_dutching_cache": {
+        "name": "get_dutching_cache",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "cached_dutching_stakes": {
+        "name": "cached_dutching_stakes",
+        "positional": [
+          "calculate_fn",
+          "selections",
+          "total_stake",
+          "bet_type",
+          "commission"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "dutching_state": {
+    "classes": {
+      "DutchingMode": {
+        "methods": {}
+      },
+      "RunnerState": {
+        "methods": {
+          "effective_odds": {
+            "name": "effective_odds",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "effective_type": {
+            "name": "effective_type",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "to_dict": {
+            "name": "to_dict",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "DutchingState": {
+        "methods": {
+          "set_callback": {
+            "name": "set_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_market_info": {
+            "name": "set_market_info",
+            "positional": [
+              "self",
+              "market_id",
+              "market_name",
+              "event_name",
+              "start_time",
+              "status"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "market_id": {
+            "name": "market_id",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "market_display": {
+            "name": "market_display",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "market_status": {
+            "name": "market_status",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "market_type": {
+            "name": "market_type",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "simulation_mode": {
+            "name": "simulation_mode",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "load_runners": {
+            "name": "load_runners",
+            "positional": [
+              "self",
+              "runners"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_odds": {
+            "name": "update_odds",
+            "positional": [
+              "self",
+              "selection_id",
+              "new_odds"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_all_odds": {
+            "name": "update_all_odds",
+            "positional": [
+              "self",
+              "odds_map"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "toggle_included": {
+            "name": "toggle_included",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "toggle_swap": {
+            "name": "toggle_swap",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_offset": {
+            "name": "set_offset",
+            "positional": [
+              "self",
+              "selection_id",
+              "offset"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_odds": {
+            "name": "set_odds",
+            "positional": [
+              "self",
+              "selection_id",
+              "odds"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "select_all": {
+            "name": "select_all",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "select_none": {
+            "name": "select_none",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "swap_all": {
+            "name": "swap_all",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "runners": {
+            "name": "runners",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "included_runners": {
+            "name": "included_runners",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "mode": {
+            "name": "mode",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "total_stake": {
+            "name": "total_stake",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "target_profit": {
+            "name": "target_profit",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "auto_ratio": {
+            "name": "auto_ratio",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "global_offset": {
+            "name": "global_offset",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "live_odds": {
+            "name": "live_odds",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "commission": {
+            "name": "commission",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_book_value": {
+            "name": "get_book_value",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_total_stake": {
+            "name": "get_total_stake",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_selections_for_engine": {
+            "name": "get_selections_for_engine",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "apply_calculation_results": {
+            "name": "apply_calculation_results",
+            "positional": [
+              "self",
+              "results"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_orders_to_place": {
+            "name": "get_orders_to_place",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "dutching_ui": {
+    "classes": {
+      "DutchingConfirmationWindow": {
+        "methods": {}
+      }
+    },
+    "functions": {
+      "open_dutching_window": {
+        "name": "open_dutching_window",
+        "positional": [
+          "parent",
+          "market_data",
+          "runners",
+          "on_submit",
+          "on_refresh"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "executor_manager": {
+    "classes": {
+      "SafeExecutor": {
+        "methods": {
+          "submit": {
+            "name": "submit",
+            "positional": [
+              "self",
+              "name",
+              "fn"
+            ],
+            "kwonly": [
+              "timeout"
+            ],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "goal_engine_pro": {
+    "classes": {
+      "IntelligentRateLimiter": {
+        "methods": {
+          "set_mode": {
+            "name": "set_mode",
+            "positional": [
+              "self",
+              "mode"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "wait": {
+            "name": "wait",
+            "positional": [
+              "self",
+              "stop_event"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "APIFootballClient": {
+        "methods": {
+          "is_available": {
+            "name": "is_available",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "fetch_live": {
+            "name": "fetch_live",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "GoalEnginePro": {
+        "methods": {
+          "set_delay": {
+            "name": "set_delay",
+            "positional": [
+              "self",
+              "mode"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_confirm_mode": {
+            "name": "set_confirm_mode",
+            "positional": [
+              "self",
+              "enabled"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_low_request_mode": {
+            "name": "set_low_request_mode",
+            "positional": [
+              "self",
+              "enabled"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "start": {
+            "name": "start",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop": {
+            "name": "stop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "check_stream_confirmation": {
+            "name": "check_stream_confirmation",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "main": {
+    "classes": {
+      "PickfairApp": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "market_tracker": {
+    "classes": {
+      "MarketCache": {
+        "methods": {
+          "get": {
+            "name": "get",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set": {
+            "name": "set",
+            "positional": [
+              "self",
+              "market_id",
+              "data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "invalidate": {
+            "name": "invalidate",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_stats": {
+            "name": "reset_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "DeltaDetector": {
+        "methods": {
+          "has_changed": {
+            "name": "has_changed",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "back_price",
+              "lay_price",
+              "back_size",
+              "lay_size"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_last_price": {
+            "name": "get_last_price",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_market": {
+            "name": "clear_market",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_stats": {
+            "name": "reset_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "MarketTracker": {
+        "methods": {
+          "get_market_book": {
+            "name": "get_market_book",
+            "positional": [
+              "self",
+              "market_id",
+              "force_refresh"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_best_prices": {
+            "name": "get_best_prices",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_changed_prices": {
+            "name": "get_changed_prices",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "track_market": {
+            "name": "track_market",
+            "positional": [
+              "self",
+              "market_id",
+              "metadata"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "untrack_market": {
+            "name": "untrack_market",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_active_markets": {
+            "name": "get_active_markets",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_market_cache": {
+        "name": "get_market_cache",
+        "positional": [
+          "ttl"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "get_delta_detector": {
+        "name": "get_delta_detector",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "market_validator": {
+    "classes": {
+      "MarketValidationError": {
+        "methods": {}
+      },
+      "MarketValidator": {
+        "methods": {
+          "is_dutching_ready": {
+            "name": "is_dutching_ready",
+            "positional": [
+              "cls",
+              "market_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "assert_dutching_ready": {
+            "name": "assert_dutching_ready",
+            "positional": [
+              "cls",
+              "market_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_market_warning": {
+            "name": "get_market_warning",
+            "positional": [
+              "cls",
+              "market_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_compatible_markets": {
+            "name": "get_compatible_markets",
+            "positional": [
+              "cls"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "order_manager": {
+    "classes": {
+      "OrderManager": {
+        "methods": {
+          "cancel_order": {
+            "name": "cancel_order",
+            "positional": [
+              "self",
+              "market_id",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "replace_order": {
+            "name": "replace_order",
+            "positional": [
+              "self",
+              "market_id",
+              "bet_id",
+              "new_price"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "remember": {
+            "name": "remember",
+            "positional": [
+              "self",
+              "key",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "forget": {
+            "name": "forget",
+            "positional": [
+              "self",
+              "key"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_cached": {
+            "name": "get_cached",
+            "positional": [
+              "self",
+              "key",
+              "default"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "cleanup_old": {
+            "name": "cleanup_old",
+            "positional": [
+              "self",
+              "max_age_seconds"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_status": {
+            "name": "get_status",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "plugin_manager": {
+    "classes": {
+      "PluginInfo": {
+        "methods": {}
+      },
+      "PluginSecurityError": {
+        "methods": {}
+      },
+      "PluginTimeoutError": {
+        "methods": {}
+      },
+      "PluginManager": {
+        "methods": {
+          "validate_plugin_code": {
+            "name": "validate_plugin_code",
+            "positional": [
+              "self",
+              "code",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_plugin_file": {
+            "name": "validate_plugin_file",
+            "positional": [
+              "self",
+              "filepath"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "safe_file_access": {
+            "name": "safe_file_access",
+            "positional": [
+              "self",
+              "filepath",
+              "mode"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "install_requirements": {
+            "name": "install_requirements",
+            "positional": [
+              "self",
+              "plugin_path"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "load_plugin": {
+            "name": "load_plugin",
+            "positional": [
+              "self",
+              "filepath",
+              "enable"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "unload_plugin": {
+            "name": "unload_plugin",
+            "positional": [
+              "self",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "enable_plugin": {
+            "name": "enable_plugin",
+            "positional": [
+              "self",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "disable_plugin": {
+            "name": "disable_plugin",
+            "positional": [
+              "self",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_hook": {
+            "name": "register_hook",
+            "positional": [
+              "self",
+              "hook_name",
+              "callback",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "call_hook": {
+            "name": "call_hook",
+            "positional": [
+              "self",
+              "hook_name"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          },
+          "load_all_plugins": {
+            "name": "load_all_plugins",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_plugin_list": {
+            "name": "get_plugin_list",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "install_plugin_from_file": {
+            "name": "install_plugin_from_file",
+            "positional": [
+              "self",
+              "source_path"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "uninstall_plugin": {
+            "name": "uninstall_plugin",
+            "positional": [
+              "self",
+              "plugin_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "PluginAPI": {
+        "methods": {
+          "add_tab": {
+            "name": "add_tab",
+            "positional": [
+              "self",
+              "title",
+              "create_func"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "remove_tab": {
+            "name": "remove_tab",
+            "positional": [
+              "self",
+              "title"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_hook": {
+            "name": "register_hook",
+            "positional": [
+              "self",
+              "hook_name",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "add_event_filter": {
+            "name": "add_event_filter",
+            "positional": [
+              "self",
+              "name",
+              "filter_func"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_current_market": {
+            "name": "get_current_market",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_current_selections": {
+            "name": "get_current_selections",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "show_notification": {
+            "name": "show_notification",
+            "positional": [
+              "self",
+              "title",
+              "message"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log": {
+            "name": "log",
+            "positional": [
+              "self",
+              "message"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_data_path": {
+            "name": "get_data_path",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "save_data": {
+            "name": "save_data",
+            "positional": [
+              "self",
+              "filename",
+              "data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "load_data": {
+            "name": "load_data",
+            "positional": [
+              "self",
+              "filename",
+              "default"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "plugin_runner": {
+    "classes": {
+      "PluginRunner": {
+        "methods": {
+          "run": {
+            "name": "run",
+            "positional": [
+              "self",
+              "plugin_name",
+              "fn"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "pnl_cache": {
+    "classes": {
+      "CachedPnL": {
+        "methods": {}
+      },
+      "MarketPnLState": {
+        "methods": {}
+      },
+      "PnLCache": {
+        "methods": {
+          "has_open_positions": {
+            "name": "has_open_positions",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_cached_pnl": {
+            "name": "get_cached_pnl",
+            "positional": [
+              "self",
+              "market_id",
+              "prices",
+              "orders"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_cache": {
+            "name": "update_cache",
+            "positional": [
+              "self",
+              "market_id",
+              "prices",
+              "orders",
+              "pnl_results"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "invalidate": {
+            "name": "invalidate",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "invalidate_all": {
+            "name": "invalidate_all",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear_market": {
+            "name": "clear_market",
+            "positional": [
+              "self",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_pnl_cache": {
+        "name": "get_pnl_cache",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "pnl_engine": {
+    "classes": {
+      "PnLEngine": {
+        "methods": {
+          "calculate_back_pnl": {
+            "name": "calculate_back_pnl",
+            "positional": [
+              "self",
+              "order",
+              "best_lay_price"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_lay_pnl": {
+            "name": "calculate_lay_pnl",
+            "positional": [
+              "self",
+              "order",
+              "best_back_price"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_order_pnl": {
+            "name": "calculate_order_pnl",
+            "positional": [
+              "self",
+              "order",
+              "best_back",
+              "best_lay"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_selection_pnl": {
+            "name": "calculate_selection_pnl",
+            "positional": [
+              "self",
+              "orders",
+              "best_back",
+              "best_lay"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "is_auto_green_eligible": {
+            "name": "is_auto_green_eligible",
+            "positional": [
+              "order",
+              "current_time"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_preview": {
+            "name": "calculate_preview",
+            "positional": [
+              "self",
+              "selection",
+              "side"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "repo_update_engine": {
+    "classes": {},
+    "functions": {
+      "timestamp": {
+        "name": "timestamp",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "ensure_dir": {
+        "name": "ensure_dir",
+        "positional": [
+          "path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "log": {
+        "name": "log",
+        "positional": [
+          "msg"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "list_backups": {
+        "name": "list_backups",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "cleanup_old_backups": {
+        "name": "cleanup_old_backups",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "backup_repository": {
+        "name": "backup_repository",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "latest_backup": {
+        "name": "latest_backup",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "restore_backup": {
+        "name": "restore_backup",
+        "positional": [
+          "zip_path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "restore_last_backup": {
+        "name": "restore_last_backup",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "create_folder": {
+        "name": "create_folder",
+        "positional": [
+          "path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "create_file": {
+        "name": "create_file",
+        "positional": [
+          "path",
+          "content"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "append_file": {
+        "name": "append_file",
+        "positional": [
+          "path",
+          "content"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "delete_file": {
+        "name": "delete_file",
+        "positional": [
+          "path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "move_file": {
+        "name": "move_file",
+        "positional": [
+          "src",
+          "dst"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "rename_file": {
+        "name": "rename_file",
+        "positional": [
+          "src",
+          "dst"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "replace_text": {
+        "name": "replace_text",
+        "positional": [
+          "path",
+          "old",
+          "new"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "insert_line": {
+        "name": "insert_line",
+        "positional": [
+          "path",
+          "line_number",
+          "text"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "normalize_file_whitespace": {
+        "name": "normalize_file_whitespace",
+        "positional": [
+          "path"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "fix_whitespace": {
+        "name": "fix_whitespace",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "run_black": {
+        "name": "run_black",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "run_isort": {
+        "name": "run_isort",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "run_ruff": {
+        "name": "run_ruff",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "resolve_pytest_targets": {
+        "name": "resolve_pytest_targets",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "run_pytest": {
+        "name": "run_pytest",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "read_block": {
+        "name": "read_block",
+        "positional": [
+          "lines",
+          "start_index"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "process": {
+        "name": "process",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "safe_mode": {
+    "classes": {
+      "SafeModeStatus": {
+        "methods": {}
+      },
+      "ErrorRecord": {
+        "methods": {}
+      },
+      "SafeModeState": {
+        "methods": {}
+      },
+      "SafeModeManager": {
+        "methods": {
+          "is_safe_mode_active": {
+            "name": "is_safe_mode_active",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "consecutive_errors": {
+            "name": "consecutive_errors",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "threshold": {
+            "name": "threshold",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_callback": {
+            "name": "register_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "report_error": {
+            "name": "report_error",
+            "positional": [
+              "self",
+              "error_type",
+              "message",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "report_success": {
+            "name": "report_success",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_status_info": {
+            "name": "get_status_info",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_safe_mode_manager": {
+        "name": "get_safe_mode_manager",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "is_safe_mode_active": {
+        "name": "is_safe_mode_active",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "reset_safe_mode": {
+        "name": "reset_safe_mode",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "safety_logger": {
+    "classes": {
+      "SafetyEventType": {
+        "methods": {}
+      },
+      "SafetyLogger": {
+        "methods": {
+          "log_event": {
+            "name": "log_event",
+            "positional": [
+              "self",
+              "event_type",
+              "message",
+              "details"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_mixed_dutching_error": {
+            "name": "log_mixed_dutching_error",
+            "positional": [
+              "self",
+              "error_message",
+              "market_id",
+              "stake",
+              "selections_count"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_ai_blocked": {
+            "name": "log_ai_blocked",
+            "positional": [
+              "self",
+              "market_type",
+              "market_id",
+              "reason"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_auto_green_denied": {
+            "name": "log_auto_green_denied",
+            "positional": [
+              "self",
+              "reason",
+              "order_id",
+              "market_status",
+              "elapsed_seconds"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_safe_mode_triggered": {
+            "name": "log_safe_mode_triggered",
+            "positional": [
+              "self",
+              "consecutive_errors",
+              "last_error"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_profit_validation_failed": {
+            "name": "log_profit_validation_failed",
+            "positional": [
+              "self",
+              "variance",
+              "threshold",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_market_validation_failed": {
+            "name": "log_market_validation_failed",
+            "positional": [
+              "self",
+              "market_type",
+              "market_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_liquidity_block": {
+            "name": "log_liquidity_block",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "runner_name",
+              "stake",
+              "available_liquidity",
+              "required_liquidity",
+              "side",
+              "reason",
+              "simulation"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "log_liquidity_warning": {
+            "name": "log_liquidity_warning",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "runner_name",
+              "stake",
+              "available_liquidity",
+              "required_liquidity",
+              "side",
+              "simulation"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_log_path": {
+            "name": "get_log_path",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "LiquidityStatus": {
+        "methods": {}
+      }
+    },
+    "functions": {
+      "get_safety_logger": {
+        "name": "get_safety_logger",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "evaluate_runner_liquidity": {
+        "name": "evaluate_runner_liquidity",
+        "positional": [
+          "stake",
+          "available_liquidity",
+          "side",
+          "price",
+          "multiplier",
+          "min_absolute",
+          "warning_only"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "shutdown_manager": {
+    "classes": {
+      "ShutdownManager": {
+        "methods": {
+          "register": {
+            "name": "register",
+            "positional": [
+              "self",
+              "name",
+              "fn",
+              "priority"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "shutdown": {
+            "name": "shutdown",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "simulation_broker": {
+    "classes": {
+      "SimulatedOrder": {
+        "methods": {
+          "size_matched": {
+            "name": "size_matched",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "size_remaining": {
+            "name": "size_remaining",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "SimulationBroker": {
+        "methods": {
+          "place_order": {
+            "name": "place_order",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "side",
+              "price",
+              "size",
+              "runner_name",
+              "price_ladder",
+              "partial_match_pct"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "place_order_with_slippage": {
+            "name": "place_order_with_slippage",
+            "positional": [
+              "self",
+              "market_id",
+              "selection_id",
+              "side",
+              "price",
+              "size",
+              "price_ladder",
+              "runner_name"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "cancel_order": {
+            "name": "cancel_order",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "list_bets": {
+            "name": "list_bets",
+            "positional": [
+              "self",
+              "market_id",
+              "status"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_order": {
+            "name": "get_order",
+            "positional": [
+              "self",
+              "bet_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_balance": {
+            "name": "get_balance",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_pnl": {
+            "name": "get_pnl",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "settle_market": {
+            "name": "settle_market",
+            "positional": [
+              "self",
+              "market_id",
+              "winner_selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "BookOptimizer": {
+        "methods": {
+          "calculate_book": {
+            "name": "calculate_book",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "optimize": {
+            "name": "optimize",
+            "positional": [
+              "self",
+              "selections",
+              "target_book"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_status": {
+            "name": "get_status",
+            "positional": [
+              "self",
+              "book_value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "validate_stakes": {
+            "name": "validate_stakes",
+            "positional": [
+              "self",
+              "selections"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "TickReplayEngine": {
+        "methods": {
+          "load_ticks": {
+            "name": "load_ticks",
+            "positional": [
+              "self",
+              "ticks"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "next_tick": {
+            "name": "next_tick",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "play": {
+            "name": "play",
+            "positional": [
+              "self",
+              "speed"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "pause": {
+            "name": "pause",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "progress": {
+            "name": "progress",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "apply_slippage": {
+        "name": "apply_slippage",
+        "positional": [
+          "price_ladder",
+          "requested_size",
+          "side"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "simulation_speed": {
+    "classes": {
+      "SimulationSpeed": {
+        "methods": {}
+      },
+      "SpeedProfile": {
+        "methods": {}
+      },
+      "SimulationSpeedController": {
+        "methods": {
+          "is_simulation": {
+            "name": "is_simulation",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "speed": {
+            "name": "speed",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "profile": {
+            "name": "profile",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "ui_interval": {
+            "name": "ui_interval",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "automation_interval": {
+            "name": "automation_interval",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "should_process_tick": {
+            "name": "should_process_tick",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "should_process_tick_for_storage": {
+            "name": "should_process_tick_for_storage",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "should_process_tick_for_automation": {
+            "name": "should_process_tick_for_automation",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "calculate_time_compression": {
+            "name": "calculate_time_compression",
+            "positional": [
+              "self",
+              "real_duration"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "sleep_compressed": {
+            "name": "sleep_compressed",
+            "positional": [
+              "self",
+              "duration"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_available_speeds": {
+            "name": "get_available_speeds",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_stats": {
+            "name": "reset_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_speed_controller": {
+        "name": "get_speed_controller",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "is_simulation_mode": {
+        "name": "is_simulation_mode",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "set_simulation_mode": {
+        "name": "set_simulation_mode",
+        "positional": [
+          "enabled",
+          "speed"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "telegram_listener": {
+    "classes": {
+      "TelegramListener": {
+        "methods": {
+          "set_signal_patterns": {
+            "name": "set_signal_patterns",
+            "positional": [
+              "self",
+              "patterns"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_database": {
+            "name": "set_database",
+            "positional": [
+              "self",
+              "db"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reload_custom_patterns": {
+            "name": "reload_custom_patterns",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_monitored_chats": {
+            "name": "set_monitored_chats",
+            "positional": [
+              "self",
+              "chat_ids"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_callbacks": {
+            "name": "set_callbacks",
+            "positional": [
+              "self",
+              "on_signal",
+              "on_message",
+              "on_status"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "parse_signal": {
+            "name": "parse_signal",
+            "positional": [
+              "self",
+              "text"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "start": {
+            "name": "start",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop": {
+            "name": "stop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_session_string": {
+            "name": "get_session_string",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "request_code": {
+            "name": "request_code",
+            "positional": [
+              "self",
+              "phone"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "sign_in": {
+            "name": "sign_in",
+            "positional": [
+              "self",
+              "phone",
+              "code",
+              "password"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "SignalQueue": {
+        "methods": {
+          "add": {
+            "name": "add",
+            "positional": [
+              "self",
+              "signal"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_pending": {
+            "name": "get_pending",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "remove": {
+            "name": "remove",
+            "positional": [
+              "self",
+              "signal"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "parse_signal_message": {
+        "name": "parse_signal_message",
+        "positional": [
+          "message"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "telegram_sender": {
+    "classes": {
+      "SendResult": {
+        "methods": {}
+      },
+      "QueuedMessage": {
+        "methods": {}
+      },
+      "AdaptiveRateLimiter": {
+        "methods": {
+          "wait_if_needed_async": {
+            "name": "wait_if_needed_async",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_success": {
+            "name": "record_success",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_failure": {
+            "name": "record_failure",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_flood_wait": {
+            "name": "record_flood_wait",
+            "positional": [
+              "self",
+              "wait_seconds"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "TelegramSender": {
+        "methods": {
+          "send_message": {
+            "name": "send_message",
+            "positional": [
+              "self",
+              "chat_id",
+              "text",
+              "max_retries",
+              "message_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "send_message_sync": {
+            "name": "send_message_sync",
+            "positional": [
+              "self",
+              "chat_id",
+              "text",
+              "max_retries",
+              "message_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "queue_message": {
+            "name": "queue_message",
+            "positional": [
+              "self",
+              "chat_id",
+              "text",
+              "max_retries",
+              "callback",
+              "message_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "queue_default_message": {
+            "name": "queue_default_message",
+            "positional": [
+              "self",
+              "text",
+              "max_retries",
+              "callback",
+              "message_type"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "start_worker": {
+            "name": "start_worker",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop_worker": {
+            "name": "stop_worker",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_queue_size": {
+            "name": "get_queue_size",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_stats": {
+            "name": "reset_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_telegram_sender": {
+        "name": "get_telegram_sender",
+        "positional": [
+          "client",
+          "base_delay",
+          "event_bus",
+          "default_chat_id",
+          "db"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "init_telegram_sender": {
+        "name": "init_telegram_sender",
+        "positional": [
+          "client",
+          "base_delay",
+          "event_bus",
+          "default_chat_id",
+          "db"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "theme": {
+    "classes": {},
+    "functions": {
+      "configure_customtkinter": {
+        "name": "configure_customtkinter",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "get_treeview_style": {
+        "name": "get_treeview_style",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "configure_ttk_dark_theme": {
+        "name": "configure_ttk_dark_theme",
+        "positional": [
+          "style"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "tick_dispatcher": {
+    "classes": {
+      "DispatchMode": {
+        "methods": {}
+      },
+      "TickData": {
+        "methods": {}
+      },
+      "TickDispatcher": {
+        "methods": {
+          "mode": {
+            "name": "mode",
+            "positional": [
+              "self",
+              "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "ui_interval": {
+            "name": "ui_interval",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "automation_interval": {
+            "name": "automation_interval",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_ui_callback": {
+            "name": "register_ui_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_storage_callback": {
+            "name": "register_storage_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "register_automation_callback": {
+            "name": "register_automation_callback",
+            "positional": [
+              "self",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "dispatch_tick": {
+            "name": "dispatch_tick",
+            "positional": [
+              "self",
+              "tick"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset_stats": {
+            "name": "reset_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_tick_dispatcher": {
+        "name": "get_tick_dispatcher",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "tick_storage": {
+    "classes": {
+      "Tick": {
+        "methods": {}
+      },
+      "OHLC": {
+        "methods": {}
+      },
+      "TickStorage": {
+        "methods": {
+          "push_tick": {
+            "name": "push_tick",
+            "positional": [
+              "self",
+              "selection_id",
+              "ltp",
+              "back_price",
+              "lay_price",
+              "back_size",
+              "lay_size",
+              "traded_volume"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_ticks": {
+            "name": "get_ticks",
+            "positional": [
+              "self",
+              "selection_id",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_last_tick": {
+            "name": "get_last_tick",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_ltp_history": {
+            "name": "get_ltp_history",
+            "positional": [
+              "self",
+              "selection_id",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "aggregate_ohlc": {
+            "name": "aggregate_ohlc",
+            "positional": [
+              "self",
+              "selection_id",
+              "interval_sec"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_spread_history": {
+            "name": "get_spread_history",
+            "positional": [
+              "self",
+              "selection_id",
+              "limit"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self",
+              "selection_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "trading_config": {
+    "classes": {},
+    "functions": {}
+  },
+  "tree_manager": {
+    "classes": {
+      "TreeManager": {
+        "methods": {
+          "update_hierarchical": {
+            "name": "update_hierarchical",
+            "positional": [
+              "self",
+              "data",
+              "parent_getter",
+              "id_getter",
+              "text_getter",
+              "values_getter"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_flat": {
+            "name": "update_flat",
+            "positional": [
+              "self",
+              "data",
+              "id_getter",
+              "values_getter",
+              "tags_getter"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "ui": {
+    "classes": {},
+    "functions": {}
+  },
+  "ui.draggable_runner": {
+    "classes": {
+      "DraggableRunner": {
+        "methods": {
+          "update_runner": {
+            "name": "update_runner",
+            "positional": [
+              "self",
+              "runner",
+              "index"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_selected": {
+            "name": "set_selected",
+            "positional": [
+              "self",
+              "selected"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "set_side_indicator": {
+            "name": "set_side_indicator",
+            "positional": [
+              "self",
+              "side"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      },
+      "DraggableRunnerList": {
+        "methods": {
+          "refresh": {
+            "name": "refresh",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "update_runners": {
+            "name": "update_runners",
+            "positional": [
+              "self",
+              "runners"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_order": {
+            "name": "get_order",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "ui.mini_ladder": {
+    "classes": {
+      "MiniLadder": {
+        "methods": {
+          "update_prices": {
+            "name": "update_prices",
+            "positional": [
+              "self",
+              "new_back",
+              "new_lay"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "ui.tabs.telegram_tab_ui": {
+    "classes": {
+      "TelegramTabUI": {
+        "methods": {
+          "build": {
+            "name": "build",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  },
+  "ui.toolbar": {
+    "classes": {
+      "Toolbar": {
+        "methods": {}
+      }
+    },
+    "functions": {}
+  },
+  "ui_optimizer": {
+    "classes": {
+      "WidgetState": {
+        "methods": {}
+      },
+      "UIOptimizer": {
+        "methods": {
+          "should_update": {
+            "name": "should_update",
+            "positional": [
+              "self",
+              "widget",
+              "property_name",
+              "new_value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "configure_if_changed": {
+            "name": "configure_if_changed",
+            "positional": [
+              "self",
+              "widget"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": "kwargs"
+          },
+          "set_if_changed": {
+            "name": "set_if_changed",
+            "positional": [
+              "self",
+              "var",
+              "new_value",
+              "var_id"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "invalidate_widget": {
+            "name": "invalidate_widget",
+            "positional": [
+              "self",
+              "widget"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "clear": {
+            "name": "clear",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "get_stats": {
+            "name": "get_stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {
+      "get_ui_optimizer": {
+        "name": "get_ui_optimizer",
+        "positional": [],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
+      "optimized_configure": {
+        "name": "optimized_configure",
+        "positional": [
+          "widget"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
+      "optimized_set": {
+        "name": "optimized_set",
+        "positional": [
+          "var",
+          "value",
+          "var_id"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      }
+    }
+  },
+  "ui_queue": {
+    "classes": {
+      "UIQueue": {
+        "methods": {
+          "start": {
+            "name": "start",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop": {
+            "name": "stop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "post": {
+            "name": "post",
+            "positional": [
+              "self",
+              "fn"
+            ],
+            "kwonly": [],
+            "vararg": "args",
+            "kwarg": "kwargs"
+          },
+          "stats": {
+            "name": "stats",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
+  }
+}
