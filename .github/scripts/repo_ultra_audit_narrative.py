@@ -54,6 +54,7 @@ PRIORITY_MODULES = [
     "executor_manager.py",
     "auto_updater.py",
     "betfair_client.py",
+    "ui/mini_ladder.py",
 ]
 
 PYTEST_CMD = [sys.executable, "-m", "pytest", "-q"]
@@ -180,10 +181,7 @@ def file_contains(file: str, needle: str) -> bool:
 def check_p0() -> list[dict]:
     checks: list[dict] = []
 
-    if file_equals(
-        "tests/test_executor_manager_parallel.py",
-        "test_executor_manager_shutdown.py",
-    ):
+    if file_equals("tests/test_executor_manager_parallel.py", "test_executor_manager_shutdown.py"):
         checks.append({
             "file": "tests/test_executor_manager_parallel.py",
             "title": "File test corrotto",
@@ -377,6 +375,52 @@ def ast_module_scan(py_files: list[Path]) -> dict:
     }
 
 
+def repo_module_aliases(py_files: list[Path]) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = defaultdict(set)
+
+    for f in py_files:
+        rf = rel(f)
+        no_suffix = rf[:-3] if rf.endswith(".py") else rf
+        dotted = no_suffix.replace("/", ".")
+        parts = no_suffix.split("/")
+
+        aliases[rf].add(rf)
+        aliases[rf].add(no_suffix)
+        aliases[rf].add(dotted)
+
+        if parts[-1] == "__init__":
+            package_no_suffix = "/".join(parts[:-1])
+            if package_no_suffix:
+                aliases[rf].add(package_no_suffix)
+                aliases[rf].add(package_no_suffix.replace("/", "."))
+
+        else:
+            aliases[rf].add(parts[-1])
+            if len(parts) >= 2:
+                aliases[rf].add("/".join(parts[-2:]))
+                aliases[rf].add(".".join(parts[-2:]))
+
+    return aliases
+
+
+def build_module_lookup(py_files: list[Path]) -> tuple[dict[str, str], set[str]]:
+    aliases_by_file = repo_module_aliases(py_files)
+    alias_to_file: dict[str, str] = {}
+    repo_aliases: set[str] = set()
+
+    for rf, aliases in aliases_by_file.items():
+        for alias in aliases:
+            normalized = alias.strip().replace("\\", "/")
+            if not normalized:
+                continue
+            repo_aliases.add(normalized)
+            repo_aliases.add(normalized.replace("/", "."))
+            alias_to_file[normalized] = rf
+            alias_to_file[normalized.replace("/", ".")] = rf
+
+    return alias_to_file, repo_aliases
+
+
 def infer_priority_module_notes(modules: dict[str, dict]) -> list[dict]:
     notes = []
 
@@ -465,6 +509,11 @@ def infer_priority_module_notes(modules: dict[str, dict]) -> list[dict]:
                 msg_parts.append("AutoUpdater presente.")
         elif path == "betfair_client.py":
             msg_parts.append("Modulo da monitorare per eccesso di except nudi e fragilità runtime.")
+        elif path == "ui/mini_ladder.py":
+            if not has_symbol(path, "LiveMiniLadder"):
+                msg_parts.append("LiveMiniLadder non trovato: possibile mismatch con i test UI.")
+            else:
+                msg_parts.append("LiveMiniLadder presente.")
 
         notes.append({
             "file": path,
@@ -474,7 +523,7 @@ def infer_priority_module_notes(modules: dict[str, dict]) -> list[dict]:
     return notes
 
 
-def scan_tests_for_contracts(test_files: list[Path]) -> dict:
+def scan_tests_for_contracts(test_files: list[Path], alias_to_file: dict[str, str]) -> dict:
     imports = []
     constructor_targets = []
     symbol_expectations: Counter[str] = Counter()
@@ -490,14 +539,30 @@ def scan_tests_for_contracts(test_files: list[Path]) -> dict:
         for m in pattern_import.finditer(txt):
             mod = m.group(1).strip()
             names = [x.strip() for x in m.group(2).split(",") if x.strip()]
+
+            normalized_candidates = {
+                mod,
+                mod.replace(".", "/"),
+            }
+
+            repo_target = None
+            for candidate in normalized_candidates:
+                if candidate in alias_to_file:
+                    repo_target = alias_to_file[candidate]
+                    break
+
+            if repo_target is None:
+                continue
+
             for name in names:
                 imports.append({
                     "test_file": rf,
                     "module": mod,
+                    "repo_target_file": repo_target,
                     "symbol": name,
                 })
                 symbol_expectations[name] += 1
-                module_expectations[mod] += 1
+                module_expectations[repo_target] += 1
 
         for m in pattern_ctor.finditer(txt):
             constructor_targets.append({
@@ -520,37 +585,36 @@ def find_contract_mismatches(modules_scan: dict, test_scan: dict) -> list[dict]:
     for item in test_scan["imports"]:
         symbol = item["symbol"]
         module = item["module"]
+        repo_target_file = item["repo_target_file"]
         test_file = item["test_file"]
 
         possible = symbol_to_modules.get(symbol, [])
-
-        normalized_module = module.replace(".", "/")
-        if not normalized_module.endswith(".py"):
-            normalized_module += ".py"
 
         if not possible:
             mismatches.append({
                 "test_file": test_file,
                 "module": module,
+                "repo_target_file": repo_target_file,
                 "symbol": symbol,
                 "kind": "missing_symbol_global",
-                "details": f"Il simbolo {symbol} non è stato trovato in nessun file Python scansionato.",
+                "details": f"Il simbolo {symbol} non è stato trovato in nessun file Python del repo.",
             })
         else:
             possible_norm = {p.replace("\\", "/") for p in possible}
-            if normalized_module not in possible_norm:
+            if repo_target_file not in possible_norm:
                 mismatches.append({
                     "test_file": test_file,
                     "module": module,
+                    "repo_target_file": repo_target_file,
                     "symbol": symbol,
                     "kind": "symbol_module_mismatch",
-                    "details": f"Il simbolo {symbol} esiste, ma non nel modulo atteso dai test. Trovato in: {', '.join(sorted(possible_norm)[:5])}",
+                    "details": f"Il simbolo {symbol} esiste, ma non nel modulo del repo atteso dai test. Trovato in: {', '.join(sorted(possible_norm)[:5])}",
                 })
 
     unique = []
     seen = set()
     for m in mismatches:
-        key = (m["module"], m["symbol"], m["kind"], m["details"])
+        key = (m["module"], m["repo_target_file"], m["symbol"], m["kind"], m["details"])
         if key in seen:
             continue
         seen.add(key)
@@ -570,11 +634,9 @@ def build_fragility_ranking(smells: dict, priority_notes: list[dict], contract_m
         score[note["file"]] += 3
 
     for mismatch in contract_mismatches:
-        module = mismatch.get("module", "")
-        normalized = module.replace(".", "/")
-        if not normalized.endswith(".py"):
-            normalized += ".py"
-        score[normalized] += 4
+        repo_target_file = mismatch.get("repo_target_file")
+        if repo_target_file:
+            score[repo_target_file] += 4
 
     ranked = [{"file": f, "score": s} for f, s in score.most_common(25)]
     return ranked
@@ -606,7 +668,7 @@ def build_report(
     report.append("- ispezione dei file più critici e dei file che rompono i test")
     report.append("- lettura dei log di collection per identificare import rotti, simboli mancanti e contratti spezzati")
     report.append("- scansione classi, funzioni, metodi e import dei file Python")
-    report.append("- confronto tra ciò che i test importano e ciò che il codice esporta realmente\n")
+    report.append("- confronto tra ciò che i test importano dal repo e ciò che il codice esporta realmente\n")
 
     report.append("Verdetto ultra sintetico\n")
     report.append("Il repo compila, ma non è coerente come contratto pubblico.")
@@ -660,12 +722,13 @@ def build_report(
         for item in contract_mismatches[:25]:
             report.append(f"- test: {item['test_file']}")
             report.append(f"  modulo atteso: {item['module']}")
+            report.append(f"  file repo atteso: {item['repo_target_file']}")
             report.append(f"  simbolo: {item['symbol']}")
             report.append(f"  tipo: {item['kind']}")
             report.append(f"  dettaglio: {item['details']}")
             report.append("")
     else:
-        report.append("- nessun mismatch evidente tra import test e simboli scansionati")
+        report.append("- nessun mismatch evidente tra import dei test verso moduli del repo e simboli scansionati")
         report.append("")
 
     report.append("Top moduli fragili secondo la scansione\n")
@@ -693,7 +756,7 @@ def build_report(
     report.append("Verdettissimo finale\n")
     report.append("Il repository non è monco globalmente.")
     report.append("La base è sana a livello sintattico, ma il contratto interno tra moduli e test non è ancora stabile.")
-    report.append("Questo report è costruito su evidenze reali di compile, pytest, collection diagnostics, export scan e test→code contract scan.")
+    report.append("Questo report è costruito su evidenze reali di compile, pytest, collection diagnostics, export scan e test→code contract scan filtrato sui moduli reali del repo.")
     report.append("Quando i collection errors scendono, lo stesso workflow inizierà a esporre anche i fail funzionali ricchi, non solo i blocchi iniziali.\n")
 
     return "\n".join(report)
@@ -720,7 +783,9 @@ def main() -> int:
     diagnostics = extract_collection_diagnostics(out1 + "\n" + out2)
     modules_scan = ast_module_scan(py)
     priority_notes = infer_priority_module_notes(modules_scan["modules"])
-    test_scan = scan_tests_for_contracts(test_files)
+
+    alias_to_file, _ = build_module_lookup(py)
+    test_scan = scan_tests_for_contracts(test_files, alias_to_file)
     contract_mismatches = find_contract_mismatches(modules_scan, test_scan)
     fragility_ranking = build_fragility_ranking(smells, priority_notes, contract_mismatches)
 
