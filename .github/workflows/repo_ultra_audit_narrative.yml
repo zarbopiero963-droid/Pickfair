@@ -45,22 +45,37 @@ jobs:
           mkdir -p audit_out
           mkdir -p audit_raw
 
-      - name: Run Ultra Audit Narrative
-        env:
-          GITHUB_BEFORE: ${{ github.event.before }}
-          GITHUB_SHA_NOW: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
+      - name: Run deterministic repo audit
         run: |
           python .github/scripts/repo_ultra_audit_narrative.py
+        continue-on-error: true
 
-      - name: Print Narrative Report
+      - name: Run AI reasoning layer
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_TRIAGE: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+        run: |
+          python .github/scripts/ai_reasoning_layer.py
+        continue-on-error: true
+
+      - name: Print deterministic report
         if: always()
         run: |
           echo ""
-          echo "================ ULTRA AUDIT REPORT ================"
+          echo "================ DETERMINISTIC AUDIT REPORT ================"
           cat audit_out/repo_ultra_audit_narrative.md || true
-          echo "===================================================="
+          echo "============================================================"
+          echo ""
+
+      - name: Print AI root cause
+        if: always()
+        run: |
+          echo ""
+          echo "================ AI ROOT CAUSE REPORT ======================="
+          cat audit_out/root_cause.md || true
+          echo "============================================================"
           echo ""
 
       - name: Upload artifacts
