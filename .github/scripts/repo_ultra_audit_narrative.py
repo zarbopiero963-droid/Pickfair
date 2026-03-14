@@ -16,27 +16,55 @@ RAW.mkdir(exist_ok=True)
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
-    return p.returncode, p.stdout + "\n" + p.stderr
+    return p.returncode, (p.stdout or "") + "\n" + (p.stderr or "")
 
 
 def write(path, text):
     path.write_text(text, encoding="utf8")
 
 
+def read(path):
+    try:
+        return path.read_text(encoding="utf8", errors="ignore")
+    except:
+        return ""
+
+
 def count_files():
     py = []
     other = []
+
+    skip = {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "node_modules",
+        "dist",
+        "build",
+    }
+
     for p in ROOT.rglob("*"):
-        if p.is_file():
-            if p.suffix == ".py":
-                py.append(p)
-            else:
-                other.append(p)
-    return py, other
+        if not p.is_file():
+            continue
+
+        if any(s in p.parts for s in skip):
+            continue
+
+        if p.suffix == ".py":
+            py.append(p)
+        else:
+            other.append(p)
+
+    return sorted(py), sorted(other)
 
 
 def compile_code():
     ok = compileall.compile_dir(".", quiet=1)
+    write(RAW / "compileall.log", f"compileall: {'OK' if ok else 'FAIL'}\n")
     return ok
 
 
@@ -46,32 +74,51 @@ def pytest_run(name):
     return code, out
 
 
+def install_extra():
+    run([sys.executable, "-m", "pip", "install", "telethon", "requests", "customtkinter"])
+
+
 def parse_pytest(text):
-    passed = re.search(r"(\d+) passed", text)
-    failed = re.search(r"(\d+) failed", text)
-    errors = re.search(r"(\d+) errors?", text)
-    collection = re.search(r"(\d+) errors? during collection", text)
+
+    passed = re.search(r"(\d+)\s+passed", text)
+    failed = re.search(r"(\d+)\s+failed", text)
+    errors = re.search(r"(\d+)\s+errors?", text)
+    coll = re.search(r"(\d+)\s+errors?\s+during\s+collection", text)
+
+    collecting = re.findall(r"ERROR collecting .*", text)
 
     return {
         "passed": int(passed.group(1)) if passed else 0,
         "failed": int(failed.group(1)) if failed else 0,
         "errors": int(errors.group(1)) if errors else 0,
-        "collection_errors": int(collection.group(1)) if collection else 0,
+        "collection_errors": int(coll.group(1)) if coll else len(collecting),
+        "collecting_lines": collecting
     }
+
+
+def exists_symbol(file, symbol):
+    p = ROOT / file
+    if not p.exists():
+        return False
+    txt = read(p)
+    return symbol in txt
+
+
+def file_equals(file, value):
+    p = ROOT / file
+    if not p.exists():
+        return False
+    return read(p).strip() == value.strip()
 
 
 def check_p0():
 
     checks = []
 
-    def exists_symbol(file, symbol):
-        p = ROOT / file
-        if not p.exists():
-            return False
-        txt = p.read_text(errors="ignore")
-        return symbol in txt
-
-    if exists_symbol("tests/test_executor_manager_parallel.py", "test_executor_manager_shutdown.py"):
+    if file_equals(
+        "tests/test_executor_manager_parallel.py",
+        "test_executor_manager_shutdown.py"
+    ):
         checks.append("tests/test_executor_manager_parallel.py corrotto")
 
     if not exists_symbol("executor_manager.py", "ExecutorManager"):
@@ -84,13 +131,15 @@ def check_p0():
         checks.append("SYSTEM_PAYLOAD mancante")
 
     snap = ROOT / "guardrails/public_api_snapshot.json"
-    if not snap.exists() or snap.read_text().strip() == "{}":
+
+    if not snap.exists() or read(snap).strip() == "{}":
         checks.append("public_api_snapshot.json vuoto")
 
     return checks
 
 
 def git_diff():
+
     before = os.getenv("GITHUB_BEFORE")
     after = os.getenv("GITHUB_SHA_NOW")
 
@@ -98,17 +147,19 @@ def git_diff():
         return []
 
     code, out = run(["git", "diff", "--name-only", before, after])
+
     return out.splitlines()
 
 
 def smell_scan(files):
 
     excepts = []
-    prints = []
     bare = []
+    prints = []
 
     for f in files:
-        txt = f.read_text(errors="ignore")
+
+        txt = read(f)
 
         if "except Exception:" in txt:
             excepts.append(str(f))
@@ -135,10 +186,7 @@ def build_report(py, non_py, compile_ok, pytest1, pytest2, p0, changed, smells):
     report.append("- pytest seconda passata dopo install dipendenze\n")
 
     report.append("Verdetto ultra sintetico\n")
-
-    report.append(
-        "Il repo compila ma non è coerente come contratto pubblico.\n"
-    )
+    report.append("Il repo compila ma non è coerente come contratto pubblico.\n")
 
     report.append("Stato reale misurato\n")
 
@@ -168,6 +216,7 @@ def build_report(py, non_py, compile_ok, pytest1, pytest2, p0, changed, smells):
     excepts, bare, prints = smells
 
     report.append("\nSmells rilevati\n")
+
     report.append(f"except Exception: {len(excepts)} file")
     report.append(f"bare except: {len(bare)} file")
     report.append(f"print(): {len(prints)} file")
@@ -181,12 +230,12 @@ def main():
 
     compile_ok = compile_code()
 
-    c1, out1 = pytest_run("pytest1")
+    _, out1 = pytest_run("pytest1")
     p1 = parse_pytest(out1)
 
-    run(["pip", "install", "telethon", "requests", "customtkinter"])
+    install_extra()
 
-    c2, out2 = pytest_run("pytest2")
+    _, out2 = pytest_run("pytest2")
     p2 = parse_pytest(out2)
 
     p0 = check_p0()
@@ -206,7 +255,7 @@ def main():
         "pytest1": p1,
         "pytest2": p2,
         "p0": p0,
-        "changed_files": changed,
+        "changed_files": changed
     }
 
     write(OUT / "repo_ultra_audit.json", json.dumps(data, indent=2))
@@ -215,10 +264,10 @@ def main():
     print(report)
     print("\n==============================\n")
 
-    # ===== EXIT CODE CONTROL =====
+    p0_open = len(p0)
 
     exit_code = 0
-    if p0:
+    if p0_open:
         exit_code = 2
     elif not compile_ok:
         exit_code = 3
