@@ -55,6 +55,7 @@ jobs:
           test -f .github/scripts/workflow_signal_aggregator.py
           test -f .github/scripts/patch_candidate_generator.py
           test -f .github/scripts/patch_verifier.py
+          test -f .github/scripts/apply_patch_candidate.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -72,7 +73,7 @@ jobs:
           ls -R audit_raw || true
           echo "============================================"
 
-      - name: Show deterministic report
+      - name: Show deterministic report file
         if: always()
         shell: bash
         run: |
@@ -111,6 +112,20 @@ jobs:
           if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
             cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
           fi
+
+      - name: Show AI governance context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI GOVERNANCE CONTEXT ====================="
+          if [ -f audit_raw/ai_governance_context.md ]; then
+            head -c 4000 audit_raw/ai_governance_context.md || true
+            echo ""
+          else
+            echo "ai_governance_context.md not found"
+          fi
+          echo "============================================================"
 
       - name: Run AI reasoning layer
         if: always()
@@ -237,6 +252,26 @@ jobs:
             echo "patch_verification.md not found"
           fi
           echo "============================================================"
+
+      - name: Apply approved patch candidate
+        if: always()
+        run: |
+          python .github/scripts/apply_patch_candidate.py
+        continue-on-error: true
+
+      - name: Show patch apply report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PATCH APPLY REPORT ========================"
+          if [ -f audit_out/patch_apply_report.md ]; then
+            cat audit_out/patch_apply_report.md
+          else
+            echo "patch_apply_report.md not found"
+          fi
+          echo "============================================================"
+          echo ""
 
       - name: Upload artifacts
         if: always()
