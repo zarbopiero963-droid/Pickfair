@@ -50,6 +50,7 @@
     "docs/FAILURE_MODES.md",
     "docs/PAYLOAD_CONTRACTS.md",
     "docs/PERFORMANCE_TARGETS.md",
+    "docs/REPO_RADIOGRAPHY.md",
     "docs/TESTING_STRATEGY.md",
     "dutching.py",
     "dutching_cache.py",
