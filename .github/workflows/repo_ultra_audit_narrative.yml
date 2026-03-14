@@ -52,6 +52,8 @@ jobs:
           test -f .github/scripts/build_priority_fix_order.py
           test -f .github/scripts/build_fix_context.py
           test -f .github/scripts/openrouter_model_router.py
+          test -f .github/scripts/workflow_signal_aggregator.py
+          test -f .github/scripts/patch_candidate_generator.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -222,6 +224,53 @@ jobs:
             cat audit_out/fix_context.json
           else
             echo "fix_context.json not found"
+          fi
+          echo "============================================================"
+          echo ""
+
+      - name: Build global workflow context
+        if: always()
+        run: |
+          python .github/scripts/workflow_signal_aggregator.py
+        continue-on-error: true
+
+      - name: Show global workflow context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ GLOBAL WORKFLOW CONTEXT ==================="
+          if [ -f audit_out/global_workflow_context.md ]; then
+            cat audit_out/global_workflow_context.md
+          else
+            echo "global_workflow_context.md not found"
+          fi
+          echo "============================================================"
+          echo ""
+
+      - name: Generate patch candidate
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
+          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
+        run: |
+          python .github/scripts/patch_candidate_generator.py
+        continue-on-error: true
+
+      - name: Show patch candidate
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PATCH CANDIDATE ==========================="
+          if [ -f audit_out/patch_candidate.md ]; then
+            cat audit_out/patch_candidate.md
+          else
+            echo "patch_candidate.md not found"
           fi
           echo "============================================================"
           echo ""
