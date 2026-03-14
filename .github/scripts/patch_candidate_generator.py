@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import re
 from pathlib import Path
 
 from openrouter_model_router import call_openrouter
@@ -41,7 +42,6 @@ def load_target_context() -> dict:
     if not fix_contexts:
         return {}
 
-    # prende il primo P0 come candidato iniziale
     target = None
     for item in fix_contexts:
         if item.get("priority") == "P0":
@@ -77,6 +77,7 @@ def load_target_context() -> dict:
 
 def build_messages(ctx: dict) -> list[dict]:
     target = ctx["target"]
+
     system_prompt = """
 You are a conservative Python patch generator working on the Pickfair repository.
 
@@ -122,12 +123,11 @@ Return STRICT JSON with this schema:
 
 def parse_json_content(content: str) -> dict:
     content = content.strip()
+
     try:
         return json.loads(content)
     except Exception:
         pass
-
-    import re
 
     fence_match = re.search(r"```json\s*(.*?)\s*```", content, re.S)
     if fence_match:
@@ -147,7 +147,7 @@ def parse_json_content(content: str) -> dict:
 
 
 def render_patch_candidate_md(data: dict, model_used: str) -> str:
-    lines = []
+    lines: list[str] = []
     lines.append("Patch Candidate")
     lines.append("")
     lines.append(f"Model used: {model_used}")
@@ -191,6 +191,7 @@ def fallback_patch(ctx: dict) -> dict:
 
 def main() -> int:
     ctx = load_target_context()
+
     if not ctx:
         data = {
             "summary": "Nessun fix context disponibile.",
@@ -201,7 +202,10 @@ def main() -> int:
             "risk": "unknown",
         }
         write_json(AUDIT_OUT / "patch_candidate.json", data)
-        write_text(AUDIT_OUT / "patch_candidate.md", render_patch_candidate_md(data, "no-context"))
+        write_text(
+            AUDIT_OUT / "patch_candidate.md",
+            render_patch_candidate_md(data, "no-context"),
+        )
         print("Nessun fix context disponibile.")
         return 0
 
@@ -209,8 +213,9 @@ def main() -> int:
         messages = build_messages(ctx)
         resp = call_openrouter(
             task_type="patch",
-            messages=messages
+            messages=messages,
         )
+
         content = resp["content"]
         model_used = resp["model_used"]
         raw = resp.get("raw", {})
@@ -219,7 +224,10 @@ def main() -> int:
 
         write_json(AUDIT_OUT / "patch_candidate_raw_response.json", raw)
         write_json(AUDIT_OUT / "patch_candidate.json", parsed)
-        write_text(AUDIT_OUT / "patch_candidate.md", render_patch_candidate_md(parsed, model_used))
+        write_text(
+            AUDIT_OUT / "patch_candidate.md",
+            render_patch_candidate_md(parsed, model_used),
+        )
 
         print(f"Patch candidate generator completato. Model used: {model_used}")
         return 0
@@ -228,7 +236,10 @@ def main() -> int:
         data = fallback_patch(ctx)
         model_used = f"fallback-local-error-{type(exc).__name__}"
         write_json(AUDIT_OUT / "patch_candidate.json", data)
-        write_text(AUDIT_OUT / "patch_candidate.md", render_patch_candidate_md(data, model_used))
+        write_text(
+            AUDIT_OUT / "patch_candidate.md",
+            render_patch_candidate_md(data, model_used),
+        )
         print(f"Patch candidate generator fallito: {exc}")
         return 0
 
