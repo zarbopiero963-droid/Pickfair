@@ -46,6 +46,7 @@
     "database.py",
     "devops_engine_test/test_engine.txt",
     "devops_update.txt",
+    "docs/AI_RULEBOOK.md",
     "docs/ARCHITECTURE.md",
     "docs/FAILURE_MODES.md",
     "docs/PAYLOAD_CONTRACTS.md",
