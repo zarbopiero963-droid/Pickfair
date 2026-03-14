@@ -41,28 +41,33 @@ def load_context() -> dict:
     global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
     patch_apply_report = read_json(AUDIT_OUT / "patch_apply_report.json")
 
-    target_file = patch_candidate.get("target_file", "").strip()
-    target_path = ROOT / target_file if target_file else None
+    target_files = patch_candidate.get("target_files", []) or []
 
-    related_fix_context = None
+    related_fix_contexts = []
     for item in fix_context.get("fix_contexts", []):
-        if item.get("target_file") == target_file:
-            related_fix_context = item
-            break
+        target_file = str(item.get("target_file", "")).strip()
+        if target_file in target_files:
+            related_fix_contexts.append(item)
 
-    target_file_text = read_text(target_path)[:30000] if target_path and target_path.exists() else ""
+    target_file_texts_after_apply = {}
+    for target_file in target_files:
+        target_path = ROOT / target_file
+        if target_path.exists():
+            target_file_texts_after_apply[target_file] = read_text(target_path)[:30000]
+        else:
+            target_file_texts_after_apply[target_file] = ""
 
     return {
         "patch_candidate": patch_candidate,
         "patch_verification": patch_verification,
         "patch_apply_report": patch_apply_report,
-        "related_fix_context": related_fix_context or {},
+        "related_fix_contexts": related_fix_contexts,
         "global_context": {
             "pytest_signals": global_context.get("pytest_signals", [])[:20],
             "ai_root_causes": global_context.get("ai_root_causes", [])[:10],
             "contracts": global_context.get("contracts", [])[:20],
         },
-        "target_file_text_after_apply": target_file_text,
+        "target_file_texts_after_apply": target_file_texts_after_apply,
     }
 
 
@@ -70,16 +75,16 @@ def build_messages(ctx: dict) -> list[dict]:
     system_prompt = """
 You are a senior Python post-patch reviewer working on the Pickfair repository.
 
-Your task is to decide whether the already-applied patch is strong enough to justify creating a PR.
+Your task is to decide whether the already-applied multi-file patch is strong enough to justify creating a PR.
 
 Be conservative.
 Prefer "review" over "approve" whenever evidence is incomplete.
 Use "approve" ONLY if all of the following appear true from the provided evidence:
-1. The required contract or symbol appears restored.
-2. The change is minimal and localized.
+1. The required contracts or symbols appear restored across the patch set.
+2. The changes are minimal and localized.
 3. The existing logic appears preserved.
 4. The patch verifier was positive and consistent.
-5. The applied file content reflects the intended fix.
+5. The applied file contents reflect the intended fixes.
 
 If any of those are uncertain, use "review".
 If the patch appears wrong, incomplete, unrelated, or risky, use "reject".
@@ -97,13 +102,13 @@ Return STRICT JSON with this schema:
 """.strip()
 
     user_payload = {
-        "task": "Review the applied patch result and determine whether it is strong enough to open a PR.",
+        "task": "Review the applied coordinated multi-file patch result and determine whether it is strong enough to open a PR.",
         "patch_candidate": ctx["patch_candidate"],
         "patch_verification": ctx["patch_verification"],
         "patch_apply_report": ctx["patch_apply_report"],
-        "related_fix_context": ctx["related_fix_context"],
+        "related_fix_contexts": ctx["related_fix_contexts"],
         "global_context": ctx["global_context"],
-        "target_file_text_after_apply": ctx["target_file_text_after_apply"],
+        "target_file_texts_after_apply": ctx["target_file_texts_after_apply"],
     }
 
     return [
@@ -146,7 +151,7 @@ def parse_json_content(content: str) -> dict:
     }
 
 
-def normalize_review(data: dict) -> dict:
+def normalize_review(data: dict, ctx: dict) -> dict:
     contract_restored = bool(data.get("contract_restored", False))
     minimal_change = bool(data.get("minimal_change", False))
     logic_preserved = bool(data.get("logic_preserved", False))
@@ -164,23 +169,25 @@ def normalize_review(data: dict) -> dict:
     if confidence not in {"low", "medium", "high"}:
         confidence = "low"
 
-    # Gate ultra-rigido:
-    # approve solo se tutte le condizioni sono vere.
-    if final_verdict == "approve":
-        if not (contract_restored and minimal_change and logic_preserved and verifier_consistent):
-            final_verdict = "review"
-            notes.append("Approve downgraded to review because the evidence was not strong enough on all required dimensions.")
+    apply_report = ctx.get("patch_apply_report", {})
+    applied = bool(apply_report.get("applied", False))
 
-    # Se non è ripristinato il contratto, reject.
+    if not applied:
+        final_verdict = "reject"
+        if "The coordinated patch was not fully applied." not in notes:
+            notes.append("The coordinated patch was not fully applied.")
+
+    if final_verdict == "approve":
+        if not (contract_restored and minimal_change and logic_preserved and verifier_consistent and applied):
+            final_verdict = "review"
+            notes.append(
+                "Approve downgraded to review because the evidence was not strong enough on all required dimensions."
+            )
+
     if not contract_restored:
         final_verdict = "reject"
-        if "Required contract or symbol does not appear restored." not in notes:
-            notes.append("Required contract or symbol does not appear restored.")
-
-    # Se la patch non è coerente col verifier, almeno review.
-    if final_verdict == "approve" and not verifier_consistent:
-        final_verdict = "review"
-        notes.append("Approve downgraded because the result was not clearly consistent with the verifier.")
+        if "Required contracts or symbols do not appear restored." not in notes:
+            notes.append("Required contracts or symbols do not appear restored.")
 
     return {
         "contract_restored": contract_restored,
@@ -227,13 +234,9 @@ def fallback_review(ctx: dict) -> dict:
 
     verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower()
     applied = bool(patch_apply_report.get("applied", False))
-    target_file = patch_candidate.get("target_file", "")
+    target_files = patch_candidate.get("target_files", []) or []
 
-    if verifier_verdict == "approve" and applied:
-        final_verdict = "review"
-    elif verifier_verdict == "weak-approve" and applied:
-        final_verdict = "review"
-    elif verifier_verdict == "reject":
+    if verifier_verdict == "reject" or not applied:
         final_verdict = "reject"
     else:
         final_verdict = "review"
@@ -247,7 +250,7 @@ def fallback_review(ctx: dict) -> dict:
         "confidence": "low",
         "notes": [
             "Fallback locale usato perché il post patch review AI non era disponibile.",
-            f"Patch target: {target_file}",
+            f"Patch targets: {target_files}",
             f"Verifier precedente: {verifier_verdict or 'unknown'}",
             f"Patch applied: {applied}",
             "Fallback non concede mai approve automatico; al massimo review.",
@@ -286,7 +289,7 @@ def main() -> int:
         raw = resp.get("raw", {})
 
         parsed = parse_json_content(content)
-        normalized = normalize_review(parsed)
+        normalized = normalize_review(parsed, ctx)
 
         write_json(AUDIT_OUT / "post_patch_review_raw_response.json", raw)
         write_json(AUDIT_OUT / "post_patch_review.json", normalized)
