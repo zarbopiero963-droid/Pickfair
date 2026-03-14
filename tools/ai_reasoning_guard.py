@@ -115,11 +115,31 @@ def _default_probe_defs() -> List[Dict[str, str]]:
     ]
 
 
+def _build_impact_analysis(files: List[str]) -> Dict[str, Any]:
+    normalized = [str(f) for f in files]
+    impacted_modules = []
+
+    for item in normalized:
+        if item.endswith(".py"):
+            mod = item[:-3].replace("/", ".").replace("\\", ".")
+            if mod.endswith(".__init__"):
+                mod = mod[:-9]
+            impacted_modules.append(mod)
+
+    return {
+        "changed_files": normalized,
+        "changed_modules": impacted_modules,
+        "impacted_modules": impacted_modules,
+        "summary": f"{len(normalized)} files analyzed",
+    }
+
+
 def run_guard(files=None):
     if files is None:
         files = []
 
     files = [str(f) for f in files]
+    impact_analysis = _build_impact_analysis(files)
 
     api_url = _env("AI_REASONING_GUARD_URL")
     api_key = _env("AI_REASONING_GUARD_API_KEY")
@@ -137,6 +157,7 @@ def run_guard(files=None):
             "mode": "offline",
             "files_checked": files,
             "issues": [],
+            "impact_analysis": impact_analysis,
             "message": "offline pass",
         }
         report["artifact"] = _write_artifact("ai_reasoning_guard.json", report)
@@ -162,6 +183,7 @@ def run_guard(files=None):
         "files_checked": files,
         "status_code": resp.get("status_code"),
         "issues": [] if ok else ["remote_guard_failed"],
+        "impact_analysis": impact_analysis,
         "message": str(resp.get("text", ""))[:500],
     }
     report["artifact"] = _write_artifact("ai_reasoning_guard.json", report)
