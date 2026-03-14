@@ -54,6 +54,7 @@ jobs:
           test -f .github/scripts/openrouter_model_router.py
           test -f .github/scripts/workflow_signal_aggregator.py
           test -f .github/scripts/patch_candidate_generator.py
+          test -f .github/scripts/patch_verifier.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -71,7 +72,7 @@ jobs:
           ls -R audit_raw || true
           echo "============================================"
 
-      - name: Show deterministic report file
+      - name: Show deterministic report
         if: always()
         shell: bash
         run: |
@@ -83,7 +84,6 @@ jobs:
             echo "repo_ultra_audit_narrative.md not found"
           fi
           echo "============================================================"
-          echo ""
 
       - name: Show deterministic machine file
         if: always()
@@ -97,41 +97,20 @@ jobs:
             echo "audit_machine.json not found"
           fi
           echo "============================================================"
-          echo ""
 
       - name: Load AI Governance Docs
         if: always()
         run: |
           mkdir -p audit_raw
 
-          echo "Loading AI governance docs..."
-
           cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
-
           cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
 
           if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
             cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
           fi
-
-          echo "AI governance context prepared."
-
-      - name: Show AI governance context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ AI GOVERNANCE CONTEXT ====================="
-          if [ -f audit_raw/ai_governance_context.md ]; then
-            head -c 4000 audit_raw/ai_governance_context.md || true
-            echo ""
-          else
-            echo "ai_governance_context.md not found"
-          fi
-          echo "============================================================"
-          echo ""
 
       - name: Run AI reasoning layer
         if: always()
@@ -148,45 +127,21 @@ jobs:
 
       - name: Show AI root cause
         if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ AI ROOT CAUSE REPORT ======================"
-          if [ -f audit_out/root_cause.md ]; then
-            cat audit_out/root_cause.md
-          else
-            echo "root_cause.md not found"
-          fi
-          echo "============================================================"
-          echo ""
+          echo "================ ROOT CAUSE ================="
+          cat audit_out/root_cause.md || true
 
       - name: Show AI fix suggestions
         if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ AI FIX SUGGESTIONS ========================"
-          if [ -f audit_out/fix_suggestions.md ]; then
-            cat audit_out/fix_suggestions.md
-          else
-            echo "fix_suggestions.md not found"
-          fi
-          echo "============================================================"
-          echo ""
+          echo "================ FIX SUGGESTIONS ============"
+          cat audit_out/fix_suggestions.md || true
 
       - name: Show AI targeted tests
         if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ AI TARGETED TESTS ========================="
-          if [ -f audit_out/targeted_tests.md ]; then
-            cat audit_out/targeted_tests.md
-          else
-            echo "targeted_tests.md not found"
-          fi
-          echo "============================================================"
-          echo ""
+          echo "================ TARGETED TESTS ============="
+          cat audit_out/targeted_tests.md || true
 
       - name: Build priority fix order
         if: always()
@@ -196,17 +151,9 @@ jobs:
 
       - name: Show priority fix order
         if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ PRIORITY FIX ORDER ========================"
-          if [ -f audit_out/priority_fix_order.md ]; then
-            cat audit_out/priority_fix_order.md
-          else
-            echo "priority_fix_order.md not found"
-          fi
-          echo "============================================================"
-          echo ""
+          echo "================ PRIORITY FIX ORDER ========="
+          cat audit_out/priority_fix_order.md || true
 
       - name: Build fix context
         if: always()
@@ -216,17 +163,9 @@ jobs:
 
       - name: Show fix context
         if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ FIX CONTEXT ==============================="
-          if [ -f audit_out/fix_context.json ]; then
-            cat audit_out/fix_context.json
-          else
-            echo "fix_context.json not found"
-          fi
-          echo "============================================================"
-          echo ""
+          echo "================ FIX CONTEXT ================"
+          cat audit_out/fix_context.json || true
 
       - name: Build global workflow context
         if: always()
@@ -246,7 +185,6 @@ jobs:
             echo "global_workflow_context.md not found"
           fi
           echo "============================================================"
-          echo ""
 
       - name: Generate patch candidate
         if: always()
@@ -273,7 +211,32 @@ jobs:
             echo "patch_candidate.md not found"
           fi
           echo "============================================================"
+
+      - name: Verify patch candidate
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
+          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
+        run: |
+          python .github/scripts/patch_verifier.py
+        continue-on-error: true
+
+      - name: Show patch verification
+        if: always()
+        shell: bash
+        run: |
           echo ""
+          echo "================ PATCH VERIFICATION ========================"
+          if [ -f audit_out/patch_verification.md ]; then
+            cat audit_out/patch_verification.md
+          else
+            echo "patch_verification.md not found"
+          fi
+          echo "============================================================"
 
       - name: Upload artifacts
         if: always()
