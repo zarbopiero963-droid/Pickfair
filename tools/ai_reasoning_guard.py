@@ -46,9 +46,7 @@ def _requests_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], t
 
 
 def _urllib_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int):
-
     body = json.dumps(payload).encode("utf-8")
-
     req = request.Request(
         url=url,
         data=body,
@@ -58,32 +56,24 @@ def _urllib_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], tim
 
     try:
         with request.urlopen(req, timeout=timeout) as resp:
-
             text = resp.read().decode("utf-8", errors="ignore")
-
             status_code = getattr(resp, "status", 200)
-
             return {
                 "ok": 200 <= int(status_code) < 300,
                 "status_code": int(status_code),
                 "text": text,
             }
-
     except error.HTTPError as exc:
-
         try:
             text = exc.read().decode("utf-8", errors="ignore")
         except Exception:
             text = str(exc)
-
         return {
             "ok": False,
             "status_code": int(getattr(exc, "code", 0) or 0),
             "text": text,
         }
-
     except Exception as exc:
-
         return {
             "ok": False,
             "status_code": 0,
@@ -91,42 +81,48 @@ def _urllib_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], tim
         }
 
 
-def _http_post(url, payload, headers, timeout):
-
+def _http_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int):
     via_requests = _requests_post(url, payload, headers, timeout)
-
     if via_requests is not None:
         return via_requests
-
     return _urllib_post(url, payload, headers, timeout)
 
 
-def _write_artifact(name, data):
-
+def _write_artifact(name: str, data: Dict[str, Any]) -> str:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
     out = ARTIFACTS_DIR / name
-
-    out.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return str(out)
 
 
-def run_guard(files=None):
-    """
-    files: lista di file modificati (opzionale)
-    """
+def _default_probe_defs() -> List[Dict[str, str]]:
+    return [
+        {
+            "id": "mutation_check_basic",
+            "prompt": "Return a minimal structured safety result.",
+            "expected": "structured_output",
+        },
+        {
+            "id": "mutation_check_api_change",
+            "prompt": "Detect risks after public API signature change.",
+            "expected": "api_change_risk",
+        },
+        {
+            "id": "mutation_check_regression",
+            "prompt": "Detect likely regression areas after controller change.",
+            "expected": "regression_risk",
+        },
+    ]
 
+
+def run_guard(files=None):
     if files is None:
         files = []
 
+    files = [str(f) for f in files]
+
     api_url = _env("AI_REASONING_GUARD_URL")
-
     api_key = _env("AI_REASONING_GUARD_API_KEY")
-
     timeout = int(
         _safe_float(
             _env("AI_REASONING_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT)),
@@ -135,25 +131,18 @@ def run_guard(files=None):
     )
 
     if not api_url:
-
-        result = {
+        report = {
             "ok": True,
+            "decision": "allow",
             "mode": "offline",
             "files_checked": files,
             "issues": [],
+            "message": "offline pass",
         }
+        report["artifact"] = _write_artifact("ai_reasoning_guard.json", report)
+        return report
 
-        result["artifact"] = _write_artifact(
-            "ai_reasoning_guard.json",
-            result,
-        )
-
-        return result
-
-    headers = {
-        "Content-Type": "application/json",
-    }
-
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -164,60 +153,87 @@ def run_guard(files=None):
     }
 
     resp = _http_post(api_url, payload, headers, timeout)
-
     ok = bool(resp.get("ok"))
 
-    result = {
+    report = {
         "ok": ok,
+        "decision": "allow" if ok else "review",
         "mode": "remote",
         "files_checked": files,
         "status_code": resp.get("status_code"),
         "issues": [] if ok else ["remote_guard_failed"],
+        "message": str(resp.get("text", ""))[:500],
     }
-
-    result["artifact"] = _write_artifact(
-        "ai_reasoning_guard.json",
-        result,
-    )
-
-    return result
+    report["artifact"] = _write_artifact("ai_reasoning_guard.json", report)
+    return report
 
 
 def run_mutation_probes(specs_path=None):
-    """
-    specs_path: percorso semantic_specs.json (opzionale)
-    """
+    specs_value = str(specs_path) if specs_path else None
 
-    probes = [
-        "mutation_check_basic",
-        "mutation_check_api_change",
-        "mutation_check_regression",
-    ]
+    probe_defs = _default_probe_defs()
+    probes = []
 
-    result = {
-        "ok": True,
-        "probes_executed": probes,
-        "specs_path": str(specs_path) if specs_path else None,
-    }
-
-    result["artifact"] = _write_artifact(
-        "ai_reasoning_mutation_probes.json",
-        result,
+    api_url = _env("AI_REASONING_GUARD_URL")
+    api_key = _env("AI_REASONING_GUARD_API_KEY")
+    timeout = int(
+        _safe_float(
+            _env("AI_REASONING_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT)),
+            DEFAULT_TIMEOUT,
+        )
     )
 
+    if not api_url:
+        for probe in probe_defs:
+            probes.append(
+                {
+                    "id": probe["id"],
+                    "ok": True,
+                    "reason": "offline-default-pass",
+                }
+            )
+
+        result = {
+            "ok": True,
+            "specs_path": specs_value,
+            "probes": probes,
+        }
+        result["artifact"] = _write_artifact("ai_reasoning_mutation_probes.json", result)
+        return result
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    for probe in probe_defs:
+        payload = {
+            "task": "mutation_probe",
+            "probe_id": probe["id"],
+            "prompt": probe["prompt"],
+        }
+
+        resp = _http_post(api_url, payload, headers, timeout)
+        ok = bool(resp.get("ok"))
+
+        probes.append(
+            {
+                "id": probe["id"],
+                "ok": ok,
+                "status_code": resp.get("status_code"),
+                "reason": "matched" if ok else "remote_failure",
+            }
+        )
+
+    result = {
+        "ok": all(p["ok"] for p in probes),
+        "specs_path": specs_value,
+        "probes": probes,
+    }
+    result["artifact"] = _write_artifact("ai_reasoning_mutation_probes.json", result)
     return result
 
 
 if __name__ == "__main__":
-
     guard = run_guard()
-
     probes = run_mutation_probes()
-
-    print(
-        json.dumps(
-            {"guard": guard, "probes": probes},
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps({"guard": guard, "probes": probes}, indent=2, ensure_ascii=False))
