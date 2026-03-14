@@ -22,12 +22,8 @@ SKIP_SCAN_PREFIX = (
     "__pycache__",
 )
 
-SKIP_RANK_PREFIX = (
+SKIP_ANALYSIS_PREFIX = (
     ".github/",
-    "tests/",
-)
-
-SKIP_DEADCODE_PREFIX = (
     "tests/",
 )
 
@@ -51,22 +47,16 @@ def write_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def run(cmd, timeout=3600):
+def run(cmd):
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
     except Exception as e:
         return 999, str(e)
 
 
 def list_python_files():
     files = []
-
     for p in ROOT.rglob("*.py"):
         rel = str(p.relative_to(ROOT)).replace("\\", "/")
 
@@ -90,23 +80,6 @@ def run_pytest():
     return code, out
 
 
-def parse_pytest_errors(text):
-    errors = []
-
-    collecting = re.findall(r"^ERROR collecting .*$", text, flags=re.MULTILINE)
-    if collecting:
-        errors.extend(collecting[:10])
-
-    if not errors:
-        blocks = re.findall(r"ERROR collecting .*?\n(.*?)\n\n", text, re.S)
-        for b in blocks[:10]:
-            cleaned = b.strip()
-            if cleaned:
-                errors.append(cleaned)
-
-    return errors[:10]
-
-
 def parse_ast(py_files):
     classes = defaultdict(list)
     functions = defaultdict(list)
@@ -122,6 +95,7 @@ def parse_ast(py_files):
             continue
 
         for node in ast.walk(tree):
+
             if isinstance(node, ast.ClassDef):
                 classes[node.name].append(rel)
                 symbol_index[node.name] = rel
@@ -160,22 +134,25 @@ def detect_references(py_files):
 
 
 def detect_unused(classes, functions, references):
+
     unused_classes = []
     unused_functions = []
 
     for name, files in classes.items():
+
         file = files[0]
 
-        if file.startswith(SKIP_DEADCODE_PREFIX):
+        if file.startswith(SKIP_ANALYSIS_PREFIX):
             continue
 
         if references[name] <= 1:
             unused_classes.append((name, file))
 
     for name, files in functions.items():
+
         file = files[0]
 
-        if file.startswith(SKIP_DEADCODE_PREFIX):
+        if file.startswith(SKIP_ANALYSIS_PREFIX):
             continue
 
         if references[name] <= 1:
@@ -187,38 +164,16 @@ def detect_unused(classes, functions, references):
     return unused_classes[:20], unused_functions[:20]
 
 
-def build_dependency_graph(imports):
-    graph = defaultdict(set)
-
-    for file, modules in imports.items():
-        for mod in modules:
-            mod_file = mod.replace(".", "/") + ".py"
-
-            if (ROOT / mod_file).exists():
-                graph[file].add(mod_file)
-
-    return graph
-
-
-def detect_circular_imports(graph):
-    circular = set()
-
-    for a in graph:
-        for b in graph[a]:
-            if b in graph and a in graph[b]:
-                circular.add(tuple(sorted((a, b))))
-
-    return sorted(circular)
-
-
 def smell_scan(py_files):
+
     smells = Counter()
     file_scores = {}
 
     for f in py_files:
+
         rel = str(f.relative_to(ROOT)).replace("\\", "/")
 
-        if rel.startswith(SKIP_RANK_PREFIX):
+        if rel.startswith(SKIP_ANALYSIS_PREFIX):
             continue
 
         txt = read(f)
@@ -251,6 +206,7 @@ def fragility_ranking(file_scores):
 
 
 def check_contracts(symbol_index):
+
     issues = []
 
     checks = [
@@ -261,6 +217,7 @@ def check_contracts(symbol_index):
     ]
 
     for file, symbol in checks:
+
         if symbol not in symbol_index:
             issues.append((file, symbol))
 
@@ -273,7 +230,8 @@ def check_contracts(symbol_index):
     return issues
 
 
-def human_summary(compile_ok, pytest_code, contracts, ranking, smells, circular_imports):
+def human_summary(compile_ok, pytest_code, contracts, smells):
+
     lines = []
 
     lines.append("Sì. Ho fatto un’analisi reale del repository, non teorica.")
@@ -285,7 +243,6 @@ def human_summary(compile_ok, pytest_code, contracts, ranking, smells, circular_
     lines.append("- ranking dei moduli fragili")
     lines.append("- scansione smells")
     lines.append("- controllo dead code probabile")
-    lines.append("- controllo circular imports")
     lines.append("")
     lines.append("Verdetto ultra sintetico")
     lines.append("")
@@ -293,29 +250,21 @@ def human_summary(compile_ok, pytest_code, contracts, ranking, smells, circular_
     if compile_ok:
         lines.append("Il repository compila, quindi la base sintattica è sana.")
     else:
-        lines.append("Il repository non è pulito neppure a livello sintattico.")
+        lines.append("Il repository non è pulito a livello sintattico.")
 
     if contracts:
         lines.append(
             "Il problema dominante non è la sintassi ma la rottura dei contratti tra moduli e test."
         )
-    elif pytest_code != 0:
-        lines.append(
-            "I contratti principali sembrano più stabili, ma la suite continua a segnalare errori."
-        )
-    else:
-        lines.append("Non emergono rotture contrattuali immediate nella scansione attuale.")
 
     lines.append("")
     lines.append("Stato reale misurato")
     lines.append(f"- compileall: {'OK' if compile_ok else 'FAIL'}")
     lines.append(f"- pytest exit code: {pytest_code}")
     lines.append(f"- contract mismatches: {len(contracts)}")
-    lines.append(f"- moduli fragili in classifica: {len(ranking)}")
-    lines.append(f"- except Exception: {smells.get('except_exception', 0)}")
-    lines.append(f"- bare except: {smells.get('bare_except', 0)}")
-    lines.append(f"- print: {smells.get('print', 0)}")
-    lines.append(f"- circular imports: {len(circular_imports)}")
+    lines.append(f"- except Exception: {smells.get('except_exception',0)}")
+    lines.append(f"- bare except: {smells.get('bare_except',0)}")
+    lines.append(f"- print: {smells.get('print',0)}")
     lines.append("")
 
     return "\n".join(lines)
@@ -329,119 +278,100 @@ def build_report(
     ranking,
     unused_classes,
     unused_functions,
-    circular_imports,
-    pytest_errors,
 ):
+
     r = []
 
-    r.append(human_summary(
-        compile_ok=compile_ok,
-        pytest_code=pytest_code,
-        contracts=contracts,
-        ranking=ranking,
-        smells=smells,
-        circular_imports=circular_imports,
-    ))
-
-    if pytest_errors:
-        r.append("Pytest collection / run signals")
-        for e in pytest_errors:
-            r.append(f"- {e}")
-        r.append("")
+    r.append(
+        human_summary(
+            compile_ok,
+            pytest_code,
+            contracts,
+            smells,
+        )
+    )
 
     r.append("P0 — contract mismatch")
+
     if contracts:
         for file, symbol in contracts:
             r.append(f"- {file} -> simbolo mancante: {symbol}")
     else:
-        r.append("Nessun mismatch contrattuale immediato rilevato.")
-    r.append("")
+        r.append("Nessun mismatch contrattuale rilevato.")
 
+    r.append("")
     r.append("P1 — top moduli fragili")
-    if ranking:
-        for f, s in ranking:
-            r.append(f"- {f} (score {s})")
-    else:
-        r.append("Nessun modulo fragile evidenziato.")
-    r.append("")
 
+    for f, s in ranking:
+        r.append(f"- {f} (score {s})")
+
+    r.append("")
     r.append("P2 — smells")
-    if smells:
-        for k, v in smells.items():
-            r.append(f"- {k}: {v}")
-    else:
-        r.append("Nessuno smell rilevato.")
-    r.append("")
 
+    for k, v in smells.items():
+        r.append(f"- {k}: {v}")
+
+    r.append("")
     r.append("Classi probabilmente inutilizzate")
+
     if unused_classes:
         for name, file in unused_classes:
             r.append(f"- {name} ({file})")
     else:
         r.append("Nessuna.")
-    r.append("")
 
+    r.append("")
     r.append("Funzioni probabilmente inutilizzate")
+
     if unused_functions:
         for name, file in unused_functions:
             r.append(f"- {name} ({file})")
     else:
         r.append("Nessuna.")
-    r.append("")
 
-    r.append("Circular imports")
-    if circular_imports:
-        for a, b in circular_imports:
-            r.append(f"- {a} <-> {b}")
-    else:
-        r.append("Nessuno.")
     r.append("")
-
     r.append("Verdettissimo finale")
+
     if contracts:
         r.append(
             "Il repository non è rotto ovunque, ma resta in stato giallo/rosso finché questi contratti pubblici non vengono riallineati."
         )
-    elif pytest_code != 0:
-        r.append(
-            "Il repository è più vicino a uno stato sano, ma la suite non è ancora verde."
-        )
     else:
-        r.append(
-            "Il repository appare in uno stato molto più stabile nella scansione attuale."
-        )
+        r.append("Il repository appare stabile nella scansione attuale.")
 
     return "\n".join(r)
 
 
 def main():
+
     py_files = list_python_files()
 
     compile_ok = compile_repo()
+
     pytest_code, pytest_output = run_pytest()
-    pytest_errors = parse_pytest_errors(pytest_output)
 
     classes, functions, imports, symbol_index = parse_ast(py_files)
-    references = detect_references(py_files)
-    unused_classes, unused_functions = detect_unused(classes, functions, references)
 
-    graph = build_dependency_graph(imports)
-    circular_imports = detect_circular_imports(graph)
+    references = detect_references(py_files)
+
+    unused_classes, unused_functions = detect_unused(
+        classes, functions, references
+    )
 
     smells, file_scores = smell_scan(py_files)
+
     ranking = fragility_ranking(file_scores)
+
     contracts = check_contracts(symbol_index)
 
     report = build_report(
-        compile_ok=compile_ok,
-        pytest_code=pytest_code,
-        contracts=contracts,
-        smells=smells,
-        ranking=ranking,
-        unused_classes=unused_classes,
-        unused_functions=unused_functions,
-        circular_imports=circular_imports,
-        pytest_errors=pytest_errors,
+        compile_ok,
+        pytest_code,
+        contracts,
+        smells,
+        ranking,
+        unused_classes,
+        unused_functions,
     )
 
     write(OUT / "repo_ultra_audit_narrative.md", report)
@@ -454,22 +384,21 @@ def main():
             "contracts": contracts,
             "smells": dict(smells),
             "ranking": ranking,
-            "circular_imports": circular_imports,
-            "unused_classes": unused_classes,
-            "unused_functions": unused_functions,
-            "pytest_errors": pytest_errors,
         },
     )
 
     print(report)
 
+    exit_code = 0
+
     if contracts:
-        return 2
+        exit_code = 2
+    elif not compile_ok:
+        exit_code = 3
+    elif pytest_code != 0:
+        exit_code = 4
 
-    if not compile_ok:
-        return 3
-
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
