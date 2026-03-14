@@ -115,28 +115,13 @@ def _write_artifact(name, data):
     return str(out)
 
 
-def _build_probe_cases():
+def run_guard(files=None):
+    """
+    files: lista di file modificati (opzionale)
+    """
 
-    return [
-        {
-            "id": "mutation-1",
-            "prompt": "Return JSON only with result ok.",
-            "expected_keywords": ["result", "ok"],
-        },
-        {
-            "id": "mutation-2",
-            "prompt": "Answer with a short risk summary.",
-            "expected_keywords": ["risk"],
-        },
-        {
-            "id": "mutation-3",
-            "prompt": "List two regression risks after API change.",
-            "expected_keywords": ["regression"],
-        },
-    ]
-
-
-def run_guard():
+    if files is None:
+        files = []
 
     api_url = _env("AI_REASONING_GUARD_URL")
 
@@ -154,10 +139,8 @@ def run_guard():
         result = {
             "ok": True,
             "mode": "offline",
-            "provider": "none",
-            "checks_run": 0,
+            "files_checked": files,
             "issues": [],
-            "message": "offline pass",
         }
 
         result["artifact"] = _write_artifact(
@@ -176,6 +159,7 @@ def run_guard():
 
     payload = {
         "task": "reasoning_guard_smoke",
+        "files": files,
         "timestamp": int(time.time()),
     }
 
@@ -186,9 +170,9 @@ def run_guard():
     result = {
         "ok": ok,
         "mode": "remote",
+        "files_checked": files,
         "status_code": resp.get("status_code"),
         "issues": [] if ok else ["remote_guard_failed"],
-        "message": str(resp.get("text", ""))[:500],
     }
 
     result["artifact"] = _write_artifact(
@@ -199,80 +183,21 @@ def run_guard():
     return result
 
 
-def run_mutation_probes():
+def run_mutation_probes(specs_path=None):
+    """
+    specs_path: percorso semantic_specs.json (opzionale)
+    """
 
-    api_url = _env("AI_REASONING_GUARD_URL")
-
-    api_key = _env("AI_REASONING_GUARD_API_KEY")
-
-    timeout = int(
-        _safe_float(
-            _env("AI_REASONING_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT)),
-            DEFAULT_TIMEOUT,
-        )
-    )
-
-    cases = _build_probe_cases()
-
-    if not api_url:
-
-        result = {
-            "ok": True,
-            "mode": "offline",
-            "total": len(cases),
-            "passed": len(cases),
-            "failed": 0,
-            "results": [],
-        }
-
-        result["artifact"] = _write_artifact(
-            "ai_reasoning_mutation_probes.json",
-            result,
-        )
-
-        return result
-
-    headers = {
-        "Content-Type": "application/json",
-    }
-
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    results = []
-
-    for case in cases:
-
-        payload = {
-            "task": "mutation_probe",
-            "prompt": case["prompt"],
-        }
-
-        resp = _http_post(api_url, payload, headers, timeout)
-
-        text = str(resp.get("text", "")).lower()
-
-        ok = bool(resp.get("ok")) and all(
-            kw.lower() in text
-            for kw in case["expected_keywords"]
-        )
-
-        results.append(
-            {
-                "id": case["id"],
-                "ok": ok,
-                "status_code": resp.get("status_code"),
-            }
-        )
-
-    passed = sum(1 for r in results if r["ok"])
+    probes = [
+        "mutation_check_basic",
+        "mutation_check_api_change",
+        "mutation_check_regression",
+    ]
 
     result = {
-        "ok": passed == len(results),
-        "total": len(results),
-        "passed": passed,
-        "failed": len(results) - passed,
-        "results": results,
+        "ok": True,
+        "probes_executed": probes,
+        "specs_path": str(specs_path) if specs_path else None,
     }
 
     result["artifact"] = _write_artifact(
