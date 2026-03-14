@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-import requests
+from openrouter_model_router import call_openrouter
 
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
@@ -13,8 +13,6 @@ AUDIT_RAW = ROOT / "audit_raw"
 
 AUDIT_OUT.mkdir(exist_ok=True)
 AUDIT_RAW.mkdir(exist_ok=True)
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def read_text(path: Path) -> str:
@@ -49,6 +47,7 @@ def load_pytest_log() -> str:
 
 
 def extract_top_pytest_lines(pytest_log: str, max_lines: int = 40) -> list[str]:
+
     lines = []
 
     patterns = [
@@ -65,13 +64,18 @@ def extract_top_pytest_lines(pytest_log: str, max_lines: int = 40) -> list[str]:
     ]
 
     for raw in pytest_log.splitlines():
+
         line = raw.strip()
+
         if not line:
             continue
+
         for pattern in patterns:
+
             if re.match(pattern, line):
                 lines.append(line)
                 break
+
         if len(lines) >= max_lines:
             break
 
@@ -79,6 +83,7 @@ def extract_top_pytest_lines(pytest_log: str, max_lines: int = 40) -> list[str]:
 
 
 def reduce_context(audit_machine: dict, pytest_log: str) -> dict:
+
     contracts = audit_machine.get("contracts", [])[:10]
     smells = audit_machine.get("smells", {})
     ranking = audit_machine.get("ranking", [])[:10]
@@ -98,6 +103,7 @@ def reduce_context(audit_machine: dict, pytest_log: str) -> dict:
 
 
 def build_messages(reduced: dict) -> list[dict]:
+
     system_prompt = """You are a senior Python repository auditor working inside a GitHub Actions CI pipeline.
 
 Rules:
@@ -148,34 +154,8 @@ Return STRICT JSON with this schema:
     ]
 
 
-def call_openrouter(model: str, messages: list[dict], api_key: str) -> dict:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/zarbopiero963-droid/Pickfair",
-        "X-Title": "Pickfair Repo Ultra Audit",
-    }
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.1,
-        "provider": {
-            "allow_fallbacks": False
-        },
-    }
-
-    response = requests.post(
-        OPENROUTER_URL,
-        headers=headers,
-        json=payload,
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 def extract_content(resp_json: dict) -> str:
+
     try:
         return resp_json["choices"][0]["message"]["content"]
     except Exception:
@@ -183,6 +163,7 @@ def extract_content(resp_json: dict) -> str:
 
 
 def parse_json_content(content: str) -> dict:
+
     content = content.strip()
 
     try:
@@ -191,13 +172,7 @@ def parse_json_content(content: str) -> dict:
         pass
 
     fence_match = re.search(r"```json\s*(.*?)\s*```", content, re.S)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1))
-        except Exception:
-            pass
 
-    fence_match = re.search(r"```\s*(.*?)\s*```", content, re.S)
     if fence_match:
         try:
             return json.loads(fence_match.group(1))
@@ -214,171 +189,86 @@ def parse_json_content(content: str) -> dict:
 
 
 def fallback_outputs(reduced: dict) -> dict:
+
     contracts = reduced.get("contracts", [])
 
-    summary = (
-        "Il layer AI non è disponibile oppure non ha restituito un JSON valido. "
-        "Il verdetto resta basato sull’audit deterministico."
-    )
+    summary = "AI layer non disponibile. Usato fallback deterministico."
 
     root_causes = []
+
     if contracts:
+
         root_causes.append(
             {
-                "title": "Rottura dei contratti pubblici",
-                "why_it_happens": "I test si aspettano simboli pubblici che i moduli non esportano più.",
+                "title": "Rottura contratti pubblici",
+                "why_it_happens": "Test richiedono simboli pubblici mancanti.",
                 "evidence": [f"{file} -> {symbol}" for file, symbol in contracts[:5]],
                 "severity": "P0",
             }
         )
 
-    fix_suggestions = []
-    for file, symbol in contracts[:5]:
-        fix_suggestions.append(
-            {
-                "title": f"Ripristinare {symbol}",
-                "files": [file],
-                "change": f"Aggiungere o ripristinare il simbolo pubblico {symbol} con compatibilità retroattiva minima.",
-                "risk": "low",
-            }
-        )
-
-    targeted_tests = [
-        {
-            "reason": "Rilanciare prima i test direttamente collegati ai contract mismatch.",
-            "tests": [
-                "tests/test_auto_updater.py",
-                "tests/test_executor_manager_shutdown.py",
-                "tests/test_executor_manager_parallel.py",
-                "tests/test_new_components.py",
-                "tests/test_toolbar_live.py",
-                "tests/contracts/test_payload_snapshots.py",
-            ],
-        }
-    ]
-
     return {
         "summary": summary,
         "root_causes": root_causes,
-        "fix_suggestions": fix_suggestions,
-        "targeted_tests": targeted_tests,
+        "fix_suggestions": [],
+        "targeted_tests": [],
     }
 
 
 def render_root_cause_md(data: dict, model_used: str) -> str:
+
     lines = []
     lines.append("AI Root Cause Analysis")
     lines.append("")
     lines.append(f"Model used: {model_used}")
     lines.append("")
-    lines.append(data.get("summary", "Nessun sommario disponibile."))
-    lines.append("")
+    lines.append(data.get("summary", ""))
 
-    lines.append("Root causes")
-    if data.get("root_causes"):
-        for item in data["root_causes"]:
-            lines.append(f"- {item.get('title', 'Sconosciuto')} [{item.get('severity', 'P?')}]")
-            lines.append(f"  - perché: {item.get('why_it_happens', '')}")
-            for ev in item.get("evidence", []):
-                lines.append(f"  - evidenza: {ev}")
-    else:
-        lines.append("- Nessuna root cause disponibile.")
-    lines.append("")
-
-    return "\n".join(lines) + "\n"
-
-
-def render_fix_suggestions_md(data: dict, model_used: str) -> str:
-    lines = []
-    lines.append("AI Fix Suggestions")
-    lines.append("")
-    lines.append(f"Model used: {model_used}")
-    lines.append("")
-
-    if data.get("fix_suggestions"):
-        for item in data["fix_suggestions"]:
-            lines.append(f"- {item.get('title', 'Fix suggestion')}")
-            files = item.get("files", [])
-            if files:
-                lines.append(f"  - file: {', '.join(files)}")
-            lines.append(f"  - modifica: {item.get('change', '')}")
-            lines.append(f"  - rischio: {item.get('risk', 'unknown')}")
-    else:
-        lines.append("- Nessun fix suggestion disponibile.")
-    lines.append("")
-
-    return "\n".join(lines) + "\n"
-
-
-def render_targeted_tests_md(data: dict, model_used: str) -> str:
-    lines = []
-    lines.append("AI Targeted Tests")
-    lines.append("")
-    lines.append(f"Model used: {model_used}")
-    lines.append("")
-
-    if data.get("targeted_tests"):
-        for item in data["targeted_tests"]:
-            lines.append(f"- motivo: {item.get('reason', '')}")
-            for test in item.get("tests", []):
-                lines.append(f"  - {test}")
-    else:
-        lines.append("- Nessun targeted test disponibile.")
-    lines.append("")
-
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def main() -> int:
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    model_triage = os.getenv("OPENROUTER_MODEL_TRIAGE", "qwen/qwen3-coder-next").strip()
 
     audit_machine = load_audit_machine()
     pytest_log = load_pytest_log()
 
     reduced = reduce_context(audit_machine, pytest_log)
+
     write_json(AUDIT_OUT / "ai_reduced_context.json", reduced)
 
-    if not api_key:
-        fallback = fallback_outputs(reduced)
-        model_used = "fallback-local-no-api-key"
-        write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback, model_used))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback, model_used))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback, model_used))
-        print("OPENROUTER_API_KEY non trovato: scritto fallback locale.")
-        return 0
-
     try:
-        messages = build_messages(reduced)
-        resp_json = call_openrouter(model_triage, messages, api_key)
-        write_json(AUDIT_OUT / "openrouter_raw_response.json", resp_json)
 
-        content = extract_content(resp_json)
+        messages = build_messages(reduced)
+
+        resp = call_openrouter(
+            task_type="audit",
+            messages=messages
+        )
+
+        content = resp["content"]
+        model_used = resp["model_used"]
+
         parsed = parse_json_content(content)
 
-        model_used = resp_json.get("model", model_triage)
-
         write_json(AUDIT_OUT / "ai_reasoning.json", parsed)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(parsed, model_used))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(parsed, model_used))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(parsed, model_used))
+
+        write_text(
+            AUDIT_OUT / "root_cause.md",
+            render_root_cause_md(parsed, model_used)
+        )
 
         print(f"AI reasoning layer completato. Model used: {model_used}")
+
         return 0
 
     except Exception as exc:
+
         fallback = fallback_outputs(reduced)
-        model_used = f"fallback-local-error-{type(exc).__name__}"
-        fallback["summary"] = (
-            f"Il layer AI ha fallito ({type(exc).__name__}: {exc}). "
-            "È stato scritto un fallback locale basato sull’audit deterministico."
-        )
+
         write_json(AUDIT_OUT / "ai_reasoning.json", fallback)
-        write_text(AUDIT_OUT / "root_cause.md", render_root_cause_md(fallback, model_used))
-        write_text(AUDIT_OUT / "fix_suggestions.md", render_fix_suggestions_md(fallback, model_used))
-        write_text(AUDIT_OUT / "targeted_tests.md", render_targeted_tests_md(fallback, model_used))
-        print(f"AI reasoning layer fallito: {exc}")
+
+        print(f"AI reasoning fallback: {exc}")
+
         return 0
 
 
