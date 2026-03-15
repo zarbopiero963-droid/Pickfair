@@ -166,6 +166,19 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Show targeted test results
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ TARGETED TEST RESULTS ====================="
+          if [ -f audit_out/targeted_test_results.md ]; then
+            cat audit_out/targeted_test_results.md
+          else
+            echo "targeted_test_results.md not found"
+          fi
+          echo "============================================================"
+
       - name: Show AI root cause
         if: always()
         shell: bash
@@ -328,14 +341,19 @@ jobs:
               final_status = str(loop_state.get("final_status", "")).strip().lower()
               verdict = str(post.get("final_verdict", "")).strip().lower()
               applied = bool(apply_report.get("applied", False))
+              cycles = loop_state.get("cycles", []) or []
 
-              if verdict == "approve" and applied:
+              improved = any(c.get("improvement_detected") is True for c in cycles)
+
+              if verdict != "reject" and applied and improved:
                   allow_pr = "true"
-                  reason = final_status or "approved_and_applied"
-              elif verdict != "approve":
-                  reason = f"post_patch_review_{verdict or 'unknown'}"
+                  reason = final_status or "improved_and_applied"
+              elif verdict == "reject":
+                  reason = "post_patch_review_reject"
               elif not applied:
                   reason = "patch_not_applied"
+              elif not improved:
+                  reason = "no_real_improvement"
 
           print(f"allow_pr={allow_pr}")
           print(f"gate_reason={reason}")
@@ -462,4 +480,4 @@ jobs:
           path: |
             audit_out/**
             audit_raw/**
-          if-no-files-found: warn 
+          if-no-files-found: warn
