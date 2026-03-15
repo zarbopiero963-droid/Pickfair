@@ -63,6 +63,10 @@ def load_test_failure_context() -> dict:
     return read_json(AUDIT_OUT / "test_failure_context.json")
 
 
+def load_ci_failure_context() -> dict:
+    return read_json(AUDIT_OUT / "ci_failure_context.json")
+
+
 def load_pytest_log() -> str:
     return read_text(AUDIT_RAW / "pytest.log")
 
@@ -233,6 +237,63 @@ def build_pytest_contexts(pytest_signals: list[str]) -> list[dict]:
     return contexts
 
 
+def build_ci_contexts(ci_failure_context: dict) -> list[dict]:
+    contexts = []
+
+    for item in ci_failure_context.get("ci_failures", []) or []:
+        target_file = str(item.get("target_file", "")).strip()
+        error_type = str(item.get("error_type", "")).strip()
+        signal = str(item.get("signal", "")).strip()
+        source = str(item.get("source", "")).strip()
+        job = str(item.get("job", "")).strip()
+
+        if not target_file:
+            continue
+
+        related_tests, related_fixtures, related_contracts = contract_defaults_for_file(target_file)
+
+        notes = [
+            f"CI failure source: {source}",
+            f"CI job: {job}",
+            f"Error type: {error_type}",
+            f"Signal: {signal}",
+            "Questo contesto proviene dai workflow CI reali del repository.",
+        ]
+
+        issue_type = "ci_failure"
+
+        if error_type in {"ImportError", "ModuleNotFoundError", "cannot_import"}:
+            issue_type = "missing_public_contract"
+        elif error_type in {"ruff", "lint"}:
+            issue_type = "lint_failure"
+        elif error_type in {"AssertionError", "pytest_failed", "pytest_error"}:
+            issue_type = "test_failure"
+        elif error_type in {
+            "TypeError",
+            "AttributeError",
+            "NameError",
+            "KeyError",
+            "RuntimeError",
+        }:
+            issue_type = "runtime_failure"
+
+        contexts.append(
+            {
+                "target_file": target_file,
+                "required_symbols": [],
+                "related_tests": related_tests,
+                "related_fixtures": related_fixtures,
+                "related_contracts": related_contracts,
+                "notes": trim_list(notes, MAX_NOTES),
+                "priority": "P0",
+                "issue_type": issue_type,
+                "related_source_file": "",
+            }
+        )
+
+    return contexts
+
+
 def merge_contexts(contexts: list[dict]) -> list[dict]:
     merged = {}
 
@@ -281,8 +342,12 @@ def merge_contexts(contexts: list[dict]) -> list[dict]:
     for value in merged.values():
         value["required_symbols"] = trim_list(value.get("required_symbols", []), 4)
         value["related_tests"] = trim_list(value.get("related_tests", []), MAX_RELATED_TESTS)
-        value["related_fixtures"] = trim_list(value.get("related_fixtures", []), MAX_RELATED_FIXTURES)
-        value["related_contracts"] = trim_list(value.get("related_contracts", []), MAX_RELATED_CONTRACTS)
+        value["related_fixtures"] = trim_list(
+            value.get("related_fixtures", []), MAX_RELATED_FIXTURES
+        )
+        value["related_contracts"] = trim_list(
+            value.get("related_contracts", []), MAX_RELATED_CONTRACTS
+        )
         value["notes"] = trim_list(value.get("notes", []), MAX_NOTES)
         result.append(value)
 
@@ -310,6 +375,14 @@ def score_context(item: dict, pytest_signals: list[str], ai_reasoning: dict) -> 
         score += 130
     elif issue_type == "normal_test_file":
         score += 90
+    elif issue_type == "lint_failure":
+        score += 120
+    elif issue_type == "test_failure":
+        score += 115
+    elif issue_type == "runtime_failure":
+        score += 125
+    elif issue_type == "ci_failure":
+        score += 100
 
     for line in pytest_signals:
         if target_file and target_file in line:
@@ -386,6 +459,7 @@ def main() -> int:
     audit_machine = load_audit_machine()
     ai_reasoning = load_ai_reasoning()
     test_failure_context = load_test_failure_context()
+    ci_failure_context = load_ci_failure_context()
     pytest_log = load_pytest_log()
 
     contracts = audit_machine.get("contracts", []) or []
@@ -394,8 +468,9 @@ def main() -> int:
     contract_contexts = build_contract_contexts(contracts)
     pytest_contexts = build_pytest_contexts(pytest_signals)
     test_contexts = test_failure_context.get("test_failure_contexts", []) or []
+    ci_contexts = build_ci_contexts(ci_failure_context)
 
-    contexts = merge_contexts(contract_contexts + pytest_contexts + test_contexts)
+    contexts = merge_contexts(contract_contexts + pytest_contexts + test_contexts + ci_contexts)
 
     for item in contexts:
         item["_score"] = score_context(item, pytest_signals, ai_reasoning)
