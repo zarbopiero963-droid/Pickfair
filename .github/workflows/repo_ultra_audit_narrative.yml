@@ -256,6 +256,47 @@ jobs:
           python .github/scripts/build_priority_fix_order.py
         continue-on-error: true
 
+      - name: Collect repository diagnostics into audit_out
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p audit_out
+
+          for f in \
+            repo_api_report_v4.json \
+            repo_autopsy_summary.json \
+            repo_autopsy.json \
+            repo_fix_backlog.json \
+            repo_fix_backlog_pretty.md
+          do
+            if [ -f "$f" ]; then
+              cp "$f" "audit_out/$(basename "$f")"
+            fi
+          done
+
+          for f in \
+            repo_api_report_v4.json \
+            repo_autopsy_summary.json \
+            repo_autopsy.json \
+            repo_fix_backlog.json \
+            repo_fix_backlog_pretty.md
+          do
+            if [ -f "audit_out/$f" ]; then
+              echo "FOUND: audit_out/$f"
+            fi
+          done
+          set -e
+
+      - name: Show repository diagnostics files
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ REPOSITORY DIAGNOSTICS FILES =============="
+          ls -lah audit_out/repo_* 2>/dev/null || echo "No repo_* diagnostics files found in audit_out"
+          echo "============================================================"
+
       - name: Collect recent failed external CI logs into audit_raw
         if: always()
         env:
