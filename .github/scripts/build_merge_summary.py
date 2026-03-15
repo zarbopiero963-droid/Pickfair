@@ -47,15 +47,21 @@ def badge_for_review_verdict(verdict: str) -> str:
     return "🔴 BLOCKED"
 
 
+def badge_for_boolean(value: bool, positive: str = "🟢 SAFE", negative: str = "🔴 BLOCKED") -> str:
+    return positive if value else negative
+
+
 def collect_touched_files(cycles: list[dict]) -> list[str]:
     touched = []
     seen = set()
 
     for cycle in cycles:
         for item in cycle.get("target_files", []) or []:
-            if item not in seen:
-                touched.append(item)
-                seen.add(item)
+            item = str(item).strip()
+            if not item or item in seen:
+                continue
+            touched.append(item)
+            seen.add(item)
 
     return touched
 
@@ -90,10 +96,18 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
     first = cycles[0]
     last = cycles[-1]
 
-    first_fail = first.get("failing_tests_before")
-    last_fail = last.get("failing_tests_after")
+    first_fail = first.get("fail_before")
+    last_fail = last.get("fail_after")
     first_p0 = first.get("p0_before")
     last_p0 = last.get("p0_after")
+    first_targeted = first.get("target_before")
+    last_targeted = last.get("target_after")
+
+    if isinstance(first_targeted, int) and isinstance(last_targeted, int):
+        if last_targeted < first_targeted:
+            return True, f"Targeted failures ridotti da {first_targeted} a {last_targeted}."
+        if last_targeted > first_targeted:
+            return False, f"Targeted failures peggiorati da {first_targeted} a {last_targeted}."
 
     if isinstance(first_fail, int) and isinstance(last_fail, int):
         if last_fail < first_fail:
@@ -108,8 +122,8 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
             return False, f"P0 peggiorati da {first_p0} a {last_p0}."
 
     for cycle in cycles:
-        if cycle.get("improvement_detected") is True:
-            return True, cycle.get("improvement_reason", "Miglioramento reale rilevato.")
+        if cycle.get("improvement") is True:
+            return True, "Miglioramento reale rilevato in almeno un ciclo."
 
     return False, "Nessun segnale forte di miglioramento reale."
 
@@ -126,17 +140,12 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
         lines.append(f"- base_commit: {cycle.get('base_commit')}")
         lines.append(f"- p0_before: {cycle.get('p0_before')}")
         lines.append(f"- p0_after: {cycle.get('p0_after')}")
-        lines.append(f"- failing_tests_before: {cycle.get('failing_tests_before')}")
-        lines.append(f"- failing_tests_after: {cycle.get('failing_tests_after')}")
-        lines.append(f"- targeted_failures_before: {cycle.get('targeted_failures_before')}")
-        lines.append(f"- targeted_failures_after: {cycle.get('targeted_failures_after')}")
-        lines.append(f"- patch_generated: {cycle.get('patch_generated')}")
-        lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict')}")
-        lines.append(f"- patch_applied: {cycle.get('patch_applied')}")
-        lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict')}")
-        lines.append(f"- improvement_detected: {cycle.get('improvement_detected')}")
-        lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
-        lines.append(f"- rollback_performed: {cycle.get('rollback_performed')}")
+        lines.append(f"- failing_tests_before: {cycle.get('fail_before')}")
+        lines.append(f"- failing_tests_after: {cycle.get('fail_after')}")
+        lines.append(f"- targeted_failures_before: {cycle.get('target_before')}")
+        lines.append(f"- targeted_failures_after: {cycle.get('target_after')}")
+        lines.append(f"- improvement: {cycle.get('improvement')}")
+        lines.append(f"- rollback: {cycle.get('rollback')}")
         lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
 
         target_files = cycle.get("target_files", []) or []
@@ -170,23 +179,36 @@ def main() -> int:
     final_loop_status = str(ai_repair_loop_state.get("final_status", "")).strip() or "unknown"
     cycle_count = len(cycles)
 
+    repo_materially_greener = bool(ai_repair_loop_state.get("repo_materially_greener", False))
+    repo_fully_green = bool(ai_repair_loop_state.get("repo_fully_green", False))
+    continuation_recommended = bool(ai_repair_loop_state.get("continuation_recommended", False))
+    next_action = str(ai_repair_loop_state.get("next_action", "")).strip() or "unknown"
+
     touched_files = collect_touched_files(cycles)
     fix_kind = collect_fix_kinds(touched_files)
-    improved, improvement_reason = detect_real_improvement(cycles)
-    improvement_status = "YES" if improved else "NO"
+
+    improved_detected, improvement_reason = detect_real_improvement(cycles)
+    improvement_status = "YES" if repo_materially_greener or improved_detected else "NO"
 
     safe_to_merge = "YES" if (
         tests_status == "PASS"
         and verifier_status == "PASS"
         and review_verdict != "reject"
-        and improved
+        and (repo_materially_greener or improved_detected)
     ) else "NO"
 
     safe_badge = badge_for_safe_to_merge(safe_to_merge)
     verifier_badge = badge_for_review_verdict(verifier_verdict)
     review_badge = badge_for_review_verdict(review_verdict)
     tests_badge = "🟢 SAFE" if tests_status == "PASS" else "🔴 BLOCKED"
-    improvement_badge = "🟢 SAFE" if improved else "🟡 REVIEW"
+    greener_badge = badge_for_boolean(repo_materially_greener, "🟢 SAFE", "🟡 REVIEW")
+    fully_green_badge = badge_for_boolean(repo_fully_green, "🟢 SAFE", "🟡 REVIEW")
+    continuation_badge = badge_for_boolean(continuation_recommended, "🟡 REVIEW", "🟢 SAFE")
+    improvement_badge = badge_for_boolean(
+        repo_materially_greener or improved_detected,
+        "🟢 SAFE",
+        "🟡 REVIEW",
+    )
 
     lines = []
     lines.append("# AI FINAL VERDICT")
@@ -199,11 +221,19 @@ def main() -> int:
     lines.append(f"| Patch verifier | {verifier_badge} | {verifier_status} ({verifier_verdict or 'unknown'}) |")
     lines.append(f"| Post patch review | {review_badge} | {review_status} ({review_verdict or 'unknown'}) |")
     lines.append(f"| Safe to merge | {safe_badge} | {safe_to_merge} |")
+    lines.append(f"| Repo materially greener | {greener_badge} | {'YES' if repo_materially_greener else 'NO'} |")
+    lines.append(f"| Repo fully green | {fully_green_badge} | {'YES' if repo_fully_green else 'NO'} |")
+    lines.append(f"| Continuation recommended | {continuation_badge} | {'YES' if continuation_recommended else 'NO'} |")
+    lines.append(f"| Real improvement | {improvement_badge} | {improvement_status} |")
     lines.append("")
     lines.append("## Repair Loop Summary")
     lines.append(f"- Final loop status: {final_loop_status}")
     lines.append(f"- Repair cycles executed: {cycle_count}")
     lines.append(f"- Fix type: {fix_kind}")
+    lines.append(f"- Repo materially greener: {'YES' if repo_materially_greener else 'NO'}")
+    lines.append(f"- Repo fully green: {'YES' if repo_fully_green else 'NO'}")
+    lines.append(f"- Continuation recommended: {'YES' if continuation_recommended else 'NO'}")
+    lines.append(f"- Next action: {next_action}")
     lines.append(f"- Real improvement vs previous cycle: {improvement_badge} ({improvement_status})")
     lines.append(f"- Improvement note: {improvement_reason}")
     lines.append("")
