@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 from typing import Any
 
@@ -7,55 +8,134 @@ import requests
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-MODEL_MAP = {
-    "audit": "openai/gpt-5.4",
-    "reasoning": "openai/gpt-5.4",
-    "review": "openai/gpt-5.4",
-    "patch": "openai/gpt-5.3-codex",
-    "coding": "qwen/qwen3-coder-next",
-    "batch": "qwen/qwen3-coder-next",
-    "cheap": "qwen/qwen3-coder-next",
-    "huge_context": "google/gemini-3.1-pro-preview",
-    "tools": "google/gemini-3.1-pro-preview",
-}
 
-REASONING_MODELS = {
-    "openai/gpt-5.4",
-    "google/gemini-3.1-pro-preview",
-}
+def _read_required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Variabile ambiente mancante: {name}")
+    return value
 
 
-def _env_model(task_type: str) -> str | None:
-    task_to_env = {
-        "audit": "OPENROUTER_MODEL_TRIAGE",
-        "reasoning": "OPENROUTER_MODEL_REVIEW",
-        "review": "OPENROUTER_MODEL_REVIEW",
-        "patch": "OPENROUTER_MODEL_PATCH",
-        "coding": "OPENROUTER_MODEL_CHEAP",
-        "batch": "OPENROUTER_MODEL_CHEAP",
-        "cheap": "OPENROUTER_MODEL_CHEAP",
-        "huge_context": "OPENROUTER_MODEL_HUGE_CONTEXT",
-        "tools": "OPENROUTER_MODEL_HUGE_CONTEXT",
+def _read_optional_env(name: str, default: str) -> str:
+    value = os.getenv(name, "").strip()
+    return value or default
+
+
+def _model_for_task(task_type: str) -> str:
+    task_type = (task_type or "").strip().lower()
+
+    if task_type == "audit":
+        return _read_optional_env("OPENROUTER_MODEL_TRIAGE", "openai/gpt-5.4")
+
+    if task_type == "review":
+        return _read_optional_env("OPENROUTER_MODEL_REVIEW", "openai/gpt-5.4")
+
+    if task_type == "patch":
+        return _read_optional_env("OPENROUTER_MODEL_PATCH", "openai/gpt-5.3-codex")
+
+    if task_type == "cheap":
+        return _read_optional_env("OPENROUTER_MODEL_CHEAP", "qwen/qwen3-coder-next")
+
+    if task_type == "huge_context":
+        return _read_optional_env(
+            "OPENROUTER_MODEL_HUGE_CONTEXT",
+            "google/gemini-3.1-pro-preview",
+        )
+
+    return _read_optional_env("OPENROUTER_MODEL_TRIAGE", "openai/gpt-5.4")
+
+
+def _reasoning_enabled_for_model(model: str) -> bool:
+    model = (model or "").lower()
+    return model.startswith("openai/gpt-5.4") or model.startswith(
+        "google/gemini-3.1-pro-preview"
+    )
+
+
+def _extract_content_from_message(message: Any) -> str:
+
+    if isinstance(message, str):
+        return message
+
+    if isinstance(message, dict):
+
+        content = message.get("content", "")
+
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+
+            chunks = []
+
+            for item in content:
+
+                if isinstance(item, str):
+                    chunks.append(item)
+                    continue
+
+                if not isinstance(item, dict):
+                    continue
+
+                item_type = str(item.get("type", "")).strip().lower()
+
+                if item_type in {"text", "output_text"}:
+                    text_value = item.get("text", "")
+                    if isinstance(text_value, str):
+                        chunks.append(text_value)
+
+            return "\n".join(chunks)
+
+    return ""
+
+
+def _extract_content(resp_json: dict) -> str:
+
+    choices = resp_json.get("choices")
+
+    if not isinstance(choices, list) or not choices:
+
+        if isinstance(resp_json.get("error"), dict):
+            error_obj = resp_json["error"]
+            message = error_obj.get("message") or error_obj.get("code") or str(error_obj)
+            raise RuntimeError(f"OpenRouter error payload: {message}")
+
+        raise RuntimeError("Risposta OpenRouter non valida: 'choices'")
+
+    first_choice = choices[0]
+
+    if not isinstance(first_choice, dict):
+        raise RuntimeError("Risposta OpenRouter non valida: first choice non è un dict")
+
+    message = first_choice.get("message")
+
+    if message is None:
+        text = first_choice.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+        raise RuntimeError("Risposta OpenRouter non valida: manca 'message'")
+
+    content = _extract_content_from_message(message)
+
+    if content.strip():
+        return content
+
+    raise RuntimeError("Risposta OpenRouter non valida: contenuto vuoto")
+
+
+def call_openrouter(task_type: str, messages: list[dict]) -> dict:
+
+    api_key = _read_required_env("OPENROUTER_API_KEY")
+    model = _model_for_task(task_type)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/zarbopiero963-droid/Pickfair",
+        "X-Title": "Pickfair Repo Ultra Audit",
     }
 
-    env_name = task_to_env.get(task_type)
-    if not env_name:
-        return None
-
-    value = os.getenv(env_name, "").strip()
-    return value or None
-
-
-def get_model(task_type: str) -> str:
-    task_type = (task_type or "audit").strip()
-    env_override = _env_model(task_type)
-    if env_override:
-        return env_override
-    return MODEL_MAP.get(task_type, "openai/gpt-5.4")
-
-
-def _build_payload(task_type: str, model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
@@ -64,61 +144,65 @@ def _build_payload(task_type: str, model: str, messages: list[dict[str, Any]]) -
         },
     }
 
-    if model in REASONING_MODELS and task_type in {"audit", "reasoning", "review", "huge_context"}:
-        payload["reasoning"] = {
-            "enabled": True
-        }
-
-    return payload
-
-
-def call_openrouter(task_type: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY mancante")
-
-    model = get_model(task_type)
-    payload = _build_payload(task_type, model, messages)
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/zarbopiero963-droid/Pickfair",
-        "X-Title": "Pickfair AI Router",
-    }
+    if _reasoning_enabled_for_model(model):
+        payload["reasoning"] = {"enabled": True}
 
     response = requests.post(
         OPENROUTER_URL,
         headers=headers,
         json=payload,
-        timeout=120,
+        timeout=180,
     )
-    response.raise_for_status()
 
-    data = response.json()
+    raw_text = response.text or ""
 
     try:
-        content = data["choices"][0]["message"]["content"]
+        resp_json = response.json()
     except Exception as exc:
-        raise RuntimeError(f"Risposta OpenRouter non valida: {exc}") from exc
 
-    model_used = data.get("model", model)
+        snippet = raw_text[:1000]
+
+        raise RuntimeError(
+            f"OpenRouter non ha restituito JSON valido ({type(exc).__name__}): {snippet}"
+        ) from exc
+
+    if response.status_code >= 400:
+
+        if isinstance(resp_json.get("error"), dict):
+
+            error_obj = resp_json["error"]
+            message = error_obj.get("message") or error_obj.get("code") or str(error_obj)
+
+            raise RuntimeError(
+                f"OpenRouter HTTP {response.status_code}: {message}"
+            )
+
+        raise RuntimeError(
+            f"OpenRouter HTTP {response.status_code}: {raw_text[:1000]}"
+        )
+
+    content = _extract_content(resp_json)
+
+    model_used = str(resp_json.get("model") or model).strip() or model
 
     return {
-        "model_used": model_used,
         "content": content,
-        "raw": data,
+        "model_used": model_used,
+        "raw": resp_json,
     }
 
 
 if __name__ == "__main__":
-    demo_messages = [
-        {"role": "user", "content": "Test router OpenRouter."}
-    ]
-    try:
-        resp = call_openrouter("audit", demo_messages)
-        print(f"Model used: {resp['model_used']}")
-        print(resp["content"])
-    except Exception as exc:
-        print(f"Errore: {exc}")
-        raise
+
+    demo = {
+        "status": "ok",
+        "available_task_types": [
+            "audit",
+            "review",
+            "patch",
+            "cheap",
+            "huge_context",
+        ],
+    }
+
+    print(json.dumps(demo, indent=2, ensure_ascii=False))
