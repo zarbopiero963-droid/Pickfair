@@ -73,10 +73,11 @@ def main() -> int:
             f.write(f"allow_pr={str(allow_pr).lower()}\n")
             f.write(f"auto_merge={str(should_merge and allow_pr).lower()}\n")
             f.write(f"reason={reason}\n")
+            f.write(f"real_progress={str(real_progress).lower()}\n")
 
     if not allow_pr:
-        print(f"Final PR gate blocked. Reason: {reason}")
-        raise SystemExit(1)
+        print(f"Final PR gate blocked cleanly. Reason: {reason}")
+        return 0
 
     print("PR gate passed.")
     return 0
