@@ -26,16 +26,12 @@ def _model_for_task(task_type: str) -> str:
 
     if task_type == "audit":
         return _read_optional_env("OPENROUTER_MODEL_TRIAGE", "openai/gpt-5.4")
-
     if task_type == "review":
         return _read_optional_env("OPENROUTER_MODEL_REVIEW", "openai/gpt-5.4")
-
     if task_type == "patch":
         return _read_optional_env("OPENROUTER_MODEL_PATCH", "openai/gpt-5.3-codex")
-
     if task_type == "cheap":
         return _read_optional_env("OPENROUTER_MODEL_CHEAP", "qwen/qwen3-coder-next")
-
     if task_type == "huge_context":
         return _read_optional_env(
             "OPENROUTER_MODEL_HUGE_CONTEXT",
@@ -43,6 +39,23 @@ def _model_for_task(task_type: str) -> str:
         )
 
     return _read_optional_env("OPENROUTER_MODEL_TRIAGE", "openai/gpt-5.4")
+
+
+def _max_tokens_for_task(task_type: str) -> int:
+    task_type = (task_type or "").strip().lower()
+
+    if task_type == "patch":
+        return 12000
+    if task_type == "review":
+        return 8000
+    if task_type == "audit":
+        return 6000
+    if task_type == "cheap":
+        return 4000
+    if task_type == "huge_context":
+        return 12000
+
+    return 6000
 
 
 def _reasoning_enabled_for_model(model: str) -> bool:
@@ -53,23 +66,19 @@ def _reasoning_enabled_for_model(model: str) -> bool:
 
 
 def _extract_content_from_message(message: Any) -> str:
-
     if isinstance(message, str):
         return message
 
     if isinstance(message, dict):
-
         content = message.get("content", "")
 
         if isinstance(content, str):
             return content
 
         if isinstance(content, list):
-
-            chunks = []
+            chunks: list[str] = []
 
             for item in content:
-
                 if isinstance(item, str):
                     chunks.append(item)
                     continue
@@ -84,17 +93,15 @@ def _extract_content_from_message(message: Any) -> str:
                     if isinstance(text_value, str):
                         chunks.append(text_value)
 
-            return "\n".join(chunks)
+            return "\n".join(part for part in chunks if part)
 
     return ""
 
 
 def _extract_content(resp_json: dict) -> str:
-
     choices = resp_json.get("choices")
 
     if not isinstance(choices, list) or not choices:
-
         if isinstance(resp_json.get("error"), dict):
             error_obj = resp_json["error"]
             message = error_obj.get("message") or error_obj.get("code") or str(error_obj)
@@ -103,12 +110,10 @@ def _extract_content(resp_json: dict) -> str:
         raise RuntimeError("Risposta OpenRouter non valida: 'choices'")
 
     first_choice = choices[0]
-
     if not isinstance(first_choice, dict):
         raise RuntimeError("Risposta OpenRouter non valida: first choice non è un dict")
 
     message = first_choice.get("message")
-
     if message is None:
         text = first_choice.get("text")
         if isinstance(text, str) and text.strip():
@@ -116,7 +121,6 @@ def _extract_content(resp_json: dict) -> str:
         raise RuntimeError("Risposta OpenRouter non valida: manca 'message'")
 
     content = _extract_content_from_message(message)
-
     if content.strip():
         return content
 
@@ -124,9 +128,9 @@ def _extract_content(resp_json: dict) -> str:
 
 
 def call_openrouter(task_type: str, messages: list[dict]) -> dict:
-
     api_key = _read_required_env("OPENROUTER_API_KEY")
     model = _model_for_task(task_type)
+    max_tokens = _max_tokens_for_task(task_type)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -135,10 +139,11 @@ def call_openrouter(task_type: str, messages: list[dict]) -> dict:
         "X-Title": "Pickfair Repo Ultra Audit",
     }
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
+        "max_tokens": max_tokens,
         "provider": {
             "allow_fallbacks": False,
         },
@@ -159,30 +164,20 @@ def call_openrouter(task_type: str, messages: list[dict]) -> dict:
     try:
         resp_json = response.json()
     except Exception as exc:
-
         snippet = raw_text[:1000]
-
         raise RuntimeError(
             f"OpenRouter non ha restituito JSON valido ({type(exc).__name__}): {snippet}"
         ) from exc
 
     if response.status_code >= 400:
-
         if isinstance(resp_json.get("error"), dict):
-
             error_obj = resp_json["error"]
             message = error_obj.get("message") or error_obj.get("code") or str(error_obj)
+            raise RuntimeError(f"OpenRouter HTTP {response.status_code}: {message}")
 
-            raise RuntimeError(
-                f"OpenRouter HTTP {response.status_code}: {message}"
-            )
-
-        raise RuntimeError(
-            f"OpenRouter HTTP {response.status_code}: {raw_text[:1000]}"
-        )
+        raise RuntimeError(f"OpenRouter HTTP {response.status_code}: {raw_text[:1000]}")
 
     content = _extract_content(resp_json)
-
     model_used = str(resp_json.get("model") or model).strip() or model
 
     return {
@@ -193,16 +188,8 @@ def call_openrouter(task_type: str, messages: list[dict]) -> dict:
 
 
 if __name__ == "__main__":
-
     demo = {
         "status": "ok",
-        "available_task_types": [
-            "audit",
-            "review",
-            "patch",
-            "cheap",
-            "huge_context",
-        ],
+        "available_task_types": ["audit", "review", "patch", "cheap", "huge_context"],
     }
-
     print(json.dumps(demo, indent=2, ensure_ascii=False))
