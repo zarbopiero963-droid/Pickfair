@@ -37,12 +37,7 @@ def write_json(path: Path, data) -> None:
     )
 
 
-# ----------------------------
-# JSON PARSER ULTRA ROBUSTO
-# ----------------------------
-
 def parse_json_content(content: str) -> dict:
-
     content = (content or "").strip()
 
     if not content:
@@ -56,13 +51,11 @@ def parse_json_content(content: str) -> dict:
             "raw_content": "",
         }
 
-    # direct json
     try:
         return json.loads(content)
     except Exception:
         pass
 
-    # ```json block
     fence = re.search(r"```json\s*(.*?)\s*```", content, re.S | re.I)
     if fence:
         try:
@@ -70,7 +63,6 @@ def parse_json_content(content: str) -> dict:
         except Exception:
             pass
 
-    # ``` block
     fence = re.search(r"```\s*(.*?)\s*```", content, re.S)
     if fence:
         try:
@@ -78,17 +70,13 @@ def parse_json_content(content: str) -> dict:
         except Exception:
             pass
 
-    # extract first json object
     start = content.find("{")
-
     if start != -1:
-
         depth = 0
         in_string = False
         escape = False
 
         for i in range(start, len(content)):
-
             ch = content[i]
 
             if escape:
@@ -108,14 +96,10 @@ def parse_json_content(content: str) -> dict:
 
             if ch == "{":
                 depth += 1
-
             elif ch == "}":
                 depth -= 1
-
                 if depth == 0:
-
                     candidate = content[start:i + 1]
-
                     try:
                         return json.loads(candidate)
                     except Exception:
@@ -132,31 +116,68 @@ def parse_json_content(content: str) -> dict:
     }
 
 
-# ----------------------------
-# FIX CONTEXT
-# ----------------------------
+def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -> int:
+    score = 0
 
-def load_target_context():
+    target_file = str(item.get("target_file", "")).strip()
+    required_symbols = item.get("required_symbols", []) or []
 
+    if item.get("priority") == "P0":
+        score += 100
+
+    for signal in pytest_signals:
+        if target_file and target_file in signal:
+            score += 50
+
+        for symbol in required_symbols:
+            if symbol and symbol in signal:
+                score += 80
+
+    for contract in contracts:
+        try:
+            contract_file = str(contract[0]).strip()
+            contract_symbol = str(contract[1]).strip()
+        except Exception:
+            continue
+
+        if target_file and target_file == contract_file:
+            score += 60
+
+        for symbol in required_symbols:
+            if symbol and symbol == contract_symbol:
+                score += 90
+
+    score += min(len(item.get("related_tests", []) or []), 10)
+    return score
+
+
+def load_target_context() -> dict:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
 
     fix_contexts = fix_context.get("fix_contexts", [])
-
     if not fix_contexts:
         return {}
+
+    pytest_signals = global_context.get("pytest_signals", []) or []
+    contracts = global_context.get("contracts", []) or []
+
+    scored = []
+    for item in fix_contexts:
+        score = _score_fix_context(item, pytest_signals, contracts)
+        scored.append((score, item))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
 
     selected = []
     seen = set()
 
-    for item in fix_contexts:
-
-        if item.get("priority") != "P0":
+    for score, item in scored:
+        target_file = str(item.get("target_file", "")).strip()
+        if not target_file or target_file in seen:
             continue
 
-        target_file = item.get("target_file", "").strip()
-
-        if not target_file or target_file in seen:
+        if item.get("priority") != "P0":
             continue
 
         seen.add(target_file)
@@ -171,13 +192,30 @@ def load_target_context():
     files_payload = []
 
     for target in selected:
-
         target_file = ROOT / target["target_file"]
+        related_tests = [ROOT / t for t in target.get("related_tests", [])]
+        related_fixtures = [ROOT / t for t in target.get("related_fixtures", [])]
+        related_contracts = [ROOT / t for t in target.get("related_contracts", [])]
 
         files_payload.append(
             {
                 "target": target,
                 "target_file_text": read_text(target_file)[:25000],
+                "related_tests_text": {
+                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:15000]
+                    for p in related_tests
+                    if p.exists()
+                },
+                "related_fixtures_text": {
+                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
+                    for p in related_fixtures
+                    if p.exists()
+                },
+                "related_contracts_text": {
+                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
+                    for p in related_contracts
+                    if p.exists()
+                },
             }
         )
 
@@ -188,12 +226,7 @@ def load_target_context():
     }
 
 
-# ----------------------------
-# PROMPT
-# ----------------------------
-
-def build_messages(ctx):
-
+def build_messages(ctx: dict) -> list[dict]:
     system_prompt = """
 You are a conservative Python patch generator working on the Pickfair repository.
 
@@ -204,58 +237,60 @@ Rules:
 - fix only provided files
 - restore missing public contracts
 - respect tests
+- prefer solving multiple closely-related P0 blockers in one coordinated patch
 
 Return STRICT JSON:
 
 {
- "summary": "...",
- "target_files": ["file.py"],
- "why_this_fix": "...",
- "proposed_patches": [
-   {
-     "target_file": "path.py",
-     "patch": "unified diff patch"
-   }
- ],
- "tests_to_run": [],
- "risk": "low|medium|high"
+  "summary": "...",
+  "target_files": ["file.py"],
+  "why_this_fix": "...",
+  "proposed_patches": [
+    {
+      "target_file": "path.py",
+      "patch": "unified diff patch"
+    }
+  ],
+  "tests_to_run": [],
+  "risk": "low|medium|high"
 }
 """.strip()
 
     user_payload = {
         "targets": ctx["targets"],
         "files_payload": ctx["files_payload"],
-        "global_context": ctx["global_context"],
+        "global_context": {
+            "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
+            "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
+            "contracts": ctx["global_context"].get("contracts", [])[:20],
+        },
     }
 
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": json.dumps(user_payload)},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
 
 
-# ----------------------------
-# NORMALIZATION
-# ----------------------------
-
-def normalize_patch_candidate(data, ctx):
-
+def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
     allowed_files = {
         item["target_file"]
         for item in ctx.get("targets", [])
+        if item.get("target_file")
     }
 
     patches = data.get("proposed_patches", [])
+    if not isinstance(patches, list):
+        patches = []
 
     normalized = []
 
     for item in patches:
-
         if not isinstance(item, dict):
             continue
 
-        target_file = item.get("target_file", "").strip()
-        patch = item.get("patch", "").strip()
+        target_file = str(item.get("target_file", "")).strip()
+        patch = str(item.get("patch", "")).strip()
 
         if target_file not in allowed_files:
             continue
@@ -270,26 +305,76 @@ def normalize_patch_candidate(data, ctx):
             }
         )
 
+    tests_to_run = data.get("tests_to_run", [])
+    if not isinstance(tests_to_run, list):
+        tests_to_run = []
+
     return {
-        "summary": data.get("summary", ""),
+        "summary": str(data.get("summary", "")).strip(),
         "target_files": [p["target_file"] for p in normalized],
-        "why_this_fix": data.get("why_this_fix", ""),
+        "why_this_fix": str(data.get("why_this_fix", "")).strip(),
         "proposed_patches": normalized,
-        "tests_to_run": data.get("tests_to_run", []),
-        "risk": data.get("risk", "unknown"),
+        "tests_to_run": tests_to_run,
+        "risk": str(data.get("risk", "unknown")).strip().lower() or "unknown",
     }
 
 
-# ----------------------------
-# MAIN
-# ----------------------------
+def render_patch_candidate_md(data: dict, model_used: str) -> str:
+    lines = []
+    lines.append("Patch Candidate")
+    lines.append("")
+    lines.append(f"Model used: {model_used}")
+    lines.append("")
+    lines.append(f"Summary: {data.get('summary', '')}")
+    lines.append("")
+    lines.append("Target files:")
 
-def main():
+    target_files = data.get("target_files", [])
+    if target_files:
+        for file in target_files:
+            lines.append(f"- {file}")
+    else:
+        lines.append("- Nessun file target disponibile.")
 
+    lines.append("")
+    lines.append(f"Risk: {data.get('risk', '')}")
+    lines.append("")
+    lines.append("Why this fix")
+    lines.append(data.get("why_this_fix", ""))
+    lines.append("")
+    lines.append("Tests to run")
+
+    tests = data.get("tests_to_run", [])
+    if tests:
+        for test in tests:
+            lines.append(f"- {test}")
+    else:
+        lines.append("- Nessun test suggerito.")
+
+    lines.append("")
+    lines.append("Proposed patches")
+    lines.append("")
+
+    proposed = data.get("proposed_patches", [])
+    if proposed:
+        for item in proposed:
+            lines.append(f"Target file: {item.get('target_file', '')}")
+            lines.append("")
+            lines.append("```diff")
+            lines.append(item.get("patch", ""))
+            lines.append("```")
+            lines.append("")
+    else:
+        lines.append("_Nessuna patch disponibile._")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def main() -> int:
     ctx = load_target_context()
 
     if not ctx:
-
         data = {
             "summary": "No fix context available",
             "target_files": [],
@@ -298,14 +383,11 @@ def main():
             "tests_to_run": [],
             "risk": "unknown",
         }
-
         write_json(AUDIT_OUT / "patch_candidate.json", data)
         write_text(AUDIT_OUT / "patch_candidate.md", "No context.")
-
         return 0
 
     try:
-
         messages = build_messages(ctx)
 
         resp = call_openrouter(
@@ -317,30 +399,22 @@ def main():
         model_used = resp["model_used"]
 
         parsed = parse_json_content(content)
-
         normalized = normalize_patch_candidate(parsed, ctx)
 
-        # protezione contro patch vuote
         if not normalized["proposed_patches"]:
             raise RuntimeError("AI non ha prodotto patch valide")
 
-        write_json(
-            AUDIT_OUT / "patch_candidate.json",
-            normalized,
-        )
-
+        write_json(AUDIT_OUT / "patch_candidate.json", normalized)
         write_text(
             AUDIT_OUT / "patch_candidate.md",
-            json.dumps(normalized, indent=2),
+            render_patch_candidate_md(normalized, model_used),
         )
 
         print("Patch candidate generator completato")
         print("Model:", model_used)
-
         return 0
 
     except Exception as exc:
-
         fallback = {
             "summary": "Patch candidate generator failed",
             "target_files": [],
@@ -350,18 +424,13 @@ def main():
             "risk": "unknown",
         }
 
-        write_json(
-            AUDIT_OUT / "patch_candidate.json",
-            fallback,
-        )
-
+        write_json(AUDIT_OUT / "patch_candidate.json", fallback)
         write_text(
             AUDIT_OUT / "patch_candidate.md",
-            json.dumps(fallback, indent=2),
+            json.dumps(fallback, indent=2, ensure_ascii=False),
         )
 
         print("Patch candidate generator fallito:", exc)
-
         return 0
 
 
