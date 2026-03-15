@@ -35,7 +35,7 @@ def extract_section(text: str, header: str) -> str:
         return ""
 
     out = []
-    for line in lines[start + 1 :]:
+    for line in lines[start + 1:]:
         if line.startswith("## ") and line.strip() != header.strip():
             break
         out.append(line)
@@ -54,9 +54,17 @@ def build_dashboard(merge_summary: str) -> str:
         "| Patch verifier |",
         "| Post patch review |",
         "| Safe to merge |",
+        "| Repo materially greener |",
+        "| Repo fully green |",
+        "| Continuation recommended |",
+        "| Real improvement |",
         "- Final loop status:",
         "- Repair cycles executed:",
         "- Fix type:",
+        "- Repo materially greener:",
+        "- Repo fully green:",
+        "- Continuation recommended:",
+        "- Next action:",
         "- Real improvement vs previous cycle:",
         "- Improvement note:",
     ]
@@ -118,6 +126,7 @@ def main() -> int:
 
     files_touched_section = extract_section(merge_summary, "## Files touched across cycles")
     cycle_details_section = extract_section(merge_summary, "## Cycle details")
+    repair_loop_summary_section = extract_section(merge_summary, "## Repair Loop Summary")
 
     pr_body = """# AI automated patch
 
@@ -143,7 +152,7 @@ This PR is created only when:
 - the repository materially improved
 - post_patch_review did not reject the result
 
-Please review the artifacts and checks before merging.
+If the repository is improved but not fully green yet, merging this PR allows the self-healing loop to continue on the next run triggered from main.
 """
 
     pr_comment_parts = [
@@ -154,6 +163,9 @@ Please review the artifacts and checks before merging.
         "",
         "## SAFE TO MERGE",
         merge_summary or "_Missing merge summary report._",
+        "",
+        "## Repair Loop Summary",
+        repair_loop_summary_section or "_Repair loop summary non disponibile._",
         "",
         "## Files touched across cycles",
         files_touched_section or "_Nessun file toccato o sezione non disponibile._",
@@ -192,4 +204,4 @@ Please review the artifacts and checks before merging.
 
 
 if __name__ == "__main__":
-    raise SystemExit(main()) 
+    raise SystemExit(main())
