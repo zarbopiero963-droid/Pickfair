@@ -133,13 +133,15 @@ Included pipeline stages:
 - patch candidate generation
 - patch verification
 - patch apply
+- targeted test execution
 - post patch AI review
 - multi-cycle AI repair loop
 - final merge summary
 
 This PR is created only when:
 - the patch was actually applied
-- post_patch_review returned approve
+- the repository materially improved
+- post_patch_review did not reject the result
 
 Please review the artifacts and checks before merging.
 """
