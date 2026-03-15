@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
-MAX_REPAIR_CYCLES = 3
+MAX_REPAIR_CYCLES = 4
 
 
 def read_text(path: Path) -> str:
@@ -39,9 +39,9 @@ def write_json(path: Path, data) -> None:
 
 def run_script(script: str) -> tuple[bool, int]:
     print("")
-    print("=" * 70)
+    print("=" * 80)
     print(f"RUNNING {script}")
-    print("=" * 70)
+    print("=" * 80)
     print("")
 
     result = subprocess.run(
@@ -57,6 +57,17 @@ def count_p0() -> int:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     contexts = fix_context.get("fix_contexts", [])
     return len([c for c in contexts if c.get("priority") == "P0"])
+
+
+def failing_test_count() -> int:
+    data = read_json(AUDIT_OUT / "failing_tests.json")
+    return len(data.get("failing_tests", []) or [])
+
+
+def targeted_failure_count() -> int | None:
+    data = read_json(AUDIT_OUT / "targeted_test_results.json")
+    value = data.get("failure_count", None)
+    return value if isinstance(value, int) else None
 
 
 def patch_generated() -> bool:
@@ -80,43 +91,11 @@ def post_review_verdict() -> str:
     return str(data.get("final_verdict", "")).strip().lower()
 
 
-def state_snapshot() -> dict:
-    fix_context = read_json(AUDIT_OUT / "fix_context.json")
-    patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json")
-    patch_verification = read_json(AUDIT_OUT / "patch_verification.json")
-    patch_apply_report = read_json(AUDIT_OUT / "patch_apply_report.json")
-    post_patch_review = read_json(AUDIT_OUT / "post_patch_review.json")
-
-    return {
-        "p0_count": len(
-            [x for x in fix_context.get("fix_contexts", []) if x.get("priority") == "P0"]
-        ),
-        "target_files": patch_candidate.get("target_files", []),
-        "proposed_patch_count": len(patch_candidate.get("proposed_patches", []) or []),
-        "patch_verifier_verdict": patch_verification.get("verdict", ""),
-        "patch_applied": patch_apply_report.get("applied", False),
-        "post_patch_review_verdict": post_patch_review.get("final_verdict", ""),
-    }
-
-
-def snapshots_equivalent(a: dict, b: dict) -> bool:
-    keys = [
-        "p0_count",
-        "target_files",
-        "proposed_patch_count",
-        "patch_verifier_verdict",
-        "patch_applied",
-        "post_patch_review_verdict",
-    ]
-    return {k: a.get(k) for k in keys} == {k: b.get(k) for k in keys}
-
-
 def build_cycle_report(cycles: list[dict], final_status: str) -> str:
     lines = []
     lines.append("AI Repair Loop Report")
     lines.append("")
     lines.append(f"Final status: {final_status}")
-    lines.append("")
     lines.append(f"Max cycles configured: {MAX_REPAIR_CYCLES}")
     lines.append("")
 
@@ -124,26 +103,61 @@ def build_cycle_report(cycles: list[dict], final_status: str) -> str:
         lines.append(f"## Cycle {cycle.get('cycle')}")
         lines.append(f"- p0_before: {cycle.get('p0_before')}")
         lines.append(f"- p0_after: {cycle.get('p0_after')}")
+        lines.append(f"- failing_tests_before: {cycle.get('failing_tests_before')}")
+        lines.append(f"- failing_tests_after: {cycle.get('failing_tests_after')}")
+        lines.append(f"- targeted_failures_before: {cycle.get('targeted_failures_before')}")
+        lines.append(f"- targeted_failures_after: {cycle.get('targeted_failures_after')}")
         lines.append(f"- patch_generated: {cycle.get('patch_generated')}")
         lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict')}")
         lines.append(f"- patch_applied: {cycle.get('patch_applied')}")
         lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict')}")
+        lines.append(f"- improvement_detected: {cycle.get('improvement_detected')}")
+        lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
         lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
-        lines.append("")
+
         target_files = cycle.get("target_files", []) or []
         if target_files:
-            lines.append("Target files:")
+            lines.append("- target_files:")
             for item in target_files:
-                lines.append(f"- {item}")
-            lines.append("")
+                lines.append(f"  - {item}")
+
+        lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def detect_improvement(cycle_info: dict) -> tuple[bool, str]:
+    p0_before = cycle_info.get("p0_before")
+    p0_after = cycle_info.get("p0_after")
+    fail_before = cycle_info.get("failing_tests_before")
+    fail_after = cycle_info.get("failing_tests_after")
+    targeted_before = cycle_info.get("targeted_failures_before")
+    targeted_after = cycle_info.get("targeted_failures_after")
+
+    if isinstance(targeted_before, int) and isinstance(targeted_after, int):
+        if targeted_after < targeted_before:
+            return True, f"Targeted failures reduced from {targeted_before} to {targeted_after}."
+        if targeted_after > targeted_before:
+            return False, f"Targeted failures worsened from {targeted_before} to {targeted_after}."
+
+    if isinstance(fail_before, int) and isinstance(fail_after, int):
+        if fail_after < fail_before:
+            return True, f"Failing tests reduced from {fail_before} to {fail_after}."
+        if fail_after > fail_before:
+            return False, f"Failing tests worsened from {fail_before} to {fail_after}."
+
+    if isinstance(p0_before, int) and isinstance(p0_after, int):
+        if p0_after < p0_before:
+            return True, f"P0 reduced from {p0_before} to {p0_after}."
+        if p0_after > p0_before:
+            return False, f"P0 worsened from {p0_before} to {p0_after}."
+
+    return False, "No measurable improvement detected."
 
 
 def main() -> int:
     cycles: list[dict] = []
     final_status = "unknown"
-    previous_snapshot = None
 
     for cycle_number in range(1, MAX_REPAIR_CYCLES + 1):
         cycle_info = {
@@ -157,7 +171,7 @@ def main() -> int:
         print(f"AI REPAIR CYCLE {cycle_number}")
         print("#" * 80)
 
-        pipeline_scripts = [
+        setup_scripts = [
             ".github/scripts/repo_ultra_audit_narrative.py",
             ".github/scripts/extract_failing_tests.py",
             ".github/scripts/ai_reasoning_layer.py",
@@ -165,54 +179,93 @@ def main() -> int:
             ".github/scripts/build_test_failure_context.py",
             ".github/scripts/build_fix_context.py",
             ".github/scripts/workflow_signal_aggregator.py",
-            ".github/scripts/patch_candidate_generator.py",
-            ".github/scripts/patch_verifier.py",
+            ".github/scripts/run_targeted_tests.py",
         ]
 
-        for script in pipeline_scripts:
+        for script in setup_scripts:
             ok, code = run_script(script)
             if not ok:
                 cycle_info["stop_reason"] = f"script_failed:{script}:{code}"
                 cycle_info["p0_before"] = count_p0()
                 cycle_info["p0_after"] = count_p0()
-                cycle_info["patch_generated"] = patch_generated()
-                cycle_info["patch_verifier_verdict"] = patch_verdict()
-                cycle_info["patch_applied"] = patch_applied()
-                cycle_info["post_patch_review_verdict"] = post_review_verdict()
+                cycle_info["failing_tests_before"] = failing_test_count()
+                cycle_info["failing_tests_after"] = failing_test_count()
+                cycle_info["targeted_failures_before"] = targeted_failure_count()
+                cycle_info["targeted_failures_after"] = targeted_failure_count()
+                cycle_info["patch_generated"] = False
+                cycle_info["patch_verifier_verdict"] = ""
+                cycle_info["patch_applied"] = False
+                cycle_info["post_patch_review_verdict"] = ""
+                cycle_info["improvement_detected"] = False
+                cycle_info["improvement_reason"] = "Setup step failed."
                 cycles.append(cycle_info)
-
-                final_status = "script_failed"
-                write_json(
-                    AUDIT_OUT / "ai_repair_loop_state.json",
-                    {"final_status": final_status, "cycles": cycles},
-                )
-                write_text(
-                    AUDIT_OUT / "ai_repair_loop_report.md",
-                    build_cycle_report(cycles, final_status),
-                )
-                print(f"Stopping loop because {script} failed with exit code {code}")
+                final_status = "setup_failed"
+                write_json(AUDIT_OUT / "ai_repair_loop_state.json", {"final_status": final_status, "cycles": cycles})
+                write_text(AUDIT_OUT / "ai_repair_loop_report.md", build_cycle_report(cycles, final_status))
                 return 0
 
         cycle_info["p0_before"] = count_p0()
+        cycle_info["failing_tests_before"] = failing_test_count()
+        cycle_info["targeted_failures_before"] = targeted_failure_count()
+
+        ok, code = run_script(".github/scripts/patch_candidate_generator.py")
+        if not ok:
+            cycle_info["stop_reason"] = f"script_failed:.github/scripts/patch_candidate_generator.py:{code}"
+            cycle_info["patch_generated"] = False
+            cycle_info["patch_verifier_verdict"] = ""
+            cycle_info["patch_applied"] = False
+            cycle_info["post_patch_review_verdict"] = ""
+            cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Patch generator failed."
+            cycles.append(cycle_info)
+            final_status = "patch_generator_failed"
+            break
 
         candidate = read_json(AUDIT_OUT / "patch_candidate.json")
         cycle_info["target_files"] = candidate.get("target_files", []) or []
         cycle_info["patch_generated"] = patch_generated()
-        cycle_info["patch_verifier_verdict"] = patch_verdict()
 
         if not cycle_info["patch_generated"]:
+            cycle_info["patch_verifier_verdict"] = ""
             cycle_info["patch_applied"] = False
             cycle_info["post_patch_review_verdict"] = ""
             cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "No patch generated."
             cycle_info["stop_reason"] = "no_patch_generated"
             cycles.append(cycle_info)
             final_status = "no_patch_generated"
+            break
+
+        ok, code = run_script(".github/scripts/patch_verifier.py")
+        cycle_info["patch_verifier_verdict"] = patch_verdict()
+
+        if not ok:
+            cycle_info["patch_applied"] = False
+            cycle_info["post_patch_review_verdict"] = ""
+            cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Patch verifier failed to run."
+            cycle_info["stop_reason"] = f"script_failed:.github/scripts/patch_verifier.py:{code}"
+            cycles.append(cycle_info)
+            final_status = "patch_verifier_failed"
             break
 
         if cycle_info["patch_verifier_verdict"] not in {"approve", "weak-approve"}:
             cycle_info["patch_applied"] = False
             cycle_info["post_patch_review_verdict"] = ""
             cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Patch verifier did not approve the patch."
             cycle_info["stop_reason"] = f"patch_verifier_{cycle_info['patch_verifier_verdict'] or 'unknown'}"
             cycles.append(cycle_info)
             final_status = "patch_rejected"
@@ -224,14 +277,56 @@ def main() -> int:
         if not ok or not cycle_info["patch_applied"]:
             cycle_info["post_patch_review_verdict"] = ""
             cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Patch was not applied."
             cycle_info["stop_reason"] = "patch_not_applied"
             cycles.append(cycle_info)
             final_status = "patch_not_applied"
             break
 
+        ok, code = run_script(".github/scripts/run_targeted_tests.py")
+        if not ok:
+            cycle_info["post_patch_review_verdict"] = ""
+            cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Targeted tests failed to execute."
+            cycle_info["stop_reason"] = f"script_failed:.github/scripts/run_targeted_tests.py:{code}"
+            cycles.append(cycle_info)
+            final_status = "targeted_tests_failed"
+            break
+
+        ok, code = run_script(".github/scripts/repo_ultra_audit_narrative.py")
+        ok2, code2 = run_script(".github/scripts/extract_failing_tests.py")
+        ok3, code3 = run_script(".github/scripts/build_test_failure_context.py")
+        ok4, code4 = run_script(".github/scripts/build_fix_context.py")
+        ok5, code5 = run_script(".github/scripts/workflow_signal_aggregator.py")
+
+        if not all([ok, ok2, ok3, ok4, ok5]):
+            cycle_info["post_patch_review_verdict"] = ""
+            cycle_info["p0_after"] = count_p0()
+            cycle_info["failing_tests_after"] = failing_test_count()
+            cycle_info["targeted_failures_after"] = targeted_failure_count()
+            cycle_info["improvement_detected"] = False
+            cycle_info["improvement_reason"] = "Post-apply refresh pipeline failed."
+            cycle_info["stop_reason"] = "post_apply_refresh_failed"
+            cycles.append(cycle_info)
+            final_status = "post_apply_refresh_failed"
+            break
+
+        cycle_info["p0_after"] = count_p0()
+        cycle_info["failing_tests_after"] = failing_test_count()
+        cycle_info["targeted_failures_after"] = targeted_failure_count()
+
+        improved, reason = detect_improvement(cycle_info)
+        cycle_info["improvement_detected"] = improved
+        cycle_info["improvement_reason"] = reason
+
         ok, code = run_script(".github/scripts/post_patch_review.py")
         cycle_info["post_patch_review_verdict"] = post_review_verdict()
-        cycle_info["p0_after"] = count_p0()
 
         if not ok:
             cycle_info["stop_reason"] = f"script_failed:.github/scripts/post_patch_review.py:{code}"
@@ -245,20 +340,16 @@ def main() -> int:
             final_status = "post_review_reject"
             break
 
-        current_snapshot = state_snapshot()
+        if improved and cycle_info["p0_after"] == 0 and cycle_info["failing_tests_after"] == 0:
+            cycle_info["stop_reason"] = "all_green"
+            cycles.append(cycle_info)
+            final_status = "all_green"
+            break
 
-        if previous_snapshot is not None and snapshots_equivalent(previous_snapshot, current_snapshot):
+        if not improved:
             cycle_info["stop_reason"] = "no_meaningful_progress"
             cycles.append(cycle_info)
             final_status = "no_meaningful_progress"
-            break
-
-        previous_snapshot = current_snapshot
-
-        if cycle_info["p0_after"] == 0:
-            cycle_info["stop_reason"] = "all_p0_resolved"
-            cycles.append(cycle_info)
-            final_status = "all_p0_resolved"
             break
 
         if cycle_number == MAX_REPAIR_CYCLES:
