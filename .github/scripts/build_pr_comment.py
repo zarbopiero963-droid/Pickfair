@@ -47,10 +47,13 @@ def build_dashboard(merge_summary: str) -> str:
     lines = (merge_summary or "").splitlines()
 
     wanted_prefixes = [
-        "Tests:",
-        "Patch verifier:",
-        "Post patch review:",
-        "SAFE TO MERGE:",
+        "## 🟢 SAFE",
+        "## 🟡 REVIEW",
+        "## 🔴 BLOCKED",
+        "| Tests |",
+        "| Patch verifier |",
+        "| Post patch review |",
+        "| Safe to merge |",
         "- Final loop status:",
         "- Repair cycles executed:",
         "- Fix type:",
@@ -70,16 +73,33 @@ def build_dashboard(merge_summary: str) -> str:
         return "_Dashboard non disponibile._"
 
     out = []
+    verdict_line = next((x for x in picked if x.startswith("## ")), "")
+    if verdict_line:
+        out.append(verdict_line)
+        out.append("")
+
     out.append("| Campo | Valore |")
     out.append("|---|---|")
 
     for item in picked:
-        if ":" not in item:
+        if item.startswith("## "):
             continue
-        left, right = item.split(":", 1)
-        left = left.strip().lstrip("-").strip()
-        right = right.strip()
-        out.append(f"| {left} | {right} |")
+
+        if item.startswith("|") and item.count("|") >= 3:
+            parts = [p.strip() for p in item.split("|")]
+            if len(parts) >= 4:
+                field = parts[1]
+                value = parts[2]
+                detail = parts[3]
+                merged = f"{value} — {detail}".strip(" —")
+                out.append(f"| {field} | {merged} |")
+            continue
+
+        if ":" in item:
+            left, right = item.split(":", 1)
+            left = left.strip().lstrip("-").strip()
+            right = right.strip()
+            out.append(f"| {left} | {right} |")
 
     return "\n".join(out)
 
