@@ -62,6 +62,8 @@ jobs:
           test -f .github/scripts/ai_reasoning_layer.py
           test -f .github/scripts/build_priority_fix_order.py
           test -f .github/scripts/build_fix_context.py
+          test -f .github/scripts/build_test_failure_context.py
+          test -f .github/scripts/extract_failing_tests.py
           test -f .github/scripts/openrouter_model_router.py
           test -f .github/scripts/workflow_signal_aggregator.py
           test -f .github/scripts/patch_candidate_generator.py
@@ -70,7 +72,6 @@ jobs:
           test -f .github/scripts/post_patch_review.py
           test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/build_merge_summary.py
-          test -f .github/scripts/build_test_failure_context.py
           test -f .github/scripts/ai_repair_loop.py
           echo "Scripts found."
 
@@ -112,6 +113,25 @@ jobs:
             cat audit_out/audit_machine.json
           else
             echo "audit_machine.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Extract failing tests
+        if: always()
+        run: |
+          python .github/scripts/extract_failing_tests.py
+        continue-on-error: true
+
+      - name: Show failing tests
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FAILING TESTS ============================="
+          if [ -f audit_out/failing_tests.json ]; then
+            cat audit_out/failing_tests.json
+          else
+            echo "failing_tests.json not found"
           fi
           echo "============================================================"
 
