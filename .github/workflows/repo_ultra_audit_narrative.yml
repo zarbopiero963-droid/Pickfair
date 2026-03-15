@@ -75,6 +75,10 @@ jobs:
           test -f .github/scripts/ai_repair_loop.py
           test -f .github/scripts/run_targeted_tests.py
           test -f .github/scripts/repair_orchestrator.py
+          test -f .github/scripts/merge_controller.py
+          test -f .github/scripts/repair_memory.py
+          test -f .github/scripts/issue_classifier.py
+          test -f .github/scripts/ci_failure_aggregator.py
           echo "Scripts found."
 
       - name: Detect workflow mode
@@ -222,6 +226,25 @@ jobs:
           print(f"Existing AI PR state: {state or 'none'}")
           print(f"Existing AI PR head: {head or 'none'}")
           PY
+
+      - name: Build CI failure context
+        if: always()
+        run: |
+          python .github/scripts/ci_failure_aggregator.py
+        continue-on-error: true
+
+      - name: Show CI failure context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ CI FAILURE CONTEXT ========================"
+          if [ -f audit_out/ci_failure_context.json ]; then
+            cat audit_out/ci_failure_context.json
+          else
+            echo "ci_failure_context.json not found"
+          fi
+          echo "============================================================"
 
       - name: Run repair orchestrator
         if: always()
@@ -402,6 +425,31 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Run issue classifier
+        if: always()
+        run: |
+          python .github/scripts/issue_classifier.py
+        continue-on-error: true
+
+      - name: Show issue classification
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ ISSUE CLASSIFICATION ======================"
+          if [ -f audit_out/issue_classification.json ]; then
+            cat audit_out/issue_classification.json
+          else
+            echo "issue_classification.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Run repair memory filter
+        if: always()
+        run: |
+          python .github/scripts/repair_memory.py
+        continue-on-error: true
+
       - name: Show global workflow context
         if: always()
         shell: bash
@@ -467,6 +515,25 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Run merge controller
+        if: always()
+        run: |
+          python .github/scripts/merge_controller.py
+        continue-on-error: true
+
+      - name: Show merge controller report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ MERGE CONTROLLER =========================="
+          if [ -f audit_out/merge_controller_report.md ]; then
+            cat audit_out/merge_controller_report.md
+          else
+            echo "merge_controller_report.md not found"
+          fi
+          echo "============================================================"
+
       - name: Build merge summary
         if: always()
         run: |
@@ -517,29 +584,35 @@ jobs:
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           orch_path = Path("audit_out/repair_orchestrator_state.json")
+          merge_path = Path("audit_out/merge_controller_state.json")
 
           allow_pr = "false"
           reason = "unknown"
 
           if not orch_path.exists():
               reason = "missing_repair_orchestrator_state"
+          elif not merge_path.exists():
+              reason = "missing_merge_controller_state"
           else:
               orch = json.loads(orch_path.read_text(encoding="utf-8"))
+              merge = json.loads(merge_path.read_text(encoding="utf-8"))
+
               action = str(orch.get("action", "")).strip()
-              should_pr = bool(orch.get("should_create_or_update_pr", False))
+              decision = str(merge.get("decision", "")).strip()
+              should_pr = bool(merge.get("should_open_or_update_pr", False))
 
               if action == "stop_green":
                   allow_pr = "false"
                   reason = "repository_fully_green"
-              elif should_pr:
+              elif decision in {"MERGE_READY", "REVIEW_ONLY"} and should_pr:
                   allow_pr = "true"
-                  reason = action or "create_or_update_ai_pr"
+                  reason = decision.lower()
               elif action == "update_existing_ai_pr":
                   allow_pr = "true"
                   reason = "update_existing_ai_pr"
               else:
                   allow_pr = "false"
-                  reason = action or "not_reviewable"
+                  reason = decision.lower() or action or "not_reviewable"
 
           print(f"allow_pr={allow_pr}")
           print(f"gate_reason={reason}")
