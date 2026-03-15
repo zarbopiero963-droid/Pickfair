@@ -80,6 +80,8 @@ jobs:
           test -f .github/scripts/repair_memory.py
           test -f .github/scripts/issue_classifier.py
           test -f .github/scripts/ci_failure_aggregator.py
+          test -f .github/scripts/load_repo_diagnostics.py
+          test -f .github/scripts/test_gap_generator.py
           echo "Scripts found."
 
       - name: Detect workflow mode
@@ -407,6 +409,44 @@ jobs:
             cat audit_out/fix_context.json
           else
             echo "fix_context.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Load repo diagnostics
+        if: always()
+        run: |
+          python .github/scripts/load_repo_diagnostics.py
+        continue-on-error: true
+
+      - name: Show repo diagnostics context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ REPO DIAGNOSTICS CONTEXT =================="
+          if [ -f audit_out/repo_diagnostics_context.json ]; then
+            cat audit_out/repo_diagnostics_context.json
+          else
+            echo "repo_diagnostics_context.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Generate missing nominal tests from diagnostics
+        if: always()
+        run: |
+          python .github/scripts/test_gap_generator.py
+        continue-on-error: true
+
+      - name: Show generated nominal tests report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ TEST GAP GENERATION REPORT ================"
+          if [ -f audit_out/test_gap_generation_report.json ]; then
+            cat audit_out/test_gap_generation_report.json
+          else
+            echo "test_gap_generation_report.json not found"
           fi
           echo "============================================================"
 
@@ -821,6 +861,13 @@ jobs:
           echo "Final gate allow_pr=$ALLOW"
           echo "Final gate reason=$REASON"
 
+          if [ -f audit_out/merge_controller_state.json ]; then
+            echo ""
+            echo "================ FINAL GATE DETAIL ========================="
+            cat audit_out/merge_controller_state.json || true
+            echo "============================================================"
+          fi
+
           if [ "$REASON" = "repository_fully_green" ]; then
             echo "Repository already fully green. No PR needed."
             exit 0
@@ -926,7 +973,6 @@ jobs:
 
           git commit -m "AI automated patch candidate"
           git push --force-with-lease origin "$BRANCH"
-
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
@@ -971,4 +1017,5 @@ jobs:
           path: |
             audit_out/**
             audit_raw/**
+            tests/generated/**
           if-no-files-found: warn
