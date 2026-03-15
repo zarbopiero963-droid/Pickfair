@@ -549,14 +549,26 @@ jobs:
               f.write(f"gate_reason={reason}\n")
           PY
 
-      - name: Fail workflow if final gate is not approved
+      - name: Finalize full repair workflow
         if: steps.mode.outputs.workflow_mode == 'full_repair'
         shell: bash
         run: |
-          if [ "${{ steps.review_gate.outputs.allow_pr }}" != "true" ]; then
-            echo "Final PR gate blocked. Reason: ${{ steps.review_gate.outputs.gate_reason }}"
+          REASON="${{ steps.review_gate.outputs.gate_reason }}"
+          ALLOW="${{ steps.review_gate.outputs.allow_pr }}"
+
+          echo "Final gate allow_pr=$ALLOW"
+          echo "Final gate reason=$REASON"
+
+          if [ "$REASON" = "repository_fully_green" ]; then
+            echo "Repository already fully green. No PR needed."
+            exit 0
+          fi
+
+          if [ "$ALLOW" != "true" ]; then
+            echo "Final PR gate blocked. Reason: $REASON"
             exit 1
           fi
+
           echo "Final PR gate approved."
 
       - name: Create or update AI fix branch
