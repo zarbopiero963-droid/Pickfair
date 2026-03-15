@@ -19,6 +19,7 @@ def write_text(path: Path, text: str) -> None:
 
 
 def main() -> int:
+    merge_summary = read_text(AUDIT_OUT / "merge_summary.md").strip()
     root_cause = read_text(AUDIT_OUT / "root_cause.md").strip()
     fix_suggestions = read_text(AUDIT_OUT / "fix_suggestions.md").strip()
     patch_candidate = read_text(AUDIT_OUT / "patch_candidate.md").strip()
@@ -47,6 +48,9 @@ Please review the artifacts and checks before merging.
 
     pr_comment_parts = [
         "# AI Repair Report",
+        "",
+        "## SAFE TO MERGE",
+        merge_summary or "_Missing merge summary report._",
         "",
         "## Root cause",
         root_cause or "_Missing root cause report._",
