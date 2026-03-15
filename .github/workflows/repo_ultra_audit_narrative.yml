@@ -4,16 +4,10 @@ on:
   push:
     branches:
       - main
-    branches-ignore:
-      - "ai-fix-*"
-      - "*-patch-*"
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    branches-ignore:
-      - "ai-fix-*"
-      - "*-patch-*"
 
 permissions:
   contents: write
@@ -323,7 +317,6 @@ jobs:
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
-
           post_path = Path("audit_out/post_patch_review.json")
           apply_path = Path("audit_out/patch_apply_report.json")
 
@@ -336,10 +329,10 @@ jobs:
               reason = "missing_patch_apply_report"
           else:
               post = json.loads(post_path.read_text(encoding="utf-8"))
-              apply = json.loads(apply_path.read_text(encoding="utf-8"))
+              apply_report = json.loads(apply_path.read_text(encoding="utf-8"))
 
               verdict = str(post.get("final_verdict", "")).strip().lower()
-              applied = bool(apply.get("applied", False))
+              applied = bool(apply_report.get("applied", False))
 
               if verdict == "approve" and applied:
                   allow_pr = "true"
