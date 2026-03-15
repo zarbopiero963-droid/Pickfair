@@ -394,9 +394,7 @@ class PickfairApp(
         try:
             if hasattr(self, "connect_btn") and self.connect_btn.winfo_exists():
                 self.connect_btn.configure(
-                    fg_color=COLORS["warning"]
-                    if enabled
-                    else COLORS["button_primary"]
+                    fg_color=COLORS["warning"] if enabled else COLORS["button_primary"]
                 )
         except Exception:
             pass
@@ -542,4 +540,3 @@ class PickfairApp(
 if __name__ == "__main__":
     app = PickfairApp()
     app.root.mainloop()
-
