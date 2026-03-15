@@ -42,7 +42,7 @@ def parse_json_content(content: str) -> dict:
 
     if not content:
         return {
-            "summary": "Patch candidate response was empty.",
+            "summary": "Empty AI response",
             "target_files": [],
             "why_this_fix": "",
             "proposed_patches": [],
@@ -106,7 +106,7 @@ def parse_json_content(content: str) -> dict:
                         break
 
     return {
-        "summary": "Patch candidate response was not valid JSON.",
+        "summary": "Invalid JSON from AI",
         "target_files": [],
         "why_this_fix": "",
         "proposed_patches": [],
@@ -114,48 +114,6 @@ def parse_json_content(content: str) -> dict:
         "risk": "unknown",
         "raw_content": content,
     }
-
-
-def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -> int:
-    score = 0
-
-    target_file = str(item.get("target_file", "")).strip()
-    required_symbols = item.get("required_symbols", []) or []
-    issue_type = str(item.get("issue_type", "")).strip()
-
-    if item.get("priority") == "P0":
-        score += 100
-
-    if issue_type == "empty_test_file":
-        score += 180
-
-    if issue_type == "corrupted_or_non_test_content":
-        score += 170
-
-    for signal in pytest_signals:
-        if target_file and target_file in signal:
-            score += 50
-
-        for symbol in required_symbols:
-            if symbol and symbol in signal:
-                score += 80
-
-    for contract in contracts:
-        try:
-            contract_file = str(contract[0]).strip()
-            contract_symbol = str(contract[1]).strip()
-        except Exception:
-            continue
-
-        if target_file and target_file == contract_file:
-            score += 60
-
-        for symbol in required_symbols:
-            if symbol and symbol == contract_symbol:
-                score += 90
-
-    score += min(len(item.get("related_tests", []) or []), 10)
-    return score
 
 
 def load_target_context() -> dict:
@@ -167,41 +125,22 @@ def load_target_context() -> dict:
     if not fix_contexts:
         return {}
 
-    pytest_signals = global_context.get("pytest_signals", []) or []
-    contracts = global_context.get("contracts", []) or []
-    failing_tests = test_failure_context.get("test_failure_contexts", []) or []
+    targets = []
 
-    scored = []
     for item in fix_contexts:
-        score = _score_fix_context(item, pytest_signals, contracts)
-        scored.append((score, item))
+        if item.get("priority") == "P0":
+            targets.append(item)
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    if not targets and fix_contexts:
+        targets = [fix_contexts[0]]
 
-    selected = []
-    seen = set()
-
-    for score, item in scored:
-        target_file = str(item.get("target_file", "")).strip()
-        if not target_file or target_file in seen:
-            continue
-
-        if item.get("priority") != "P0":
-            continue
-
-        seen.add(target_file)
-        selected.append(item)
-
-        if len(selected) >= 5:
-            break
-
-    if not selected and fix_contexts:
-        selected = [fix_contexts[0]]
+    targets = targets[:5]
 
     files_payload = []
 
-    for target in selected:
+    for target in targets:
         target_file = ROOT / target["target_file"]
+
         related_tests = [ROOT / t for t in target.get("related_tests", [])]
         related_fixtures = [ROOT / t for t in target.get("related_fixtures", [])]
         related_contracts = [ROOT / t for t in target.get("related_contracts", [])]
@@ -229,10 +168,10 @@ def load_target_context() -> dict:
         )
 
     return {
-        "targets": selected,
+        "targets": targets,
         "files_payload": files_payload,
         "global_context": global_context,
-        "failing_tests": failing_tests,
+        "failing_tests": test_failure_context.get("test_failure_contexts", []),
     }
 
 
@@ -240,16 +179,49 @@ def build_messages(ctx: dict) -> list[dict]:
     system_prompt = """
 You are a conservative Python patch generator working on the Pickfair repository.
 
-Rules:
+GENERAL RULES
+
 - generate minimal safe patches
 - preserve backward compatibility
-- avoid redesign
-- fix only provided files
+- never redesign modules
+- modify only provided files
 - restore missing public contracts
-- respect tests
-- prefer solving multiple closely-related P0 blockers in one coordinated patch
-- if a failing test file is empty, corrupted, or contains non-test content, repair the test file itself with the minimum valid pytest test
-- when repairing a broken test file, do not invent large new behaviors; write the smallest meaningful test consistent with the related source file and the failure context
+- respect test expectations
+- prefer fixing multiple P0 issues in one patch when closely related
+
+
+TEST REPAIR RULES
+
+Sometimes the failing file is a test file.
+
+If a test file is:
+
+- empty
+- corrupted
+- truncated
+- contains non-pytest code
+
+you must repair the test.
+
+But NEVER create placeholder tests.
+
+Forbidden:
+
+assert True
+pass
+dummy tests
+
+Instead generate the SMALLEST SEMANTICALLY CORRECT pytest test.
+
+The repaired test must:
+
+- verify real behavior
+- match the related module
+- reproduce the failure context
+- avoid inventing new features
+
+
+PATCH FORMAT
 
 Return STRICT JSON:
 
@@ -260,7 +232,7 @@ Return STRICT JSON:
   "proposed_patches": [
     {
       "target_file": "path.py",
-      "patch": "unified diff patch"
+      "patch": "unified diff"
     }
   ],
   "tests_to_run": [],
@@ -274,7 +246,6 @@ Return STRICT JSON:
         "failing_tests": ctx["failing_tests"],
         "global_context": {
             "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
-            "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
             "contracts": ctx["global_context"].get("contracts", [])[:20],
         },
     }
@@ -293,9 +264,6 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
     }
 
     patches = data.get("proposed_patches", [])
-    if not isinstance(patches, list):
-        patches = []
-
     normalized = []
 
     for item in patches:
@@ -318,86 +286,21 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
             }
         )
 
-    tests_to_run = data.get("tests_to_run", [])
-    if not isinstance(tests_to_run, list):
-        tests_to_run = []
-
     return {
         "summary": str(data.get("summary", "")).strip(),
         "target_files": [p["target_file"] for p in normalized],
         "why_this_fix": str(data.get("why_this_fix", "")).strip(),
         "proposed_patches": normalized,
-        "tests_to_run": tests_to_run,
-        "risk": str(data.get("risk", "unknown")).strip().lower() or "unknown",
+        "tests_to_run": data.get("tests_to_run", []),
+        "risk": str(data.get("risk", "unknown")).lower(),
     }
-
-
-def render_patch_candidate_md(data: dict, model_used: str) -> str:
-    lines = []
-    lines.append("Patch Candidate")
-    lines.append("")
-    lines.append(f"Model used: {model_used}")
-    lines.append("")
-    lines.append(f"Summary: {data.get('summary', '')}")
-    lines.append("")
-    lines.append("Target files:")
-
-    target_files = data.get("target_files", [])
-    if target_files:
-        for file in target_files:
-            lines.append(f"- {file}")
-    else:
-        lines.append("- Nessun file target disponibile.")
-
-    lines.append("")
-    lines.append(f"Risk: {data.get('risk', '')}")
-    lines.append("")
-    lines.append("Why this fix")
-    lines.append(data.get("why_this_fix", ""))
-    lines.append("")
-    lines.append("Tests to run")
-
-    tests = data.get("tests_to_run", [])
-    if tests:
-        for test in tests:
-            lines.append(f"- {test}")
-    else:
-        lines.append("- Nessun test suggerito.")
-
-    lines.append("")
-    lines.append("Proposed patches")
-    lines.append("")
-
-    proposed = data.get("proposed_patches", [])
-    if proposed:
-        for item in proposed:
-            lines.append(f"Target file: {item.get('target_file', '')}")
-            lines.append("")
-            lines.append("```diff")
-            lines.append(item.get("patch", ""))
-            lines.append("```")
-            lines.append("")
-    else:
-        lines.append("_Nessuna patch disponibile._")
-        lines.append("")
-
-    return "\n".join(lines)
 
 
 def main() -> int:
     ctx = load_target_context()
 
     if not ctx:
-        data = {
-            "summary": "No fix context available",
-            "target_files": [],
-            "why_this_fix": "",
-            "proposed_patches": [],
-            "tests_to_run": [],
-            "risk": "unknown",
-        }
-        write_json(AUDIT_OUT / "patch_candidate.json", data)
-        write_text(AUDIT_OUT / "patch_candidate.md", "No context.")
+        write_text(AUDIT_OUT / "patch_candidate.md", "No context available")
         return 0
 
     try:
@@ -408,30 +311,42 @@ def main() -> int:
             messages=messages,
         )
 
-        content = resp["content"]
-        model_used = resp["model_used"]
+        content = resp.get("content", "")
+        model_used = resp.get("model_used", "unknown")
 
         parsed = parse_json_content(content)
         normalized = normalize_patch_candidate(parsed, ctx)
 
-        if not normalized["proposed_patches"]:
-            raise RuntimeError("AI non ha prodotto patch valide")
-
         write_json(AUDIT_OUT / "patch_candidate.json", normalized)
-        write_text(
-            AUDIT_OUT / "patch_candidate.md",
-            render_patch_candidate_md(normalized, model_used),
-        )
 
-        print("Patch candidate generator completato")
-        print("Model:", model_used)
-        return 0
+        md = f"""
+Patch Candidate
+
+Model: {model_used}
+
+Summary:
+{normalized.get("summary","")}
+
+Target files:
+{normalized.get("target_files",[])}
+
+Risk:
+{normalized.get("risk","")}
+
+Why this fix:
+{normalized.get("why_this_fix","")}
+"""
+
+        write_text(AUDIT_OUT / "patch_candidate.md", md)
+
+        print("Patch candidate generated")
 
     except Exception as exc:
+
         fallback = {
-            "summary": "Patch candidate generator failed",
-            "target_files": [],
+            "summary": "Patch generator failed",
             "why_this_fix": str(exc),
+            "target_files": [],
             "proposed_patches": [],
             "tests_to_run": [],
             "risk": "unknown",
@@ -440,11 +355,12 @@ def main() -> int:
         write_json(AUDIT_OUT / "patch_candidate.json", fallback)
         write_text(
             AUDIT_OUT / "patch_candidate.md",
-            json.dumps(fallback, indent=2, ensure_ascii=False),
+            json.dumps(fallback, indent=2),
         )
 
-        print("Patch candidate generator fallito:", exc)
-        return 0
+        print("Patch generator error:", exc)
+
+    return 0
 
 
 if __name__ == "__main__":
