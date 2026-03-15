@@ -120,19 +120,6 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Run AI repair loop
-        if: steps.mode.outputs.workflow_mode == 'full_repair'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
-          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
-          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
-        run: |
-          python .github/scripts/ai_repair_loop.py
-        continue-on-error: true
-
       - name: Build PR validation fallback state
         if: steps.mode.outputs.workflow_mode == 'pr_validation'
         shell: bash
@@ -227,6 +214,37 @@ jobs:
           print(f"Existing AI PR state: {state or 'none'}")
           print(f"Existing AI PR head: {head or 'none'}")
           PY
+
+      - name: Run deterministic repo audit
+        if: always()
+        run: |
+          python .github/scripts/repo_ultra_audit_narrative.py
+        continue-on-error: true
+
+      - name: Extract failing tests
+        if: always()
+        run: |
+          python .github/scripts/extract_failing_tests.py
+        continue-on-error: true
+
+      - name: AI reasoning layer
+        if: always()
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
+          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
+        run: |
+          python .github/scripts/ai_reasoning_layer.py
+        continue-on-error: true
+
+      - name: Build priority fix order
+        if: always()
+        run: |
+          python .github/scripts/build_priority_fix_order.py
+        continue-on-error: true
 
       - name: Collect recent failed external CI logs into audit_raw
         if: always()
@@ -392,6 +410,108 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Run issue classifier
+        if: always()
+        run: |
+          python .github/scripts/issue_classifier.py
+        continue-on-error: true
+
+      - name: Show issue classification
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ ISSUE CLASSIFICATION ======================"
+          if [ -f audit_out/issue_classification.json ]; then
+            cat audit_out/issue_classification.json
+          else
+            echo "issue_classification.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Run repair memory filter
+        if: always()
+        run: |
+          python .github/scripts/repair_memory.py
+        continue-on-error: true
+
+      - name: Show filtered fix context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FILTERED FIX CONTEXT ======================"
+          if [ -f audit_out/filtered_fix_context.json ]; then
+            cat audit_out/filtered_fix_context.json
+          else
+            echo "filtered_fix_context.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Build global workflow context
+        if: always()
+        run: |
+          python .github/scripts/workflow_signal_aggregator.py
+        continue-on-error: true
+
+      - name: Show global workflow context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ GLOBAL WORKFLOW CONTEXT ==================="
+          if [ -f audit_out/global_workflow_context.md ]; then
+            cat audit_out/global_workflow_context.md
+          else
+            echo "global_workflow_context.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Run targeted tests
+        if: always()
+        run: |
+          python .github/scripts/run_targeted_tests.py
+        continue-on-error: true
+
+      - name: Show targeted test results
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ TARGETED TEST RESULTS ====================="
+          if [ -f audit_out/targeted_test_results.md ]; then
+            cat audit_out/targeted_test_results.md
+          else
+            echo "targeted_test_results.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Run AI repair loop
+        if: steps.mode.outputs.workflow_mode == 'full_repair'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
+          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
+          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
+          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
+          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
+        run: |
+          python .github/scripts/ai_repair_loop.py
+        continue-on-error: true
+
+      - name: Show repair loop report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI REPAIR LOOP REPORT ====================="
+          if [ -f audit_out/ai_repair_loop_report.md ]; then
+            cat audit_out/ai_repair_loop_report.md
+          else
+            echo "ai_repair_loop_report.md not found"
+          fi
+          echo "============================================================"
+
       - name: Run repair orchestrator
         if: always()
         env:
@@ -413,19 +533,6 @@ jobs:
             cat audit_out/repair_orchestrator_report.md
           else
             echo "repair_orchestrator_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show repair loop report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ AI REPAIR LOOP REPORT ====================="
-          if [ -f audit_out/ai_repair_loop_report.md ]; then
-            cat audit_out/ai_repair_loop_report.md
-          else
-            echo "ai_repair_loop_report.md not found"
           fi
           echo "============================================================"
 
@@ -493,19 +600,6 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Show targeted test results
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ TARGETED TEST RESULTS ====================="
-          if [ -f audit_out/targeted_test_results.md ]; then
-            cat audit_out/targeted_test_results.md
-          else
-            echo "targeted_test_results.md not found"
-          fi
-          echo "============================================================"
-
       - name: Show AI root cause
         if: always()
         shell: bash
@@ -555,70 +649,6 @@ jobs:
             cat audit_out/test_failure_context.json
           else
             echo "test_failure_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Show fix context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FIX CONTEXT ==============================="
-          if [ -f audit_out/fix_context.json ]; then
-            cat audit_out/fix_context.json
-          else
-            echo "fix_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Run issue classifier
-        if: always()
-        run: |
-          python .github/scripts/issue_classifier.py
-        continue-on-error: true
-
-      - name: Show issue classification
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ ISSUE CLASSIFICATION ======================"
-          if [ -f audit_out/issue_classification.json ]; then
-            cat audit_out/issue_classification.json
-          else
-            echo "issue_classification.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Run repair memory filter
-        if: always()
-        run: |
-          python .github/scripts/repair_memory.py
-        continue-on-error: true
-
-      - name: Show filtered fix context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FILTERED FIX CONTEXT ======================"
-          if [ -f audit_out/filtered_fix_context.json ]; then
-            cat audit_out/filtered_fix_context.json
-          else
-            echo "filtered_fix_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Show global workflow context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ GLOBAL WORKFLOW CONTEXT ==================="
-          if [ -f audit_out/global_workflow_context.md ]; then
-            cat audit_out/global_workflow_context.md
-          else
-            echo "global_workflow_context.md not found"
           fi
           echo "============================================================"
 
