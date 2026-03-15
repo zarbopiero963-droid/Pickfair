@@ -49,7 +49,6 @@ def run_script(script: str) -> bool:
         capture_output=False,
         text=True,
     )
-
     return result.returncode == 0
 
 
@@ -83,9 +82,9 @@ def failing_tests() -> int:
 
 def targeted_failures():
     data = read_json(AUDIT_OUT / "targeted_test_results.json")
-    v = data.get("failure_count")
-    if isinstance(v, int):
-        return v
+    value = data.get("failure_count")
+    if isinstance(value, int):
+        return value
     return None
 
 
@@ -261,6 +260,8 @@ def compute_next_action(final_status: str, greener: bool, fully_green: bool) -> 
         "patch_generation_failed",
         "patch_verifier_failed",
         "patch_apply_failed",
+        "refresh_failed",
+        "setup_failed",
     }:
         return "manual_intervention_needed"
     return "inspect_latest_run"
