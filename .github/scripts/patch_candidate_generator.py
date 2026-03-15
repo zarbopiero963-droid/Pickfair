@@ -38,6 +38,7 @@ def load_contexts():
         "test_gap": read_json(AUDIT_OUT / "test_gap_generation_report.json"),
         "fix_context": read_json(AUDIT_OUT / "fix_context.json"),
         "cto": read_json(AUDIT_OUT / "ai_cto_layer.json"),
+        "ci_failure": read_json(AUDIT_OUT / "ci_failure_context.json"),
     }
 
 
@@ -122,7 +123,7 @@ def build_notes(*groups) -> list[str]:
             seen.add(value)
             out.append(value)
 
-    return out[:8]
+    return out[:10]
 
 
 def candidate_from_classified_item(
@@ -195,6 +196,39 @@ def candidate_from_generated_test(test_gap: dict, cto_map: dict) -> dict | None:
     }
 
 
+def is_runtime_failure(item: dict) -> bool:
+    return str(item.get("issue_type", "")).strip() == "runtime_failure"
+
+
+def is_ci_failure(item: dict) -> bool:
+    return str(item.get("issue_type", "")).strip() == "ci_failure"
+
+
+def build_runtime_score(item: dict, cto_item: dict) -> tuple:
+    target_file = normalize_path(item.get("target_file", ""))
+    cto_priority = str(cto_item.get("priority", "P2")).strip().upper()
+
+    return (
+        0 if cto_priority == "P0" else 1 if cto_priority == "P1" else 2,
+        0 if is_runtime_failure(item) else 1,
+        0 if is_runtime_target(target_file) else 1,
+        0 if not is_guardrail_test(target_file) else 1,
+        target_file,
+    )
+
+
+def build_general_score(item: dict, cto_item: dict) -> tuple:
+    target_file = normalize_path(item.get("target_file", ""))
+    cto_priority = str(cto_item.get("priority", "P2")).strip().upper()
+
+    return (
+        0 if cto_priority == "P0" else 1 if cto_priority == "P1" else 2,
+        0 if is_runtime_target(target_file) else 1,
+        0 if not is_guardrail_test(target_file) else 1,
+        target_file,
+    )
+
+
 def choose_candidate(contexts):
     classification_payload = contexts["classification"]
     fix_context = contexts["fix_context"]
@@ -205,9 +239,10 @@ def choose_candidate(contexts):
     class_map = classification_map(classification_payload)
     cto_map = cto_priority_map(cto_payload)
 
+    runtime_fail_safe = []
+    runtime_fail_review = []
     safe_candidates = []
     review_candidates = []
-    runtime_fallbacks = []
 
     for item in classified_items:
         target_file = normalize_path(item.get("target_file", ""))
@@ -224,24 +259,29 @@ def choose_candidate(contexts):
             continue
 
         cto_item = cto_map.get(target_file, {})
-        cto_priority = str(cto_item.get("priority", "P2")).strip().upper()
+        runtime_score = build_runtime_score(item, cto_item)
+        general_score = build_general_score(item, cto_item)
 
-        scored = (
-            0 if cto_priority == "P0" else 1 if cto_priority == "P1" else 2,
-            0 if is_runtime_target(target_file) else 1,
-            0 if not is_guardrail_test(target_file) else 1,
-            target_file,
-        )
+        if is_runtime_failure(item) and is_runtime_target(target_file):
+            if is_auto_fix_safe(item):
+                runtime_fail_safe.append((runtime_score, item, cto_item))
+            elif is_auto_fix_review(item):
+                runtime_fail_review.append((runtime_score, item, cto_item))
 
         if is_auto_fix_safe(item):
-            safe_candidates.append((scored, item, cto_item))
+            safe_candidates.append((general_score, item, cto_item))
         elif is_auto_fix_review(item):
-            review_candidates.append((scored, item, cto_item))
+            review_candidates.append((general_score, item, cto_item))
 
-        fx = get_fix_context_for_target(fix_context, target_file)
-        issue_type = str(fx.get("issue_type", item.get("issue_type", ""))).strip()
-        if issue_type == "runtime_failure" and is_runtime_target(target_file):
-            runtime_fallbacks.append((scored, item, cto_item))
+    if runtime_fail_safe:
+        runtime_fail_safe.sort(key=lambda x: x[0])
+        _, item, cto_item = runtime_fail_safe[0]
+        return candidate_from_classified_item(item, cto_item, "runtime_failure_safe_fix")
+
+    if runtime_fail_review:
+        runtime_fail_review.sort(key=lambda x: x[0])
+        _, item, cto_item = runtime_fail_review[0]
+        return candidate_from_classified_item(item, cto_item, "runtime_failure_review_fix")
 
     if safe_candidates:
         safe_candidates.sort(key=lambda x: x[0])
@@ -253,16 +293,30 @@ def choose_candidate(contexts):
         _, item, cto_item = review_candidates[0]
         return candidate_from_classified_item(item, cto_item, "reviewable_fix")
 
-    if runtime_fallbacks:
-        runtime_fallbacks.sort(key=lambda x: x[0])
-        _, item, cto_item = runtime_fallbacks[0]
-        return candidate_from_classified_item(item, cto_item, "runtime_target_fix")
-
     generated_test_candidate = candidate_from_generated_test(test_gap, cto_map)
     if generated_test_candidate:
         return generated_test_candidate
 
-    # fallback minimo dal fix_context se esiste e non è pericoloso
+    for item in fix_context.get("fix_contexts", []) or []:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
+            continue
+        if is_github_script(target_file) or is_hft_test(target_file):
+            continue
+
+        classified_item = class_map.get(target_file, {})
+        if is_human_only(classified_item):
+            continue
+
+        if is_runtime_failure(item) and is_runtime_target(target_file):
+            cto_item = cto_map.get(target_file, {})
+            base = classified_item or item
+            return candidate_from_classified_item(
+                base,
+                cto_item,
+                "fallback_runtime_failure_fix",
+            )
+
     for item in fix_context.get("fix_contexts", []) or []:
         target_file = normalize_path(item.get("target_file", ""))
         if not target_file:
