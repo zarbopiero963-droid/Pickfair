@@ -70,6 +70,7 @@ jobs:
           test -f .github/scripts/post_patch_review.py
           test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/build_merge_summary.py
+          test -f .github/scripts/build_test_failure_context.py
           test -f .github/scripts/ai_repair_loop.py
           echo "Scripts found."
 
@@ -182,6 +183,18 @@ jobs:
         run: |
           echo "================ PRIORITY FIX ORDER ========="
           cat audit_out/priority_fix_order.md || true
+
+      - name: Build test failure context
+        if: always()
+        run: |
+          python .github/scripts/build_test_failure_context.py
+        continue-on-error: true
+
+      - name: Show test failure context
+        if: always()
+        run: |
+          echo "================ TEST FAILURE CONTEXT ======"
+          cat audit_out/test_failure_context.json || true
 
       - name: Build fix context
         if: always()
