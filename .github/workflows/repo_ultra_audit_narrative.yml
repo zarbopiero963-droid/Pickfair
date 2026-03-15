@@ -74,6 +74,7 @@ jobs:
           test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/ai_repair_loop.py
           test -f .github/scripts/run_targeted_tests.py
+          test -f .github/scripts/repair_orchestrator.py
           echo "Scripts found."
 
       - name: Detect workflow mode
@@ -170,6 +171,82 @@ jobs:
           print(report)
           PY
 
+      - name: Discover existing AI PR
+        if: always()
+        id: existing_ai_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+
+          result = subprocess.run(
+              [
+                  "gh", "pr", "list",
+                  "--state", "open",
+                  "--search", "AI automated patch in:title",
+                  "--json", "number,headRefName,state"
+              ],
+              capture_output=True,
+              text=True,
+          )
+
+          number = ""
+          state = ""
+          head = ""
+
+          if result.returncode == 0:
+              try:
+                  items = json.loads(result.stdout or "[]")
+              except Exception:
+                  items = []
+
+              if items:
+                  first = items[0]
+                  number = str(first.get("number", "")).strip()
+                  state = str(first.get("state", "")).strip().lower()
+                  head = str(first.get("headRefName", "")).strip()
+
+          with output_path.open("a", encoding="utf-8") as f:
+              f.write(f"number={number}\n")
+              f.write(f"state={state}\n")
+              f.write(f"head={head}\n")
+
+          print(f"Existing AI PR number: {number or 'none'}")
+          print(f"Existing AI PR state: {state or 'none'}")
+          print(f"Existing AI PR head: {head or 'none'}")
+          PY
+
+      - name: Run repair orchestrator
+        if: always()
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          EXISTING_AI_PR_NUMBER: ${{ steps.existing_ai_pr.outputs.number }}
+          EXISTING_AI_PR_STATE: ${{ steps.existing_ai_pr.outputs.state }}
+          EXISTING_AI_PR_HEAD: ${{ steps.existing_ai_pr.outputs.head }}
+        run: |
+          python .github/scripts/repair_orchestrator.py
+
+      - name: Show repair orchestrator report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ REPAIR ORCHESTRATOR ======================="
+          if [ -f audit_out/repair_orchestrator_report.md ]; then
+            cat audit_out/repair_orchestrator_report.md
+          else
+            echo "repair_orchestrator_report.md not found"
+          fi
+          echo "============================================================"
+
       - name: Show repair loop report
         if: always()
         shell: bash
@@ -191,7 +268,7 @@ jobs:
           import json
           from pathlib import Path
 
-          path = Path("audit_out/ai_repair_loop_state.json")
+          path = Path("audit_out/repair_orchestrator_state.json")
           if not path.exists():
               print("Repo materially greener: UNKNOWN")
               print("Repo fully green: UNKNOWN")
@@ -205,6 +282,7 @@ jobs:
           print(f"Repo fully green: {'YES' if data.get('repo_fully_green') else 'NO'}")
           print(f"Continuation recommended: {'YES' if data.get('continuation_recommended') else 'NO'}")
           print(f"Next action: {data.get('next_action', 'unknown')}")
+          print(f"Orchestrator action: {data.get('action', 'unknown')}")
           PY
 
       - name: Show deterministic report file
@@ -438,51 +516,30 @@ jobs:
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
-          post_path = Path("audit_out/post_patch_review.json")
-          apply_path = Path("audit_out/patch_apply_report.json")
-          loop_path = Path("audit_out/ai_repair_loop_state.json")
-          verification_path = Path("audit_out/patch_verification.json")
+          orch_path = Path("audit_out/repair_orchestrator_state.json")
 
           allow_pr = "false"
           reason = "unknown"
 
-          if not loop_path.exists():
-              reason = "missing_ai_repair_loop_state"
-          elif not post_path.exists():
-              reason = "missing_post_patch_review"
-          elif not apply_path.exists():
-              reason = "missing_patch_apply_report"
-          elif not verification_path.exists():
-              reason = "missing_patch_verification"
+          if not orch_path.exists():
+              reason = "missing_repair_orchestrator_state"
           else:
-              loop_state = json.loads(loop_path.read_text(encoding="utf-8"))
-              post = json.loads(post_path.read_text(encoding="utf-8"))
-              apply_report = json.loads(apply_path.read_text(encoding="utf-8"))
-              verification = json.loads(verification_path.read_text(encoding="utf-8"))
+              orch = json.loads(orch_path.read_text(encoding="utf-8"))
+              action = str(orch.get("action", "")).strip()
+              should_pr = bool(orch.get("should_create_or_update_pr", False))
 
-              verdict = str(post.get("final_verdict", "")).strip().lower()
-              verifier = str(verification.get("verdict", "")).strip().lower()
-              applied = bool(apply_report.get("applied", False))
-              greener = bool(loop_state.get("repo_materially_greener", False))
-
-              reviewable = (
-                  applied
-                  and verifier in {"approve", "weak-approve", "review"}
-                  and verdict in {"approve", "review"}
-              )
-
-              if reviewable:
+              if action == "stop_green":
+                  allow_pr = "false"
+                  reason = "repository_fully_green"
+              elif should_pr:
                   allow_pr = "true"
-                  if greener:
-                      reason = loop_state.get("next_action", "improved_and_applied")
-                  else:
-                      reason = "reviewable_fix_pr"
-              elif verdict == "reject":
-                  reason = "post_patch_review_reject"
-              elif not applied:
-                  reason = "patch_not_applied"
+                  reason = action or "create_or_update_ai_pr"
+              elif action == "update_existing_ai_pr":
+                  allow_pr = "true"
+                  reason = "update_existing_ai_pr"
               else:
-                  reason = "not_reviewable"
+                  allow_pr = "false"
+                  reason = action or "not_reviewable"
 
           print(f"allow_pr={allow_pr}")
           print(f"gate_reason={reason}")
@@ -502,8 +559,8 @@ jobs:
           fi
           echo "Final PR gate approved."
 
-      - name: Create AI fix branch
-        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.review_gate.outputs.allow_pr == 'true'
+      - name: Create or update AI fix branch
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.ref == 'refs/heads/main' && steps.review_gate.outputs.allow_pr == 'true'
         id: create_ai_branch
         shell: bash
         run: |
@@ -559,13 +616,13 @@ jobs:
               print(item)
           PY
 
-          BRANCH="ai-fix-${{ github.run_id }}"
+          BRANCH="ai-repair/current"
           echo "ai_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
           git config --global user.name "repo-ai-bot"
           git config --global user.email "ai-bot@users.noreply.github.com"
 
-          echo "Creating branch $BRANCH"
+          echo "Creating or updating branch $BRANCH"
           git checkout -B "$BRANCH"
 
           python - <<'PY'
@@ -588,7 +645,7 @@ jobs:
           PY
 
           if git diff --cached --quiet; then
-            echo "No staged changes detected, skipping branch creation"
+            echo "No staged changes detected, skipping branch update"
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -600,21 +657,20 @@ jobs:
         continue-on-error: true
 
       - name: Create or update Pull Request
-        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && steps.create_ai_branch.outputs.has_changes == 'true'
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.create_ai_branch.outputs.has_changes == 'true'
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_BRANCH: ${{ steps.create_ai_branch.outputs.ai_branch }}
+          EXISTING_AI_PR_NUMBER: ${{ steps.existing_ai_pr.outputs.number }}
         shell: bash
         run: |
           set -e
 
-          EXISTING="$(gh pr list --head "$AI_BRANCH" --json number --jq '.[0].number')"
-
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            echo "Existing PR found: #$EXISTING"
-            gh pr edit "$EXISTING" --title "AI automated patch" --body-file audit_out/pr_body.md
-            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+          if [ -n "${EXISTING_AI_PR_NUMBER}" ]; then
+            echo "Updating existing PR #${EXISTING_AI_PR_NUMBER}"
+            gh pr edit "${EXISTING_AI_PR_NUMBER}" --title "AI automated patch" --body-file audit_out/pr_body.md
+            echo "pr_number=${EXISTING_AI_PR_NUMBER}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -625,7 +681,7 @@ jobs:
           echo "pr_number=$NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Post AI comment to PR
-        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && steps.create_pr.outputs.pr_number != ''
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.create_pr.outputs.pr_number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
