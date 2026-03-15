@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(".").resolve()
@@ -35,47 +36,159 @@ def write_json(path: Path, data) -> None:
 
 
 def normalize_path(path_str: str) -> str:
-    return str(path_str or "").strip().replace("\\", "/")
-
-
-def safe_read_repo_file(rel_path: str) -> str:
-    path = ROOT / rel_path
-    if not path.exists() or not path.is_file():
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
         return ""
-    return read_text(path)
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
 
-def apply_generated_test(target_file: str) -> tuple[bool, str]:
-    path = ROOT / target_file
-    if path.exists() and path.is_file():
-        content = read_text(path)
-        if content.strip():
-            return True, "Generated nominal test file already present and non-empty."
-        return False, "Generated nominal test file exists but is empty."
-    return False, "Generated nominal test file not found on disk."
+def repo_file_exists(rel_path: str) -> bool:
+    if not rel_path:
+        return False
+    path = ROOT / rel_path
+    return path.exists() and path.is_file()
 
 
-def apply_public_contract_stub(target_file: str) -> tuple[bool, str]:
-    path = ROOT / target_file
-    if not path.exists() or not path.is_file():
-        return False, "Target file for public contract fix not found."
-
-    content = read_text(path)
-    if content.strip():
-        return True, "Target runtime file exists and is ready for patch review/apply stage."
-    return False, "Target runtime file is empty or unreadable."
+def is_python_file(rel_path: str) -> bool:
+    return normalize_path(rel_path).lower().endswith(".py")
 
 
-def apply_runtime_patch_stub(target_file: str) -> tuple[bool, str]:
-    path = ROOT / target_file
-    if not path.exists() or not path.is_file():
-        return False, "Runtime target file not found."
+def is_generated_test(rel_path: str) -> bool:
+    return normalize_path(rel_path).lower().startswith("tests/generated/")
 
-    content = read_text(path)
+
+def is_runtime_python(rel_path: str) -> bool:
+    rel = normalize_path(rel_path).lower()
+    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
+
+
+def run_cmd(args: list[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            args,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+        return result.returncode == 0, out.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def file_changed(rel_path: str) -> bool:
+    ok, out = run_cmd(["git", "diff", "--name-only", "--", rel_path])
+    if not ok:
+        return False
+    changed = [x.strip() for x in out.splitlines() if x.strip()]
+    return rel_path in changed
+
+
+def any_changed(paths: list[str]) -> list[str]:
+    changed = []
+    for rel in paths:
+        rel = normalize_path(rel)
+        if rel and file_changed(rel):
+            changed.append(rel)
+    return changed
+
+
+def safe_py_compile(rel_path: str) -> tuple[bool, str]:
+    return run_cmd(["python", "-m", "py_compile", rel_path])
+
+
+def try_ruff_fix(rel_path: str) -> list[str]:
+    details = []
+
+    ok, out = run_cmd(["python", "-m", "ruff", "check", rel_path, "--fix"])
+    details.append(f"ruff check --fix: {'ok' if ok else 'failed'}")
+    if out:
+        details.append(out[:4000])
+
+    ok2, out2 = run_cmd(["python", "-m", "ruff", "format", rel_path])
+    details.append(f"ruff format: {'ok' if ok2 else 'failed'}")
+    if out2:
+        details.append(out2[:4000])
+
+    return details
+
+
+def apply_generated_test(target_file: str) -> tuple[bool, str, list[str], list[str]]:
+    details = []
+    changed = []
+
+    if not repo_file_exists(target_file):
+        return False, "Generated nominal test file not found on disk.", details, changed
+
+    content = read_text(ROOT / target_file)
     if not content.strip():
-        return False, "Runtime target file is empty."
+        return False, "Generated nominal test file exists but is empty.", details, changed
 
-    return True, "Runtime target file exists and patch application stage accepted the candidate."
+    if file_changed(target_file):
+        changed.append(target_file)
+        return True, "Generated nominal test file exists and contains real changes.", details, changed
+
+    return True, "Generated nominal test file exists and is ready for PR.", details, changed
+
+
+def apply_runtime_python_fix(target_file: str, related_source_file: str) -> tuple[bool, str, list[str], list[str]]:
+    details = []
+    candidate_paths = [target_file]
+    if related_source_file and related_source_file != target_file:
+        candidate_paths.append(related_source_file)
+
+    for rel in candidate_paths:
+        if not repo_file_exists(rel):
+            details.append(f"Target missing: {rel}")
+            continue
+        if not is_python_file(rel):
+            details.append(f"Not a python file: {rel}")
+            continue
+
+        details.extend(try_ruff_fix(rel))
+
+        ok, out = safe_py_compile(rel)
+        details.append(f"py_compile {rel}: {'ok' if ok else 'failed'}")
+        if out:
+            details.append(out[:2000])
+
+    changed = any_changed(candidate_paths)
+
+    if changed:
+        return True, "Runtime/local patch applied with real file modifications.", details, changed
+
+    return False, "No real runtime modification was produced by local patching.", details, changed
+
+
+def apply_test_python_fix(target_file: str) -> tuple[bool, str, list[str], list[str]]:
+    details = []
+
+    if not repo_file_exists(target_file):
+        return False, "Target test file not found.", details, []
+
+    if not is_python_file(target_file):
+        return False, "Target test file is not Python.", details, []
+
+    details.extend(try_ruff_fix(target_file))
+
+    ok, out = safe_py_compile(target_file)
+    details.append(f"py_compile {target_file}: {'ok' if ok else 'failed'}")
+    if out:
+        details.append(out[:2000])
+
+    changed = any_changed([target_file])
+
+    if changed:
+        return True, "Test file patched locally with real modifications.", details, changed
+
+    return False, "No real modification produced on test target.", details, changed
 
 
 def render_markdown(report: dict) -> str:
@@ -119,7 +232,7 @@ def main() -> int:
     strategy = str(candidate.get("strategy", "")).strip()
     issue_type = str(candidate.get("issue_type", "")).strip()
     classification = str(candidate.get("classification", "")).strip()
-    notes = candidate.get("notes", []) or []
+    notes = [str(x).strip() for x in (candidate.get("notes", []) or []) if str(x).strip()]
 
     report = {
         "applied": False,
@@ -151,31 +264,32 @@ def main() -> int:
         return 0
 
     ok = False
-    message = ""
+    summary = ""
+    details = []
+    changed = []
 
-    if strategy == "generate_nominal_test":
-        ok, message = apply_generated_test(target_file)
-    elif issue_type == "missing_public_contract":
-        ok, message = apply_public_contract_stub(target_file)
+    if is_generated_test(target_file) or strategy == "generate_nominal_test":
+        ok, summary, details, changed = apply_generated_test(target_file)
+
+    elif is_runtime_python(target_file):
+        ok, summary, details, changed = apply_runtime_python_fix(target_file, related_source_file)
+
+    elif is_python_file(target_file):
+        ok, summary, details, changed = apply_test_python_fix(target_file)
+
     else:
-        ok, message = apply_runtime_patch_stub(target_file)
+        summary = "Unsupported target type for local patch application."
+        details = [f"Unsupported target_file: {target_file}"]
 
-    report["applied"] = bool(ok)
-    report["details"] = [message] + [str(x).strip() for x in notes if str(x).strip()]
+    report["applied"] = bool(ok and changed)
+    report["summary"] = summary
+    report["details"] = details + notes
+    report["applied_targets"] = changed
+    report["target_files"] = list(changed)
 
-    applied_targets = []
-    if ok:
-        applied_targets.append(target_file)
-        if related_source_file and related_source_file != target_file:
-            applied_targets.append(related_source_file)
-
-    report["applied_targets"] = applied_targets
-    report["target_files"] = list(applied_targets)
-
-    if ok:
-        report["summary"] = "Patch candidate accepted by apply stage."
-    else:
-        report["summary"] = "Patch candidate could not be applied safely."
+    if ok and not changed:
+        report["applied"] = False
+        report["summary"] = "Patch logic ran, but no real file diff was produced."
 
     write_json(AUDIT_OUT / "patch_apply_report.json", report)
     write_text(AUDIT_OUT / "patch_apply_report.md", render_markdown(report))
