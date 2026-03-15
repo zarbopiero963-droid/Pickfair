@@ -83,6 +83,7 @@ jobs:
           test -f .github/scripts/load_repo_diagnostics.py
           test -f .github/scripts/test_gap_generator.py
           test -f .github/scripts/final_pr_gate.py
+          test -f .github/scripts/ai_cto_layer.py
           echo "Scripts found."
 
       - name: Detect workflow mode
@@ -101,9 +102,15 @@ jobs:
         if: always()
         run: |
           mkdir -p audit_raw
-          cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
+          if [ -f docs/REPO_RADIOGRAPHY.md ]; then
+            cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
+          else
+            : > audit_raw/ai_governance_context.md
+          fi
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
-          cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
+          if [ -f docs/AI_RULEBOOK.md ]; then
+            cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
+          fi
           echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
           if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
             cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
@@ -429,6 +436,25 @@ jobs:
             cat audit_out/repo_diagnostics_context.json
           else
             echo "repo_diagnostics_context.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Run AI CTO layer
+        if: always()
+        run: |
+          python .github/scripts/ai_cto_layer.py
+        continue-on-error: true
+
+      - name: Show AI CTO layer output
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI CTO LAYER =============================="
+          if [ -f audit_out/ai_cto_layer.json ]; then
+            cat audit_out/ai_cto_layer.json
+          else
+            echo "ai_cto_layer.json not found"
           fi
           echo "============================================================"
 
