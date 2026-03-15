@@ -452,13 +452,86 @@ jobs:
         id: create_ai_branch
         shell: bash
         run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          report_path = Path("audit_out/patch_apply_report.json")
+          candidate_path = Path("audit_out/patch_candidate.json")
+
+          files = []
+
+          if report_path.exists():
+              try:
+                  data = json.loads(report_path.read_text(encoding="utf-8"))
+              except Exception:
+                  data = {}
+              files = data.get("applied_targets", []) or data.get("target_files", []) or []
+
+          if not files and candidate_path.exists():
+              try:
+                  data = json.loads(candidate_path.read_text(encoding="utf-8"))
+              except Exception:
+                  data = {}
+              files = data.get("target_files", []) or []
+
+          clean = []
+          seen = set()
+
+          for f in files:
+              f = str(f).strip()
+              if not f:
+                  continue
+              if f.startswith("audit_out/") or f.startswith("audit_raw/"):
+                  continue
+              if f in seen:
+                  continue
+              seen.add(f)
+              clean.append(f)
+
+          Path("audit_out/pr_commit_files.json").write_text(
+              json.dumps({"files": clean}, indent=2, ensure_ascii=False),
+              encoding="utf-8",
+          )
+
+          if not clean:
+              print("No patch target files available for commit.")
+              sys.exit(10)
+
+          print("Files selected for commit:")
+          for item in clean:
+              print(item)
+          PY
+
           BRANCH="ai-fix-${{ github.run_id }}"
           echo "ai_branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
           git config --global user.name "repo-ai-bot"
           git config --global user.email "ai-bot@users.noreply.github.com"
 
-          git add -A
+          echo "Creating branch $BRANCH"
+          git checkout -B "$BRANCH"
+
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          path = Path("audit_out/pr_commit_files.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          files = data.get("files", [])
+
+          if not files:
+              print("No files to add.")
+              sys.exit(11)
+
+          cmd = ["git", "add", "--"] + files
+          result = subprocess.run(cmd)
+          sys.exit(result.returncode)
+          PY
 
           if git diff --cached --quiet; then
             echo "No staged changes detected, skipping branch creation"
@@ -466,8 +539,6 @@ jobs:
             exit 0
           fi
 
-          echo "Creating branch $BRANCH"
-          git checkout -B "$BRANCH"
           git commit -m "AI automated patch candidate"
           git push --force-with-lease origin "$BRANCH"
 
@@ -516,4 +587,4 @@ jobs:
           path: |
             audit_out/**
             audit_raw/**
-          if-no-files-found: warn 
+          if-no-files-found: warn
