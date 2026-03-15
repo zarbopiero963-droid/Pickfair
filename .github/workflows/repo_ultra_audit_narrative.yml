@@ -73,6 +73,7 @@ jobs:
           test -f .github/scripts/build_merge_summary.py
           test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/ai_repair_loop.py
+          test -f .github/scripts/run_targeted_tests.py
           echo "Scripts found."
 
       - name: Load AI Governance Docs
@@ -480,4 +481,4 @@ jobs:
           path: |
             audit_out/**
             audit_raw/**
-          if-no-files-found: warn 
+          if-no-files-found: warn
