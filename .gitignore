@@ -1,39 +1,54 @@
+# -----------------------------
 # Python
+# -----------------------------
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
 
-# Build
-dist/
-build/
-*.egg-info/
-*.spec
-
-# PyInstaller
-*.manifest
-
-# IDE
-.idea/
-.vscode/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# DevOps engine runtime
-logs/
-backups/
-
-# Test cache
-.pytest_cache/
-.mypy_cache/
-
-# Virtual env
+# Virtual environments
 .venv/
 venv/
 env/
 ENV/
 
-# Artifacts
-*.zip
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Lint caches
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# -----------------------------
+# AI pipeline artifacts
+# -----------------------------
+audit_out/
+audit_raw/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.cache
+
+# Workflow helpers
+pr_commit_files.json
