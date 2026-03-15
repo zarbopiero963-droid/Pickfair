@@ -55,6 +55,7 @@ jobs:
         run: |
           mkdir -p audit_out
           mkdir -p audit_raw
+          mkdir -p audit_raw/external_ci_logs
 
       - name: Verify scripts exist
         run: |
@@ -226,6 +227,122 @@ jobs:
           print(f"Existing AI PR state: {state or 'none'}")
           print(f"Existing AI PR head: {head or 'none'}")
           PY
+
+      - name: Collect recent failed external CI logs into audit_raw
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CURRENT_WORKFLOW: Repo Ultra Audit Narrative
+          CURRENT_BRANCH: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          out_dir = Path("audit_raw/external_ci_logs")
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          repo = os.environ["GH_REPO"]
+          current_workflow = os.environ["CURRENT_WORKFLOW"]
+          current_branch = os.environ["CURRENT_BRANCH"]
+
+          wanted = {
+              "Pickfair Ultra CI Pipeline",
+              "Pickfair CI Pipeline",
+              "AI Guardrails",
+              "Full Test & Coverage Gate",
+              "Full Test Suite",
+              "tests.yml",
+              "run_tests.yml",
+              "Repo Update Engine ULTRA",
+          }
+
+          cmd = [
+              "gh", "run", "list",
+              "--repo", repo,
+              "--branch", current_branch,
+              "--limit", "30",
+              "--json", "databaseId,name,conclusion,status,headBranch"
+          ]
+          result = subprocess.run(cmd, capture_output=True, text=True)
+
+          if result.returncode != 0:
+              print("Unable to query workflow runs.")
+              print(result.stderr)
+              raise SystemExit(0)
+
+          try:
+              runs = json.loads(result.stdout or "[]")
+          except Exception:
+              runs = []
+
+          selected = []
+          for run in runs:
+              name = str(run.get("name", "")).strip()
+              conclusion = str(run.get("conclusion", "")).strip().lower()
+
+              if not name or name == current_workflow:
+                  continue
+              if name not in wanted:
+                  continue
+              if conclusion not in {"failure", "cancelled", "startup_failure", "timed_out", "action_required"}:
+                  continue
+
+              selected.append(run)
+
+          selected = selected[:8]
+
+          print(f"Selected failed external CI runs: {len(selected)}")
+
+          for run in selected:
+              run_id = str(run.get("databaseId", "")).strip()
+              run_name = str(run.get("name", "")).strip()
+              safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_name).strip("_")
+              log_path = out_dir / f"{safe_name}_{run_id}.log"
+
+              cmd = [
+                  "gh", "run", "view", run_id,
+                  "--repo", repo,
+                  "--log"
+              ]
+              view = subprocess.run(cmd, capture_output=True, text=True)
+
+              if view.returncode != 0:
+                  fallback = (
+                      f"Workflow: {run_name}\n"
+                      f"Run ID: {run_id}\n"
+                      f"Conclusion: {run.get('conclusion')}\n"
+                      f"Status: {run.get('status')}\n"
+                      f"Unable to fetch full logs.\n"
+                      f"stderr:\n{view.stderr}\n"
+                  )
+                  log_path.write_text(fallback, encoding="utf-8")
+                  continue
+
+              content = (
+                  f"Workflow: {run_name}\n"
+                  f"Run ID: {run_id}\n"
+                  f"Conclusion: {run.get('conclusion')}\n"
+                  f"Status: {run.get('status')}\n\n"
+                  f"{view.stdout}"
+              )
+              log_path.write_text(content, encoding="utf-8")
+
+          print("External CI log collection completed.")
+          PY
+
+      - name: Show collected external CI logs
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ EXTERNAL CI LOG FILES ===================="
+          find audit_raw/external_ci_logs -maxdepth 1 -type f | sort || true
+          echo "==========================================================="
 
       - name: Build CI failure context
         if: always()
@@ -449,6 +566,19 @@ jobs:
         run: |
           python .github/scripts/repair_memory.py
         continue-on-error: true
+
+      - name: Show filtered fix context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FILTERED FIX CONTEXT ======================"
+          if [ -f audit_out/filtered_fix_context.json ]; then
+            cat audit_out/filtered_fix_context.json
+          else
+            echo "filtered_fix_context.json not found"
+          fi
+          echo "============================================================"
 
       - name: Show global workflow context
         if: always()
