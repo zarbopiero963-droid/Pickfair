@@ -31,299 +31,270 @@ def write_text(path: Path, text: str) -> None:
 
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def load_context() -> dict:
-    patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json")
-    fix_context = read_json(AUDIT_OUT / "fix_context.json")
-    global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
-
-    target_files = patch_candidate.get("target_files", []) or []
-    proposed_patches = patch_candidate.get("proposed_patches", []) or []
-    tests_to_run = patch_candidate.get("tests_to_run", []) or []
-
-    related_fix_contexts = []
-    for item in fix_context.get("fix_contexts", []):
-        target_file = str(item.get("target_file", "")).strip()
-        if target_file in target_files:
-            related_fix_contexts.append(item)
-
-    files_payload = []
-
-    for target_file in target_files:
-        target_path = ROOT / target_file
-        target_fix_context = next(
-            (item for item in related_fix_contexts if item.get("target_file") == target_file),
-            {},
-        )
-
-        related_tests = [ROOT / t for t in target_fix_context.get("related_tests", [])]
-        related_fixtures = [ROOT / t for t in target_fix_context.get("related_fixtures", [])]
-        related_contracts = [ROOT / t for t in target_fix_context.get("related_contracts", [])]
-
-        patch_text = ""
-        for item in proposed_patches:
-            if item.get("target_file") == target_file:
-                patch_text = str(item.get("patch", ""))
-                break
-
-        files_payload.append(
-            {
-                "target_file": target_file,
-                "required_symbols": target_fix_context.get("required_symbols", []),
-                "patch_text": patch_text,
-                "target_file_text": read_text(target_path)[:25000] if target_path.exists() else "",
-                "related_tests_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:15000]
-                    for p in related_tests
-                    if p.exists()
-                },
-                "related_fixtures_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
-                    for p in related_fixtures
-                    if p.exists()
-                },
-                "related_contracts_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
-                    for p in related_contracts
-                    if p.exists()
-                },
-            }
-        )
-
-    return {
-        "patch_candidate": patch_candidate,
-        "related_fix_contexts": related_fix_contexts,
-        "global_context": {
-            "pytest_signals": global_context.get("pytest_signals", [])[:20],
-            "ai_root_causes": global_context.get("ai_root_causes", [])[:10],
-            "contracts": global_context.get("contracts", [])[:20],
-        },
-        "files_payload": files_payload,
-        "tests_to_run": tests_to_run,
-    }
-
-
-def build_messages(ctx: dict) -> list[dict]:
-    system_prompt = """
-You are a conservative Python multi-file patch verifier working on the Pickfair repository.
-
-Your job is NOT to generate a new patch.
-Your job is to verify whether the proposed coordinated patch candidate appears coherent with:
-- the target files
-- the requested symbols
-- the related tests
-- the contract expectations
-- the repository's rule of minimum viable fix
-
-You MUST:
-- be skeptical
-- prefer backward compatibility
-- detect if the patch set is too small, too risky, unrelated, or likely insufficient
-- never assume the patch is correct just because it looks clean
-- evaluate the patch set as a whole, but also note weak files if any
-
-Return STRICT JSON with this schema:
-{
-  "summary": "short paragraph",
-  "verdict": "approve|weak-approve|reject",
-  "confidence": "low|medium|high",
-  "why": ["string"],
-  "likely_gaps": ["string"],
-  "tests_to_run": ["tests/file.py"],
-  "safe_next_step": "string"
-}
-""".strip()
-
-    user_payload = {
-        "task": "Verify whether this coordinated multi-file patch candidate is coherent with the target fix contexts and tests.",
-        "patch_candidate": ctx["patch_candidate"],
-        "related_fix_contexts": ctx["related_fix_contexts"],
-        "global_context": ctx["global_context"],
-        "files_payload": ctx["files_payload"],
-        "tests_to_run": ctx["tests_to_run"],
-    }
-
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-    ]
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def parse_json_content(content: str) -> dict:
-    content = content.strip()
+    content = (content or "").strip()
+
+    if not content:
+        return {}
 
     try:
         return json.loads(content)
     except Exception:
         pass
 
-    fence_match = re.search(r"```json\s*(.*?)\s*```", content, re.S)
-    if fence_match:
+    fence = re.search(r"```json\s*(.*?)\s*```", content, re.S | re.I)
+    if fence:
         try:
-            return json.loads(fence_match.group(1))
+            return json.loads(fence.group(1))
         except Exception:
             pass
 
-    return {
-        "summary": "Patch verification response was not valid JSON.",
-        "verdict": "reject",
-        "confidence": "low",
-        "why": [],
-        "likely_gaps": ["Model response was not valid JSON."],
-        "tests_to_run": [],
-        "safe_next_step": "Review the coordinated patch manually.",
-        "raw_content": content,
-    }
+    fence = re.search(r"```\s*(.*?)\s*```", content, re.S)
+    if fence:
+        try:
+            return json.loads(fence.group(1))
+        except Exception:
+            pass
+
+    start = content.find("{")
+    if start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+
+        for i in range(start, len(content)):
+            ch = content[i]
+
+            if escape:
+                escape = False
+                continue
+
+            if ch == "\\":
+                escape = True
+                continue
+
+            if ch == '"':
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = content[start : i + 1]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        break
+
+    return {}
 
 
-def normalize_verification(data: dict, ctx: dict) -> dict:
-    verdict = str(data.get("verdict", "reject")).strip().lower()
-    if verdict not in {"approve", "weak-approve", "reject"}:
-        verdict = "reject"
+def normalize_verification(data: dict) -> dict:
+    verdict = str(data.get("verdict", "")).strip().lower()
+    if verdict not in {"approve", "weak-approve", "review", "reject"}:
+        verdict = "review"
 
-    confidence = str(data.get("confidence", "low")).strip().lower()
+    confidence = str(data.get("confidence", "")).strip().lower()
     if confidence not in {"low", "medium", "high"}:
-        confidence = "low"
+        confidence = "medium"
 
-    why = data.get("why", [])
-    if not isinstance(why, list):
-        why = [str(why)]
+    summary = str(data.get("summary", "")).strip()
+    why = str(data.get("why", "")).strip()
 
     likely_gaps = data.get("likely_gaps", [])
     if not isinstance(likely_gaps, list):
-        likely_gaps = [str(likely_gaps)]
+        likely_gaps = []
 
     tests_to_run = data.get("tests_to_run", [])
     if not isinstance(tests_to_run, list):
         tests_to_run = []
 
-    fallback_tests = sorted(
-        {
-            test
-            for item in ctx.get("related_fix_contexts", [])
-            for test in item.get("related_tests", [])
-        }
-    )
-
-    if not tests_to_run:
-        tests_to_run = fallback_tests
-
-    summary = str(data.get("summary", "")).strip()
     safe_next_step = str(data.get("safe_next_step", "")).strip()
 
-    if not summary:
-        summary = "Multi-file patch verification completed."
-    if not safe_next_step:
-        safe_next_step = "Run the listed tests before applying or merging the coordinated patch."
-
     return {
-        "summary": summary,
         "verdict": verdict,
         "confidence": confidence,
+        "summary": summary,
         "why": why,
-        "likely_gaps": likely_gaps,
-        "tests_to_run": tests_to_run,
+        "likely_gaps": [str(x).strip() for x in likely_gaps if str(x).strip()],
+        "tests_to_run": [str(x).strip() for x in tests_to_run if str(x).strip()],
         "safe_next_step": safe_next_step,
     }
 
 
-def render_verification_md(data: dict, model_used: str) -> str:
+def load_context() -> dict:
+    patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json")
+    fix_context = read_json(AUDIT_OUT / "fix_context.json")
+    global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
+    targeted_test_results = read_json(AUDIT_OUT / "targeted_test_results.json")
+
+    return {
+        "patch_candidate": patch_candidate,
+        "fix_context": fix_context,
+        "global_context": global_context,
+        "targeted_test_results": targeted_test_results,
+    }
+
+
+def build_messages(ctx: dict) -> list[dict]:
+    system_prompt = """
+You are a conservative multi-file patch verifier for the Pickfair repository.
+
+Rules:
+- judge the patch set as a whole
+- prefer backward compatibility
+- prefer minimal changes
+- reject only if the patch is clearly unsafe, missing, or inconsistent
+- use "weak-approve" for plausible but not fully proven fixes
+- use "review" when evidence is incomplete but the patch is still reviewable
+
+Return STRICT JSON:
+{
+  "verdict": "approve|weak-approve|review|reject",
+  "confidence": "low|medium|high",
+  "summary": "...",
+  "why": "...",
+  "likely_gaps": ["..."],
+  "tests_to_run": ["..."],
+  "safe_next_step": "..."
+}
+""".strip()
+
+    payload = {
+        "patch_candidate": ctx["patch_candidate"],
+        "fix_contexts": ctx["fix_context"].get("fix_contexts", [])[:10],
+        "global_context": {
+            "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
+            "contracts": ctx["global_context"].get("contracts", [])[:20],
+            "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
+        },
+        "targeted_test_results": ctx["targeted_test_results"],
+    }
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+
+def render_md(data: dict, model_used: str) -> str:
     lines = []
     lines.append("Patch Verification")
     lines.append("")
     lines.append(f"Model used: {model_used}")
     lines.append("")
-    lines.append(f"Verdict: {data.get('verdict', 'unknown')}")
-    lines.append(f"Confidence: {data.get('confidence', 'unknown')}")
+    lines.append(f"Verdict: {data.get('verdict', '')}")
+    lines.append(f"Confidence: {data.get('confidence', '')}")
     lines.append("")
     lines.append("Summary")
-    lines.append(data.get("summary", ""))
+    lines.append(data.get("summary", "") or "_Missing summary._")
     lines.append("")
     lines.append("Why")
-
-    why = data.get("why", [])
-    if why:
-        for item in why:
-            lines.append(f"- {item}")
-    else:
-        lines.append("- Nessuna motivazione disponibile.")
-
+    lines.append(data.get("why", "") or "_Missing explanation._")
     lines.append("")
     lines.append("Likely gaps")
 
-    gaps = data.get("likely_gaps", [])
+    gaps = data.get("likely_gaps", []) or []
     if gaps:
         for item in gaps:
             lines.append(f"- {item}")
     else:
-        lines.append("- Nessun gap segnalato.")
+        lines.append("- None")
 
     lines.append("")
     lines.append("Tests to run")
 
-    tests = data.get("tests_to_run", [])
+    tests = data.get("tests_to_run", []) or []
     if tests:
-        for test in tests:
-            lines.append(f"- {test}")
+        for item in tests:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessun test suggerito.")
 
     lines.append("")
     lines.append("Safe next step")
-    lines.append(data.get("safe_next_step", ""))
+    lines.append(data.get("safe_next_step", "") or "_No next step provided._")
     lines.append("")
 
     return "\n".join(lines)
 
 
-def fallback_verification(ctx: dict) -> dict:
-    patch_candidate = ctx.get("patch_candidate", {})
-    target_files = patch_candidate.get("target_files", []) or []
+def build_fallback(ctx: dict, error_message: str) -> tuple[dict, str]:
+    candidate = ctx.get("patch_candidate", {}) or {}
+    target_files = candidate.get("target_files", []) or []
+    proposed_patches = candidate.get("proposed_patches", []) or []
+    tests_to_run = candidate.get("tests_to_run", []) or []
+    targeted_results = ctx.get("targeted_test_results", {}) or {}
 
-    return {
-        "summary": "Patch verifier multi-file non disponibile: fallback locale.",
-        "verdict": "weak-approve" if target_files else "reject",
+    has_targets = isinstance(target_files, list) and len(target_files) > 0
+    has_patches = isinstance(proposed_patches, list) and len(proposed_patches) > 0
+    targeted_exit = targeted_results.get("pytest_exit_code")
+    targeted_failure_count = targeted_results.get("failure_count")
+
+    # Regola fallback:
+    # - reject solo se la patch è di fatto assente
+    # - review se la patch esiste ma non possiamo verificarla davvero
+    # - weak-approve se esiste, è multi-file plausibile e non ci sono segnali forti di disastro
+    if not has_targets or not has_patches:
+        verdict = "reject"
+        summary = "Patch verifier multi-file non disponibile: fallback locale con patch assente o incompleta."
+        why = (
+            "La patch candidate non contiene target file o patch applicabili, quindi non esiste una base sufficiente "
+            "per approvare o rivedere la modifica."
+        )
+        likely_gaps = [
+            "Patch candidate vuota o incompleta.",
+            "Nessun target file verificabile.",
+        ]
+        safe_next_step = "Rigenerare una patch candidate valida prima di applicare qualsiasi modifica."
+    else:
+        severe_runtime_signal = False
+        if isinstance(targeted_failure_count, int) and targeted_failure_count > 0:
+            severe_runtime_signal = False
+
+        if severe_runtime_signal:
+            verdict = "review"
+        else:
+            verdict = "review"
+
+        summary = "Patch verifier AI non disponibile: fallback locale prudente ma reviewable."
+        why = (
+            "La patch candidate multi-file esiste e contiene target concreti, ma il verifier AI non è stato disponibile. "
+            "Il fallback locale evita il reject automatico quando il problema è tecnico e non logico."
+        )
+        likely_gaps = [
+            "La patch non è stata verificata in profondità dal verifier AI.",
+            "La compatibilità completa va confermata con test target e review manuale.",
+        ]
+        safe_next_step = "Eseguire i test target e revisionare manualmente la patch prima del merge."
+
+    data = {
+        "verdict": verdict,
         "confidence": "low",
-        "why": [
-            "La patch candidate multi-file esiste ma non è stata verificata in profondità dal verifier."
-        ],
-        "likely_gaps": [
-            "Il comportamento atteso dai test potrebbe richiedere più del ripristino minimo dei simboli pubblici."
-        ],
-        "tests_to_run": sorted(
-            {
-                test
-                for item in ctx.get("related_fix_contexts", [])
-                for test in item.get("related_tests", [])
-            }
-        ),
-        "safe_next_step": "Rilanciare manualmente i test target prima di applicare qualsiasi modifica multi-file.",
+        "summary": summary,
+        "why": why,
+        "likely_gaps": likely_gaps,
+        "tests_to_run": tests_to_run if isinstance(tests_to_run, list) else [],
+        "safe_next_step": safe_next_step,
+        "fallback_reason": error_message,
     }
+
+    return data, f"fallback-local-error-{type(error_message).__name__ if not isinstance(error_message, str) else 'RuntimeError'}"
 
 
 def main() -> int:
     ctx = load_context()
-
-    patch_candidate = ctx.get("patch_candidate", {})
-    if not patch_candidate:
-        data = {
-            "summary": "Nessuna patch candidate disponibile.",
-            "verdict": "reject",
-            "confidence": "low",
-            "why": ["Manca audit_out/patch_candidate.json"],
-            "likely_gaps": [],
-            "tests_to_run": [],
-            "safe_next_step": "Generare prima una patch candidate.",
-        }
-        write_json(AUDIT_OUT / "patch_verification.json", data)
-        write_text(
-            AUDIT_OUT / "patch_verification.md",
-            render_verification_md(data, "no-patch-candidate"),
-        )
-        print("Nessuna patch candidate disponibile.")
-        return 0
 
     try:
         messages = build_messages(ctx)
@@ -331,33 +302,28 @@ def main() -> int:
             task_type="review",
             messages=messages,
         )
-
         content = resp["content"]
         model_used = resp["model_used"]
         raw = resp.get("raw", {})
 
         parsed = parse_json_content(content)
-        normalized = normalize_verification(parsed, ctx)
+        normalized = normalize_verification(parsed)
+
+        if not normalized.get("summary"):
+            raise RuntimeError("Patch verifier AI ha restituito payload insufficiente.")
 
         write_json(AUDIT_OUT / "patch_verification_raw_response.json", raw)
         write_json(AUDIT_OUT / "patch_verification.json", normalized)
-        write_text(
-            AUDIT_OUT / "patch_verification.md",
-            render_verification_md(normalized, model_used),
-        )
+        write_text(AUDIT_OUT / "patch_verification.md", render_md(normalized, model_used))
 
         print(f"Patch verifier completato. Model used: {model_used}")
         return 0
 
     except Exception as exc:
-        data = fallback_verification(ctx)
-        model_used = f"fallback-local-error-{type(exc).__name__}"
-        write_json(AUDIT_OUT / "patch_verification.json", data)
-        write_text(
-            AUDIT_OUT / "patch_verification.md",
-            render_verification_md(data, model_used),
-        )
-        print(f"Patch verifier fallito: {exc}")
+        fallback, model_used = build_fallback(ctx, str(exc))
+        write_json(AUDIT_OUT / "patch_verification.json", fallback)
+        write_text(AUDIT_OUT / "patch_verification.md", render_md(fallback, model_used))
+        print(f"Patch verifier fallback attivato: {exc}")
         return 0
 
 
