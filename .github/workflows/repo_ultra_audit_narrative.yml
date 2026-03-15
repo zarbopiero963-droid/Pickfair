@@ -59,81 +59,21 @@ jobs:
       - name: Verify scripts exist
         run: |
           test -f .github/scripts/repo_ultra_audit_narrative.py
+          test -f .github/scripts/extract_failing_tests.py
           test -f .github/scripts/ai_reasoning_layer.py
           test -f .github/scripts/build_priority_fix_order.py
-          test -f .github/scripts/build_fix_context.py
           test -f .github/scripts/build_test_failure_context.py
-          test -f .github/scripts/extract_failing_tests.py
-          test -f .github/scripts/openrouter_model_router.py
+          test -f .github/scripts/build_fix_context.py
           test -f .github/scripts/workflow_signal_aggregator.py
+          test -f .github/scripts/openrouter_model_router.py
           test -f .github/scripts/patch_candidate_generator.py
           test -f .github/scripts/patch_verifier.py
           test -f .github/scripts/apply_patch_candidate.py
           test -f .github/scripts/post_patch_review.py
-          test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/build_merge_summary.py
+          test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/ai_repair_loop.py
           echo "Scripts found."
-
-      - name: Run deterministic repo audit
-        run: |
-          python .github/scripts/repo_ultra_audit_narrative.py
-        continue-on-error: true
-
-      - name: Inspect deterministic outputs
-        if: always()
-        shell: bash
-        run: |
-          echo "================ audit_out ================="
-          ls -R audit_out || true
-          echo "================ audit_raw ================="
-          ls -R audit_raw || true
-          echo "============================================"
-
-      - name: Show deterministic report file
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ DETERMINISTIC AUDIT REPORT ================"
-          if [ -f audit_out/repo_ultra_audit_narrative.md ]; then
-            cat audit_out/repo_ultra_audit_narrative.md
-          else
-            echo "repo_ultra_audit_narrative.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show deterministic machine file
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ DETERMINISTIC MACHINE JSON ================"
-          if [ -f audit_out/audit_machine.json ]; then
-            cat audit_out/audit_machine.json
-          else
-            echo "audit_machine.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Extract failing tests
-        if: always()
-        run: |
-          python .github/scripts/extract_failing_tests.py
-        continue-on-error: true
-
-      - name: Show failing tests
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FAILING TESTS ============================="
-          if [ -f audit_out/failing_tests.json ]; then
-            cat audit_out/failing_tests.json
-          else
-            echo "failing_tests.json not found"
-          fi
-          echo "============================================================"
 
       - name: Load AI Governance Docs
         if: always()
@@ -161,7 +101,7 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Run AI reasoning layer
+      - name: Run AI repair loop
         if: always()
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -171,68 +111,125 @@ jobs:
           OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
           OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
         run: |
-          python .github/scripts/ai_reasoning_layer.py
+          python .github/scripts/ai_repair_loop.py
         continue-on-error: true
+
+      - name: Show repair loop report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ AI REPAIR LOOP REPORT ====================="
+          if [ -f audit_out/ai_repair_loop_report.md ]; then
+            cat audit_out/ai_repair_loop_report.md
+          else
+            echo "ai_repair_loop_report.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Show deterministic report file
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ DETERMINISTIC AUDIT REPORT ================"
+          if [ -f audit_out/repo_ultra_audit_narrative.md ]; then
+            cat audit_out/repo_ultra_audit_narrative.md
+          else
+            echo "repo_ultra_audit_narrative.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Show deterministic machine file
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ DETERMINISTIC MACHINE JSON ================"
+          if [ -f audit_out/audit_machine.json ]; then
+            cat audit_out/audit_machine.json
+          else
+            echo "audit_machine.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Show failing tests
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FAILING TESTS ============================="
+          if [ -f audit_out/failing_tests.json ]; then
+            cat audit_out/failing_tests.json
+          else
+            echo "failing_tests.json not found"
+          fi
+          echo "============================================================"
 
       - name: Show AI root cause
         if: always()
+        shell: bash
         run: |
-          echo "================ ROOT CAUSE ================="
-          cat audit_out/root_cause.md || true
+          echo ""
+          echo "================ ROOT CAUSE ================================"
+          if [ -f audit_out/root_cause.md ]; then
+            cat audit_out/root_cause.md
+          else
+            echo "root_cause.md not found"
+          fi
+          echo "============================================================"
 
       - name: Show AI fix suggestions
         if: always()
+        shell: bash
         run: |
-          echo "================ FIX SUGGESTIONS ============"
-          cat audit_out/fix_suggestions.md || true
-
-      - name: Show AI targeted tests
-        if: always()
-        run: |
-          echo "================ TARGETED TESTS ============="
-          cat audit_out/targeted_tests.md || true
-
-      - name: Build priority fix order
-        if: always()
-        run: |
-          python .github/scripts/build_priority_fix_order.py
-        continue-on-error: true
+          echo ""
+          echo "================ FIX SUGGESTIONS ==========================="
+          if [ -f audit_out/fix_suggestions.md ]; then
+            cat audit_out/fix_suggestions.md
+          else
+            echo "fix_suggestions.md not found"
+          fi
+          echo "============================================================"
 
       - name: Show priority fix order
         if: always()
+        shell: bash
         run: |
-          echo "================ PRIORITY FIX ORDER ========="
-          cat audit_out/priority_fix_order.md || true
-
-      - name: Build test failure context
-        if: always()
-        run: |
-          python .github/scripts/build_test_failure_context.py
-        continue-on-error: true
+          echo ""
+          echo "================ PRIORITY FIX ORDER ========================"
+          if [ -f audit_out/priority_fix_order.md ]; then
+            cat audit_out/priority_fix_order.md
+          else
+            echo "priority_fix_order.md not found"
+          fi
+          echo "============================================================"
 
       - name: Show test failure context
         if: always()
+        shell: bash
         run: |
-          echo "================ TEST FAILURE CONTEXT ======"
-          cat audit_out/test_failure_context.json || true
-
-      - name: Build fix context
-        if: always()
-        run: |
-          python .github/scripts/build_fix_context.py
-        continue-on-error: true
+          echo ""
+          echo "================ TEST FAILURE CONTEXT ======================"
+          if [ -f audit_out/test_failure_context.json ]; then
+            cat audit_out/test_failure_context.json
+          else
+            echo "test_failure_context.json not found"
+          fi
+          echo "============================================================"
 
       - name: Show fix context
         if: always()
+        shell: bash
         run: |
-          echo "================ FIX CONTEXT ================"
-          cat audit_out/fix_context.json || true
-
-      - name: Build global workflow context
-        if: always()
-        run: |
-          python .github/scripts/workflow_signal_aggregator.py
-        continue-on-error: true
+          echo ""
+          echo "================ FIX CONTEXT ==============================="
+          if [ -f audit_out/fix_context.json ]; then
+            cat audit_out/fix_context.json
+          else
+            echo "fix_context.json not found"
+          fi
+          echo "============================================================"
 
       - name: Show global workflow context
         if: always()
@@ -247,19 +244,6 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Generate patch candidate
-        if: always()
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
-          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
-          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
-        run: |
-          python .github/scripts/patch_candidate_generator.py
-        continue-on-error: true
-
       - name: Show patch candidate
         if: always()
         shell: bash
@@ -272,19 +256,6 @@ jobs:
             echo "patch_candidate.md not found"
           fi
           echo "============================================================"
-
-      - name: Verify patch candidate
-        if: always()
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
-          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
-          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
-        run: |
-          python .github/scripts/patch_verifier.py
-        continue-on-error: true
 
       - name: Show patch verification
         if: always()
@@ -299,12 +270,6 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Apply approved patch candidate
-        if: always()
-        run: |
-          python .github/scripts/apply_patch_candidate.py
-        continue-on-error: true
-
       - name: Show patch apply report
         if: always()
         shell: bash
@@ -317,35 +282,19 @@ jobs:
             echo "patch_apply_report.md not found"
           fi
           echo "============================================================"
-          echo ""
-
-      - name: Post patch AI review
-        if: always()
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-        run: |
-          python .github/scripts/post_patch_review.py
-        continue-on-error: true
 
       - name: Show post patch review
         if: always()
         shell: bash
         run: |
           echo ""
-          echo "================ POST PATCH REVIEW ================="
+          echo "================ POST PATCH REVIEW ========================="
           if [ -f audit_out/post_patch_review.md ]; then
             cat audit_out/post_patch_review.md
           else
             echo "post_patch_review.md not found"
           fi
-          echo "===================================================="
-
-      - name: Run AI repair loop
-        if: always()
-        run: |
-          python .github/scripts/ai_repair_loop.py
-        continue-on-error: true
+          echo "============================================================"
 
       - name: Evaluate final PR gate
         if: always()
@@ -360,24 +309,29 @@ jobs:
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           post_path = Path("audit_out/post_patch_review.json")
           apply_path = Path("audit_out/patch_apply_report.json")
+          loop_path = Path("audit_out/ai_repair_loop_state.json")
 
           allow_pr = "false"
           reason = "unknown"
 
-          if not post_path.exists():
+          if not loop_path.exists():
+              reason = "missing_ai_repair_loop_state"
+          elif not post_path.exists():
               reason = "missing_post_patch_review"
           elif not apply_path.exists():
               reason = "missing_patch_apply_report"
           else:
+              loop_state = json.loads(loop_path.read_text(encoding="utf-8"))
               post = json.loads(post_path.read_text(encoding="utf-8"))
               apply_report = json.loads(apply_path.read_text(encoding="utf-8"))
 
+              final_status = str(loop_state.get("final_status", "")).strip().lower()
               verdict = str(post.get("final_verdict", "")).strip().lower()
               applied = bool(apply_report.get("applied", False))
 
               if verdict == "approve" and applied:
                   allow_pr = "true"
-                  reason = "approved_and_applied"
+                  reason = final_status or "approved_and_applied"
               elif verdict != "approve":
                   reason = f"post_patch_review_{verdict or 'unknown'}"
               elif not applied:
