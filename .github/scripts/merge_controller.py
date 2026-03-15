@@ -77,6 +77,30 @@ def get_primary_target(issue_classification: dict, patch_candidate: dict) -> tup
     return "", ""
 
 
+def get_last_cycle(loop_state: dict) -> dict:
+    cycles = loop_state.get("cycles", []) or []
+    if not cycles:
+        return {}
+    return cycles[-1]
+
+
+def has_real_committable_change(loop_state: dict, apply_report: dict) -> bool:
+    if not bool(apply_report.get("applied", False)):
+        return False
+
+    last = get_last_cycle(loop_state)
+    if not last:
+        return False
+
+    if bool(last.get("rollback", False)):
+        return False
+
+    if not bool(last.get("improvement", False)):
+        return False
+
+    return True
+
+
 def build_report(state: dict) -> str:
     lines = []
     lines.append("Merge Controller")
@@ -89,6 +113,7 @@ def build_report(state: dict) -> str:
     lines.append(f"Should open or update PR: {'YES' if state.get('should_open_or_update_pr') else 'NO'}")
     lines.append("")
     lines.append(f"Applied: {'YES' if state.get('applied') else 'NO'}")
+    lines.append(f"Real committable change: {'YES' if state.get('real_committable_change') else 'NO'}")
     lines.append(f"Verifier verdict: {state.get('verifier_verdict', '')}")
     lines.append(f"Post patch review verdict: {state.get('review_verdict', '')}")
     lines.append(f"Reviewable: {'YES' if state.get('reviewable') else 'NO'}")
@@ -158,6 +183,7 @@ def main() -> int:
 
     primary_target, primary_classification = get_primary_target(issue_classification, patch_candidate)
     human_only_target = is_human_only_target(primary_target, primary_classification)
+    real_committable_change = has_real_committable_change(repair_loop_state, patch_apply_report)
 
     verifier_consistent = True
     if verifier_verdict == "reject" and review_verdict in {"approve", "weak-approve"}:
@@ -177,80 +203,65 @@ def main() -> int:
     if repo_fully_green or orchestrator_action == "stop_green" or loop_next_action == "repository_green_stop":
         decision = "BLOCK"
         reason = "repository_fully_green"
-        reviewable = False
-        auto_merge_safe = False
-        should_merge = False
-        should_wait_existing_pr = False
-        should_open_or_update_pr = False
 
     # 2. Target esclusi dall'auto-fix.
     elif human_only_target:
         decision = "BLOCK"
         reason = "human_only_target"
-        reviewable = False
-        auto_merge_safe = False
-        should_merge = False
-        should_wait_existing_pr = False
-        should_open_or_update_pr = False
 
-    # 3. Nessuna patch applicata e verifier/review negativi: blocco.
-    elif not applied and verifier_verdict == "reject" and review_verdict == "reject":
+    # 3. Nessun cambiamento realmente committabile.
+    elif not real_committable_change:
+        decision = "BLOCK"
+        if not applied:
+            reason = "patch_not_applied"
+        else:
+            last_cycle = get_last_cycle(repair_loop_state)
+            if bool(last_cycle.get("rollback", False)):
+                reason = "rolled_back_no_committable_change"
+            elif not bool(last_cycle.get("improvement", False)):
+                reason = "no_real_committable_change"
+            else:
+                reason = "no_real_committable_change"
+
+    # 4. Nessuna patch reviewable.
+    elif verifier_verdict == "reject" and review_verdict == "reject":
         decision = "BLOCK"
         reason = "patch_not_reviewable"
-        reviewable = False
-        auto_merge_safe = False
-        should_merge = False
-        should_wait_existing_pr = False
-        should_open_or_update_pr = False
 
-    # 4. Patch approve/approve: apribile.
+    # 5. Patch approve/approve: apribile e potenzialmente mergeabile.
     elif verifier_verdict == "approve" and review_verdict == "approve":
         decision = "MERGE_READY"
         reason = "approved_patch"
         reviewable = True
-        auto_merge_safe = bool(applied and minimal_change and logic_preserved and verifier_consistent)
+        auto_merge_safe = bool(
+            applied
+            and real_committable_change
+            and minimal_change
+            and logic_preserved
+            and verifier_consistent
+        )
         should_merge = auto_merge_safe
-        should_wait_existing_pr = False
         should_open_or_update_pr = True
 
-    # 5. weak-approve o review positivo: apribile ma non auto-merge.
+    # 6. weak-approve o review positivo: apribile ma non auto-merge.
     elif verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
         decision = "REVIEW_ONLY"
         reason = "reviewable_patch"
         reviewable = True
         auto_merge_safe = False
         should_merge = False
-        should_wait_existing_pr = False
-        should_open_or_update_pr = True
-
-    # 6. Repo migliorato materialmente ma review non perfetta: ancora review-only.
-    elif repo_materially_greener and verifier_verdict in {"weak-approve", "review"} and review_verdict in {"weak-approve", "review"}:
-        decision = "REVIEW_ONLY"
-        reason = "material_improvement_needs_review"
-        reviewable = True
-        auto_merge_safe = False
-        should_merge = False
-        should_wait_existing_pr = False
         should_open_or_update_pr = True
 
     # 7. C'è già una PR AI aperta e il sistema vuole aggiornarla.
     elif existing_ai_pr_number and orchestrator_action == "update_existing_ai_pr":
-        if verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
+        if real_committable_change and verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
             decision = "REVIEW_ONLY"
             reason = "update_existing_ai_pr"
             reviewable = True
-            auto_merge_safe = False
-            should_merge = False
-            should_wait_existing_pr = False
             should_open_or_update_pr = True
         else:
             decision = "BLOCK"
-            reason = "existing_pr_but_patch_not_reviewable"
-            reviewable = False
-            auto_merge_safe = False
-            should_merge = False
-            should_wait_existing_pr = False
-            should_open_or_update_pr = False
+            reason = "existing_pr_but_patch_not_committable"
 
     # 8. Caso conservativo finale.
     else:
@@ -264,12 +275,6 @@ def main() -> int:
         else:
             reason = "block"
 
-        reviewable = False
-        auto_merge_safe = False
-        should_merge = False
-        should_wait_existing_pr = False
-        should_open_or_update_pr = False
-
     state = {
         "decision": decision,
         "reason": reason,
@@ -279,6 +284,7 @@ def main() -> int:
         "reviewable": reviewable,
         "auto_merge_safe": auto_merge_safe,
         "applied": applied,
+        "real_committable_change": real_committable_change,
         "verifier_verdict": verifier_verdict or "unknown",
         "review_verdict": review_verdict or "unknown",
         "contract_restored": contract_restored,
