@@ -10,6 +10,18 @@ ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
 
+MAX_TARGETS = 3
+MAX_TARGET_FILE_CHARS = 18000
+MAX_RELATED_TEST_CHARS = 8000
+MAX_RELATED_FIXTURE_CHARS = 5000
+MAX_RELATED_CONTRACT_CHARS = 6000
+
+MAX_PYTEST_SIGNALS = 12
+MAX_AI_ROOT_CAUSES = 6
+MAX_CONTRACTS = 10
+MAX_FAILING_TEST_CONTEXTS = 6
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8", errors="ignore")
@@ -37,17 +49,11 @@ def write_json(path: Path, data) -> None:
     )
 
 
-def load_failing_tests() -> list[dict]:
-    path = AUDIT_OUT / "failing_tests.json"
-    if not path.exists():
-        return []
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        targets = data.get("targets", [])
-        return targets if isinstance(targets, list) else []
-    except Exception:
-        return []
+def trimmed_text(text: str, max_chars: int) -> str:
+    text = text or ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars]
 
 
 def parse_json_content(content: str) -> dict:
@@ -141,18 +147,12 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
 
     if issue_type == "empty_test_file":
         score += 180
-
     if issue_type == "corrupted_or_non_test_content":
         score += 170
-
     if issue_type == "missing_public_contract":
-        score += 130
-
+        score += 140
     if issue_type == "contract_test_failure":
         score += 120
-
-    if issue_type == "normal_test_file":
-        score += 40
 
     for signal in pytest_signals:
         if target_file and target_file in signal:
@@ -176,9 +176,27 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
             if symbol and symbol == contract_symbol:
                 score += 90
 
-    score += min(len(item.get("related_tests", []) or []), 10)
-    score += min(len(item.get("related_contracts", []) or []), 10) * 2
+    score += min(len(item.get("related_tests", []) or []), 6) * 3
+    score += min(len(item.get("related_contracts", []) or []), 4) * 4
+    score += min(len(item.get("notes", []) or []), 4) * 2
+
     return score
+
+
+def select_best_subset(paths: list[str], max_items: int) -> list[str]:
+    out = []
+    seen = set()
+
+    for p in paths:
+        p = str(p).strip()
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+        if len(out) >= max_items:
+            break
+
+    return out
 
 
 def load_target_context() -> dict:
@@ -193,7 +211,6 @@ def load_target_context() -> dict:
     pytest_signals = global_context.get("pytest_signals", []) or []
     contracts = global_context.get("contracts", []) or []
     failing_tests = test_failure_context.get("test_failure_contexts", []) or []
-    failing_targets = load_failing_tests()
 
     scored = []
     for item in fix_contexts:
@@ -207,7 +224,6 @@ def load_target_context() -> dict:
 
     for score, item in scored:
         target_file = str(item.get("target_file", "")).strip()
-
         if not target_file or target_file in seen:
             continue
 
@@ -217,7 +233,7 @@ def load_target_context() -> dict:
         seen.add(target_file)
         selected.append(item)
 
-        if len(selected) >= 5:
+        if len(selected) >= MAX_TARGETS:
             break
 
     if not selected and fix_contexts:
@@ -226,39 +242,77 @@ def load_target_context() -> dict:
     files_payload = []
 
     for target in selected:
-        target_file = ROOT / target["target_file"]
-        related_tests = [ROOT / t for t in target.get("related_tests", [])]
-        related_fixtures = [ROOT / t for t in target.get("related_fixtures", [])]
-        related_contracts = [ROOT / t for t in target.get("related_contracts", [])]
+        target_file_rel = target["target_file"]
+        target_file = ROOT / target_file_rel
+
+        related_tests_rel = select_best_subset(target.get("related_tests", []) or [], 3)
+        related_fixtures_rel = select_best_subset(target.get("related_fixtures", []) or [], 2)
+        related_contracts_rel = select_best_subset(target.get("related_contracts", []) or [], 2)
+
+        related_tests = [ROOT / t for t in related_tests_rel]
+        related_fixtures = [ROOT / t for t in related_fixtures_rel]
+        related_contracts = [ROOT / t for t in related_contracts_rel]
 
         files_payload.append(
             {
-                "target": target,
-                "target_file_text": read_text(target_file)[:25000],
+                "target": {
+                    "target_file": target.get("target_file", ""),
+                    "required_symbols": target.get("required_symbols", []) or [],
+                    "related_tests": related_tests_rel,
+                    "related_fixtures": related_fixtures_rel,
+                    "related_contracts": related_contracts_rel,
+                    "notes": select_best_subset(target.get("notes", []) or [], 5),
+                    "priority": target.get("priority", ""),
+                    "issue_type": target.get("issue_type", ""),
+                    "related_source_file": target.get("related_source_file", ""),
+                },
+                "target_file_text": trimmed_text(read_text(target_file), MAX_TARGET_FILE_CHARS),
                 "related_tests_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:15000]
+                    str(p.relative_to(ROOT)).replace("\\", "/"): trimmed_text(
+                        read_text(p), MAX_RELATED_TEST_CHARS
+                    )
                     for p in related_tests
                     if p.exists()
                 },
                 "related_fixtures_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
+                    str(p.relative_to(ROOT)).replace("\\", "/"): trimmed_text(
+                        read_text(p), MAX_RELATED_FIXTURE_CHARS
+                    )
                     for p in related_fixtures
                     if p.exists()
                 },
                 "related_contracts_text": {
-                    str(p.relative_to(ROOT)).replace("\\", "/"): read_text(p)[:12000]
+                    str(p.relative_to(ROOT)).replace("\\", "/"): trimmed_text(
+                        read_text(p), MAX_RELATED_CONTRACT_CHARS
+                    )
                     for p in related_contracts
                     if p.exists()
                 },
             }
         )
 
+    normalized_failing_tests = []
+    for item in failing_tests[:MAX_FAILING_TEST_CONTEXTS]:
+        if not isinstance(item, dict):
+            continue
+        normalized_failing_tests.append(
+            {
+                "target_file": str(item.get("target_file", "")).strip(),
+                "issue_type": str(item.get("issue_type", "")).strip(),
+                "related_source_file": str(item.get("related_source_file", "")).strip(),
+                "notes": select_best_subset(item.get("notes", []) or [], 4),
+            }
+        )
+
     return {
         "targets": selected,
         "files_payload": files_payload,
-        "global_context": global_context,
-        "failing_tests": failing_tests,
-        "failing_test_targets": failing_targets,
+        "global_context": {
+            "pytest_signals": (global_context.get("pytest_signals", []) or [])[:MAX_PYTEST_SIGNALS],
+            "ai_root_causes": (global_context.get("ai_root_causes", []) or [])[:MAX_AI_ROOT_CAUSES],
+            "contracts": (global_context.get("contracts", []) or [])[:MAX_CONTRACTS],
+        },
+        "failing_tests": normalized_failing_tests,
     }
 
 
@@ -266,99 +320,18 @@ def build_messages(ctx: dict) -> list[dict]:
     system_prompt = """
 You are a conservative Python patch generator working on the Pickfair repository.
 
-GENERAL RULES
-
+Rules:
 - generate minimal safe patches
 - preserve backward compatibility
-- never redesign modules
-- never introduce new architecture
-- modify only the files explicitly provided in the context
-- restore missing public contracts required by tests
-- respect existing API contracts and test expectations
+- avoid redesign
+- fix only provided files
+- restore missing public contracts
+- respect tests
 - prefer solving multiple closely-related P0 blockers in one coordinated patch
-- avoid touching unrelated modules
-- patches must compile and be syntactically valid Python
+- if a failing test file is empty, corrupted, or contains non-test content, repair the test file itself with the minimum valid pytest test
+- when repairing a broken test file, do not invent large new behaviors; write the smallest meaningful test consistent with the related source file and the failure context
 
-TEST TARGETING RULE
-
-The CI system provides the list of failing tests.
-
-Prefer fixing the module related to the failing test.
-
-Example mapping:
-
-test_executor_manager.py -> executor_manager.py
-test_auto_updater.py -> auto_updater.py
-
-Always prioritize repairing the module causing the failing test before modifying unrelated files.
-
-TEST REPAIR RULES (VERY IMPORTANT)
-
-Sometimes the failing file is a TEST FILE itself.
-
-If a failing test file is:
-
-- empty
-- truncated
-- corrupted
-- containing non-pytest content
-- containing only a filename
-- syntactically invalid
-
-you must repair the test file.
-
-However:
-
-You MUST NOT generate placeholder tests.
-
-This means:
-
-- NEVER generate tests like assert True
-- NEVER generate tests like pass
-- NEVER generate dummy tests
-- NEVER generate fake smoke tests
-
-unless the original contract truly required only import coverage.
-
-Instead you must generate:
-
-the smallest SEMANTICALLY CORRECT pytest test.
-
-The repaired test must:
-
-- reproduce the behavior implied by the failure context
-- be consistent with the related source module
-- check a real expected behavior
-- remain minimal but meaningful
-- avoid inventing new features
-- avoid testing unrelated behavior
-
-GOOD EXAMPLE
-
-If a module exposes:
-
-ExecutorManager.shutdown()
-
-a minimal correct test is:
-
-    ex = ExecutorManager()
-    ex.shutdown()
-    assert ex.running is False
-
-This is correct because it verifies real behavior.
-
-BAD EXAMPLE
-
-    assert True
-
-PATCH RULES
-
-Each patch must be provided as a unified diff.
-
-Do NOT output explanations outside JSON.
-
-Return STRICT JSON with this schema:
-
+Return STRICT JSON:
 {
   "summary": "...",
   "target_files": ["file.py"],
@@ -375,15 +348,22 @@ Return STRICT JSON with this schema:
 """.strip()
 
     user_payload = {
-        "targets": ctx["targets"],
+        "task": "Generate the smallest safe coordinated patch candidate for the selected P0 fix contexts.",
+        "targets": [
+            {
+                "target_file": str(x.get("target_file", "")).strip(),
+                "required_symbols": x.get("required_symbols", []) or [],
+                "priority": x.get("priority", ""),
+                "issue_type": x.get("issue_type", ""),
+                "related_tests": select_best_subset(x.get("related_tests", []) or [], 3),
+                "related_contracts": select_best_subset(x.get("related_contracts", []) or [], 2),
+                "notes": select_best_subset(x.get("notes", []) or [], 5),
+            }
+            for x in ctx["targets"]
+        ],
         "files_payload": ctx["files_payload"],
         "failing_tests": ctx["failing_tests"],
-        "user_failing_tests": ctx["failing_test_targets"],
-        "global_context": {
-            "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
-            "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
-            "contracts": ctx["global_context"].get("contracts", [])[:20],
-        },
+        "global_context": ctx["global_context"],
     }
 
     return [
@@ -414,7 +394,6 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
 
         if target_file not in allowed_files:
             continue
-
         if not patch:
             continue
 
@@ -429,16 +408,24 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
     if not isinstance(tests_to_run, list):
         tests_to_run = []
 
-    risk = str(data.get("risk", "unknown")).strip().lower() or "unknown"
-    if risk not in {"low", "medium", "high", "unknown"}:
+    risk = str(data.get("risk", "unknown")).strip().lower()
+    if risk not in {"low", "medium", "high"}:
         risk = "unknown"
 
+    summary = str(data.get("summary", "")).strip()
+    why_this_fix = str(data.get("why_this_fix", "")).strip()
+
+    if not summary:
+        summary = "Coordinated patch candidate generated."
+    if not why_this_fix:
+        why_this_fix = "Restore the highest-priority public contracts with the smallest coordinated fix."
+
     return {
-        "summary": str(data.get("summary", "")).strip(),
+        "summary": summary,
         "target_files": [p["target_file"] for p in normalized],
-        "why_this_fix": str(data.get("why_this_fix", "")).strip(),
+        "why_this_fix": why_this_fix,
         "proposed_patches": normalized,
-        "tests_to_run": tests_to_run,
+        "tests_to_run": [str(x).strip() for x in tests_to_run if str(x).strip()],
         "risk": risk,
     }
 
@@ -521,6 +508,7 @@ def main() -> int:
 
         content = resp["content"]
         model_used = resp["model_used"]
+        raw = resp.get("raw", {})
 
         parsed = parse_json_content(content)
         normalized = normalize_patch_candidate(parsed, ctx)
@@ -528,6 +516,7 @@ def main() -> int:
         if not normalized["proposed_patches"]:
             raise RuntimeError("AI non ha prodotto patch valide")
 
+        write_json(AUDIT_OUT / "patch_candidate_raw_response.json", raw)
         write_json(AUDIT_OUT / "patch_candidate.json", normalized)
         write_text(
             AUDIT_OUT / "patch_candidate.md",
