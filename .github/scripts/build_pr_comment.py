@@ -53,6 +53,7 @@ def build_dashboard(merge_summary: str) -> str:
         "| Tests |",
         "| Patch verifier |",
         "| Post patch review |",
+        "| PR reviewable |",
         "| Safe to merge |",
         "| Repo materially greener |",
         "| Repo fully green |",
@@ -65,6 +66,7 @@ def build_dashboard(merge_summary: str) -> str:
         "- Repo fully green:",
         "- Continuation recommended:",
         "- Next action:",
+        "- PR reviewable:",
         "- Real improvement vs previous cycle:",
         "- Improvement note:",
     ]
@@ -147,9 +149,9 @@ Included pipeline stages:
 - multi-cycle AI repair loop
 - final merge summary
 
-This PR is created only when:
+This PR is created when:
 - the patch was actually applied
-- the repository materially improved
+- the patch is reviewable
 - post_patch_review did not reject the result
 
 If the repository is improved but not fully green yet, merging this PR allows the self-healing loop to continue on the next run triggered from main.
