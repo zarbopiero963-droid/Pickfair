@@ -72,7 +72,7 @@ def git_restore(commit: str):
 def count_p0() -> int:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     items = fix_context.get("fix_contexts", [])
-    return len([x for x in items if x.get("priority") == "P0"])
+    return len([x for x in items if str(x.get("priority", "")).strip().upper() == "P0"])
 
 
 def failing_tests() -> int:
@@ -93,6 +93,21 @@ def ci_failure_count() -> int:
     return len(data.get("ci_failures", []))
 
 
+def generated_test_count() -> int:
+    data = read_json(AUDIT_OUT / "test_gap_generation_report.json")
+    return int(data.get("generated_count", 0) or 0)
+
+
+def cto_priority_summary() -> dict:
+    data = read_json(AUDIT_OUT / "ai_cto_layer.json")
+    summary = data.get("summary", {}) or {}
+    return {
+        "P0": int(summary.get("P0", 0) or 0),
+        "P1": int(summary.get("P1", 0) or 0),
+        "P2": int(summary.get("P2", 0) or 0),
+    }
+
+
 def patch_verifier_verdict() -> str:
     data = read_json(AUDIT_OUT / "patch_verification.json")
     return str(data.get("verdict", "")).strip().lower()
@@ -100,7 +115,10 @@ def patch_verifier_verdict() -> str:
 
 def post_patch_review_verdict() -> str:
     data = read_json(AUDIT_OUT / "post_patch_review.json")
-    return str(data.get("final_verdict", "")).strip().lower()
+    return (
+        str(data.get("review_verdict", "")).strip().lower()
+        or str(data.get("final_verdict", "")).strip().lower()
+    )
 
 
 def patch_applied() -> bool:
@@ -110,10 +128,36 @@ def patch_applied() -> bool:
 
 def patch_target_files() -> list[str]:
     data = read_json(AUDIT_OUT / "patch_candidate.json")
-    files = data.get("target_files", [])
-    if isinstance(files, list):
-        return [str(x).strip() for x in files if str(x).strip()]
-    return []
+    candidate = data.get("patch_candidate") or {}
+    files = []
+
+    target = str(candidate.get("target_file", "")).strip()
+    related = str(candidate.get("related_source_file", "")).strip()
+
+    if target:
+        files.append(target)
+    if related and related not in files:
+        files.append(related)
+
+    return files
+
+
+def patch_strategy() -> str:
+    data = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = data.get("patch_candidate") or {}
+    return str(candidate.get("strategy", "")).strip()
+
+
+def patch_issue_type() -> str:
+    data = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = data.get("patch_candidate") or {}
+    return str(candidate.get("issue_type", "")).strip()
+
+
+def patch_classification() -> str:
+    data = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = data.get("patch_candidate") or {}
+    return str(candidate.get("classification", "")).strip()
 
 
 def contract_restored_flags() -> dict:
@@ -135,6 +179,8 @@ def detect_improvement(
     target_after,
     ci_before,
     ci_after,
+    generated_before,
+    generated_after,
     verifier_verdict,
     review_verdict,
     applied,
@@ -142,6 +188,9 @@ def detect_improvement(
     minimal_change,
     logic_preserved,
     target_files,
+    strategy,
+    classification,
+    issue_type,
 ):
     reasons = []
 
@@ -169,6 +218,12 @@ def detect_improvement(
         elif ci_after > ci_before:
             return False, f"CI failures worsened from {ci_before} to {ci_after}."
 
+    if isinstance(generated_before, int) and isinstance(generated_after, int):
+        if generated_after > generated_before and strategy == "generate_nominal_test":
+            reasons.append(
+                f"Generated nominal tests increased from {generated_before} to {generated_after}."
+            )
+
     contract_like_files = {
         "auto_updater.py",
         "executor_manager.py",
@@ -180,15 +235,39 @@ def detect_improvement(
     if (
         applied
         and verifier_verdict in {"approve", "weak-approve", "review"}
-        and review_verdict != "reject"
+        and review_verdict in {"approve", "weak-approve", "review"}
         and contract_restored
         and minimal_change
         and logic_preserved
         and touched_contract_files
     ):
         reasons.append(
-            "Contract restoration detected on key public API files with applied patch, acceptable verifier result, and no reject."
+            "Contract restoration detected on key public API files with applied patch and acceptable review."
         )
+
+    if (
+        applied
+        and strategy == "generate_nominal_test"
+        and classification == "AUTO_FIX_SAFE"
+        and verifier_verdict in {"approve", "weak-approve"}
+        and review_verdict in {"approve", "weak-approve", "review"}
+        and minimal_change
+        and logic_preserved
+    ):
+        reasons.append(
+            "Safe nominal test generation accepted by verifier/review with minimal change."
+        )
+
+    if (
+        applied
+        and classification == "AUTO_FIX_SAFE"
+        and issue_type in {"missing_public_contract", "lint_failure", "missing_nominal_test"}
+        and verifier_verdict in {"approve", "weak-approve"}
+        and review_verdict in {"approve", "weak-approve", "review"}
+        and minimal_change
+        and logic_preserved
+    ):
+        reasons.append("Safe classified fix accepted with minimal change and logic preserved.")
 
     if reasons:
         return True, " | ".join(reasons)
@@ -204,6 +283,9 @@ def refresh_after_apply() -> bool:
         ".github/scripts/ci_failure_aggregator.py",
         ".github/scripts/build_test_failure_context.py",
         ".github/scripts/build_fix_context.py",
+        ".github/scripts/load_repo_diagnostics.py",
+        ".github/scripts/ai_cto_layer.py",
+        ".github/scripts/test_gap_generator.py",
         ".github/scripts/issue_classifier.py",
         ".github/scripts/repair_memory.py",
         ".github/scripts/workflow_signal_aggregator.py",
@@ -262,6 +344,7 @@ def compute_next_action(final_status: str, greener: bool, fully_green: bool) -> 
         "patch_apply_failed",
         "refresh_failed",
         "setup_failed",
+        "post_patch_review_failed",
     }:
         return "manual_intervention_needed"
     return "inspect_latest_run"
@@ -293,6 +376,13 @@ def build_report(cycles: list[dict], final_status: str, greener: bool, fully_gre
         lines.append(f"- targeted_after: {cycle['target_after']}")
         lines.append(f"- ci_failures_before: {cycle['ci_before']}")
         lines.append(f"- ci_failures_after: {cycle['ci_after']}")
+        lines.append(f"- generated_tests_before: {cycle['generated_before']}")
+        lines.append(f"- generated_tests_after: {cycle['generated_after']}")
+        lines.append(f"- cto_P0_before: {cycle['cto_before'].get('P0', 0)}")
+        lines.append(f"- cto_P0_after: {cycle['cto_after'].get('P0', 0)}")
+        lines.append(f"- patch_strategy: {cycle.get('patch_strategy', '')}")
+        lines.append(f"- patch_issue_type: {cycle.get('patch_issue_type', '')}")
+        lines.append(f"- patch_classification: {cycle.get('patch_classification', '')}")
         lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict', '')}")
         lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict', '')}")
         lines.append(f"- contract_restored: {cycle.get('contract_restored')}")
@@ -321,6 +411,8 @@ def main():
             "cycle": cycle_no,
             "rollback": False,
             "target_files": [],
+            "cto_before": {"P0": 0, "P1": 0, "P2": 0},
+            "cto_after": {"P0": 0, "P1": 0, "P2": 0},
         }
 
         print("")
@@ -339,6 +431,9 @@ def main():
             ".github/scripts/ci_failure_aggregator.py",
             ".github/scripts/build_test_failure_context.py",
             ".github/scripts/build_fix_context.py",
+            ".github/scripts/load_repo_diagnostics.py",
+            ".github/scripts/ai_cto_layer.py",
+            ".github/scripts/test_gap_generator.py",
             ".github/scripts/issue_classifier.py",
             ".github/scripts/repair_memory.py",
             ".github/scripts/workflow_signal_aggregator.py",
@@ -356,6 +451,13 @@ def main():
                 info["target_after"] = targeted_failures()
                 info["ci_before"] = ci_failure_count()
                 info["ci_after"] = ci_failure_count()
+                info["generated_before"] = generated_test_count()
+                info["generated_after"] = generated_test_count()
+                info["cto_before"] = cto_priority_summary()
+                info["cto_after"] = cto_priority_summary()
+                info["patch_strategy"] = ""
+                info["patch_issue_type"] = ""
+                info["patch_classification"] = ""
                 info["patch_verifier_verdict"] = "setup-failed"
                 info["post_patch_review_verdict"] = "setup-failed"
                 info["contract_restored"] = False
@@ -374,6 +476,8 @@ def main():
         info["fail_before"] = failing_tests()
         info["target_before"] = targeted_failures()
         info["ci_before"] = ci_failure_count()
+        info["generated_before"] = generated_test_count()
+        info["cto_before"] = cto_priority_summary()
 
         if (
             info["p0_before"] == 0
@@ -385,6 +489,11 @@ def main():
             info["fail_after"] = 0
             info["target_after"] = info["target_before"]
             info["ci_after"] = 0
+            info["generated_after"] = info["generated_before"]
+            info["cto_after"] = info["cto_before"]
+            info["patch_strategy"] = ""
+            info["patch_issue_type"] = ""
+            info["patch_classification"] = ""
             info["patch_verifier_verdict"] = "not-needed"
             info["post_patch_review_verdict"] = "not-needed"
             info["contract_restored"] = False
@@ -403,6 +512,11 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["ci_after"] = ci_failure_count()
+            info["generated_after"] = generated_test_count()
+            info["cto_after"] = cto_priority_summary()
+            info["patch_strategy"] = patch_strategy()
+            info["patch_issue_type"] = patch_issue_type()
+            info["patch_classification"] = patch_classification()
             info["patch_verifier_verdict"] = "not-run"
             info["post_patch_review_verdict"] = "not-run"
             info["contract_restored"] = False
@@ -415,6 +529,9 @@ def main():
             break
 
         info["target_files"] = patch_target_files()
+        info["patch_strategy"] = patch_strategy()
+        info["patch_issue_type"] = patch_issue_type()
+        info["patch_classification"] = patch_classification()
 
         if not run_script(".github/scripts/patch_verifier.py"):
             info["stop_reason"] = "patch_verifier_failed"
@@ -422,6 +539,8 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["ci_after"] = ci_failure_count()
+            info["generated_after"] = generated_test_count()
+            info["cto_after"] = cto_priority_summary()
             info["patch_verifier_verdict"] = "failed"
             info["post_patch_review_verdict"] = "not-run"
             info["contract_restored"] = False
@@ -439,6 +558,8 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["ci_after"] = ci_failure_count()
+            info["generated_after"] = generated_test_count()
+            info["cto_after"] = cto_priority_summary()
             info["patch_verifier_verdict"] = patch_verifier_verdict()
             info["post_patch_review_verdict"] = "not-run"
             info["contract_restored"] = False
@@ -456,6 +577,8 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["ci_after"] = ci_failure_count()
+            info["generated_after"] = generated_test_count()
+            info["cto_after"] = cto_priority_summary()
             info["patch_verifier_verdict"] = patch_verifier_verdict()
             info["post_patch_review_verdict"] = "not-run"
             info["contract_restored"] = False
@@ -471,6 +594,8 @@ def main():
         info["fail_after"] = failing_tests()
         info["target_after"] = targeted_failures()
         info["ci_after"] = ci_failure_count()
+        info["generated_after"] = generated_test_count()
+        info["cto_after"] = cto_priority_summary()
 
         if not run_script(".github/scripts/post_patch_review.py"):
             info["stop_reason"] = "post_patch_review_failed"
@@ -502,6 +627,8 @@ def main():
             target_after=info["target_after"],
             ci_before=info["ci_before"],
             ci_after=info["ci_after"],
+            generated_before=info["generated_before"],
+            generated_after=info["generated_after"],
             verifier_verdict=info["patch_verifier_verdict"],
             review_verdict=info["post_patch_review_verdict"],
             applied=patch_applied(),
@@ -509,6 +636,9 @@ def main():
             minimal_change=info["minimal_change"],
             logic_preserved=info["logic_preserved"],
             target_files=info["target_files"],
+            strategy=info["patch_strategy"],
+            classification=info["patch_classification"],
+            issue_type=info["patch_issue_type"],
         )
 
         info["improvement"] = improved
