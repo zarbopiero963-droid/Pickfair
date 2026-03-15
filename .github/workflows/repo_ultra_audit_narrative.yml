@@ -84,6 +84,9 @@ jobs:
           test -f .github/scripts/test_gap_generator.py
           test -f .github/scripts/final_pr_gate.py
           test -f .github/scripts/ai_cto_layer.py
+          test -f .github/scripts/generate_repo_autopsy.py
+          test -f .github/scripts/generate_repo_api_report_v4.py
+          test -f .github/scripts/generate_repo_fix_backlog.py
           echo "Scripts found."
 
       - name: Detect workflow mode
@@ -256,42 +259,21 @@ jobs:
           python .github/scripts/build_priority_fix_order.py
         continue-on-error: true
 
-      - name: Collect repository diagnostics into audit_out
+      - name: Generate repository diagnostics reports
         if: always()
         shell: bash
         run: |
-          set +e
-          mkdir -p audit_out
+          python .github/scripts/generate_repo_autopsy.py
+          python .github/scripts/generate_repo_api_report_v4.py
+          python .github/scripts/generate_repo_fix_backlog.py
+        continue-on-error: true
 
-          copy_first_match() {
-            TARGET_NAME="$1"
-            FOUND_PATH="$(find . -type f -name "$TARGET_NAME" \
-              ! -path "./audit_out/*" \
-              ! -path "./audit_raw/*" \
-              | head -n 1)"
-
-            if [ -n "$FOUND_PATH" ]; then
-              cp "$FOUND_PATH" "audit_out/$TARGET_NAME"
-              echo "FOUND: $FOUND_PATH -> audit_out/$TARGET_NAME"
-            else
-              echo "MISSING: $TARGET_NAME"
-            fi
-          }
-
-          copy_first_match "repo_api_report_v4.json"
-          copy_first_match "repo_autopsy_summary.json"
-          copy_first_match "repo_autopsy.json"
-          copy_first_match "repo_fix_backlog.json"
-          copy_first_match "repo_fix_backlog_pretty.md"
-
-          set -e
-
-      - name: Show repository diagnostics files
+      - name: Show generated repository diagnostics reports
         if: always()
         shell: bash
         run: |
           echo ""
-          echo "================ REPOSITORY DIAGNOSTICS FILES =============="
+          echo "================ GENERATED REPO DIAGNOSTICS ================"
           find audit_out -maxdepth 1 -type f \
             \( -name "repo_api_report_v4.json" \
             -o -name "repo_autopsy_summary.json" \
