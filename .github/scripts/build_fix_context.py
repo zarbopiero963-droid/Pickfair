@@ -35,6 +35,10 @@ def load_ai_reasoning() -> dict:
     return read_json(AUDIT_OUT / "ai_reasoning.json")
 
 
+def load_test_failure_context() -> dict:
+    return read_json(AUDIT_OUT / "test_failure_context.json")
+
+
 def load_pytest_log() -> str:
     return read_text(AUDIT_RAW / "pytest.log")
 
@@ -65,7 +69,7 @@ def extract_pytest_signals(pytest_log: str) -> list[str]:
     return signals[:80]
 
 
-def build_contract_contexts(contracts: list, pytest_signals: list[str]) -> list[dict]:
+def build_contract_contexts(contracts: list) -> list[dict]:
     contexts = []
 
     for item in contracts:
@@ -80,9 +84,7 @@ def build_contract_contexts(contracts: list, pytest_signals: list[str]) -> list[
         related_contracts = []
 
         if target_file == "auto_updater.py":
-            related_tests = [
-                "tests/test_auto_updater.py",
-            ]
+            related_tests = ["tests/test_auto_updater.py"]
             related_contracts = [
                 "tests/test_backward_compatibility.py",
                 "tests/test_public_contracts_repository.py",
@@ -105,9 +107,7 @@ def build_contract_contexts(contracts: list, pytest_signals: list[str]) -> list[
                 "tests/guardrails/test_contract_snapshot.py",
                 "tests/guardrails/test_public_api_matches_snapshot.py",
             ]
-            related_fixtures = [
-                "tests/fixtures/system_payloads.py",
-            ]
+            related_fixtures = ["tests/fixtures/system_payloads.py"]
             related_contracts = [
                 "tests/contracts/test_payload_snapshots.py",
                 "tests/guardrails/test_contract_snapshot.py",
@@ -119,9 +119,7 @@ def build_contract_contexts(contracts: list, pytest_signals: list[str]) -> list[
                 "tests/test_toolbar_live.py",
                 "tests/test_ui_components.py",
             ]
-            related_fixtures = [
-                "tests/fixtures/market_ticks.py",
-            ]
+            related_fixtures = ["tests/fixtures/market_ticks.py"]
 
         contexts.append(
             {
@@ -137,113 +135,41 @@ def build_contract_contexts(contracts: list, pytest_signals: list[str]) -> list[
                     "Mantenere retrocompatibilità.",
                 ],
                 "priority": "P0",
+                "issue_type": "missing_public_contract",
             }
         )
 
     return contexts
 
 
-def extract_files_from_pytest_signals(pytest_signals: list[str]) -> list[str]:
-    found = set()
-
-    for line in pytest_signals:
-        for token in line.split():
-            token = token.strip("()[],:")
-            if token.endswith(".py") and "/" in token:
-                found.add(token)
-
-    return sorted(found)
-
-
 def build_pytest_contexts(pytest_signals: list[str]) -> list[dict]:
     contexts = []
-    files = extract_files_from_pytest_signals(pytest_signals)
 
-    for target_file in files:
-        if target_file == "tests/test_auto_updater.py":
-            contexts.append(
-                {
-                    "target_file": target_file,
-                    "required_symbols": [],
-                    "related_tests": [
-                        "tests/test_auto_updater.py",
-                    ],
-                    "related_fixtures": [],
-                    "related_contracts": [],
-                    "notes": [
-                        "Test direttamente coinvolto nel failure corrente.",
-                        "Leggere insieme al modulo sorgente target.",
-                        "Usare come vincolo di comportamento.",
-                    ],
-                    "priority": "P0",
-                }
-            )
+    joined = "\n".join(pytest_signals)
 
-        elif target_file == "tests/test_executor_manager_parallel.py":
-            contexts.append(
-                {
-                    "target_file": target_file,
-                    "required_symbols": [],
-                    "related_tests": [
-                        "tests/test_executor_manager.py",
-                        "tests/test_executor_manager_parallel.py",
-                        "tests/test_executor_manager_shutdown.py",
-                    ],
-                    "related_fixtures": [],
-                    "related_contracts": [],
-                    "notes": [
-                        "Test direttamente coinvolto nel failure corrente.",
-                        "Possibile wiring issue o test corrotto.",
-                        "Verificare collection e riferimenti nominali.",
-                    ],
-                    "priority": "P0",
-                }
-            )
-
-        elif target_file == "tests/test_executor_manager_shutdown.py":
-            contexts.append(
-                {
-                    "target_file": target_file,
-                    "required_symbols": [],
-                    "related_tests": [
-                        "tests/test_executor_manager.py",
-                        "tests/test_executor_manager_parallel.py",
-                        "tests/test_executor_manager_shutdown.py",
-                    ],
-                    "related_fixtures": [],
-                    "related_contracts": [],
-                    "notes": [
-                        "Test direttamente coinvolto nel failure corrente.",
-                        "Verificare che i nomi test siano coerenti e importabili.",
-                    ],
-                    "priority": "P0",
-                }
-            )
-
-        elif target_file == "tests/contracts/test_payload_snapshots.py":
-            contexts.append(
-                {
-                    "target_file": target_file,
-                    "required_symbols": [],
-                    "related_tests": [
-                        "tests/contracts/test_payload_snapshots.py",
-                        "tests/guardrails/test_contract_snapshot.py",
-                        "tests/guardrails/test_public_api_matches_snapshot.py",
-                    ],
-                    "related_fixtures": [
-                        "tests/fixtures/system_payloads.py",
-                    ],
-                    "related_contracts": [
-                        "tests/contracts/test_payload_snapshots.py",
-                        "tests/guardrails/test_contract_snapshot.py",
-                    ],
-                    "notes": [
-                        "Contract test direttamente coinvolto.",
-                        "Il comportamento atteso è definito dal payload snapshot.",
-                    ],
-                    "priority": "P0",
-                }
-            )
+    if "tests/contracts/test_payload_snapshots.py" in joined:
+        contexts.append(
+            {
+                "target_file": "tests/contracts/test_payload_snapshots.py",
+                "required_symbols": [],
+                "related_tests": [
+                    "tests/contracts/test_payload_snapshots.py",
+                    "tests/guardrails/test_contract_snapshot.py",
+                    "tests/guardrails/test_public_api_matches_snapshot.py",
+                ],
+                "related_fixtures": ["tests/fixtures/system_payloads.py"],
+                "related_contracts": [
+                    "tests/contracts/test_payload_snapshots.py",
+                    "tests/guardrails/test_contract_snapshot.py",
+                ],
+                "notes": [
+                    "Contract test direttamente coinvolto.",
+                    "Il comportamento atteso è definito dal payload snapshot.",
+                ],
+                "priority": "P0",
+                "issue_type": "contract_test_failure",
+            }
+        )
 
     return contexts
 
@@ -265,11 +191,19 @@ def merge_contexts(contexts: list[dict]) -> list[dict]:
                 "related_contracts": [],
                 "notes": [],
                 "priority": item.get("priority", "P1"),
+                "issue_type": item.get("issue_type", "generic"),
+                "related_source_file": item.get("related_source_file", ""),
             }
 
         dst = merged[target_file]
 
-        for key in ["required_symbols", "related_tests", "related_fixtures", "related_contracts", "notes"]:
+        for key in [
+            "required_symbols",
+            "related_tests",
+            "related_fixtures",
+            "related_contracts",
+            "notes",
+        ]:
             existing = set(dst.get(key, []))
             for value in item.get(key, []):
                 if value not in existing:
@@ -279,6 +213,9 @@ def merge_contexts(contexts: list[dict]) -> list[dict]:
         if item.get("priority") == "P0":
             dst["priority"] = "P0"
 
+        if not dst.get("related_source_file") and item.get("related_source_file"):
+            dst["related_source_file"] = item.get("related_source_file")
+
     return list(merged.values())
 
 
@@ -287,9 +224,22 @@ def score_context(item: dict, pytest_signals: list[str], ai_reasoning: dict) -> 
 
     target_file = str(item.get("target_file", "")).strip()
     required_symbols = item.get("required_symbols", []) or []
+    issue_type = str(item.get("issue_type", "")).strip()
 
     if item.get("priority") == "P0":
         score += 100
+
+    if issue_type == "empty_test_file":
+        score += 160
+
+    if issue_type == "corrupted_or_non_test_content":
+        score += 150
+
+    if issue_type == "missing_public_contract":
+        score += 120
+
+    if issue_type == "contract_test_failure":
+        score += 110
 
     for line in pytest_signals:
         if target_file and target_file in line:
@@ -319,15 +269,17 @@ def score_context(item: dict, pytest_signals: list[str], ai_reasoning: dict) -> 
 def main() -> int:
     audit_machine = load_audit_machine()
     ai_reasoning = load_ai_reasoning()
+    test_failure_context = load_test_failure_context()
     pytest_log = load_pytest_log()
 
     contracts = audit_machine.get("contracts", []) or []
     pytest_signals = extract_pytest_signals(pytest_log)
 
-    contract_contexts = build_contract_contexts(contracts, pytest_signals)
+    contract_contexts = build_contract_contexts(contracts)
     pytest_contexts = build_pytest_contexts(pytest_signals)
+    test_contexts = test_failure_context.get("test_failure_contexts", []) or []
 
-    contexts = merge_contexts(contract_contexts + pytest_contexts)
+    contexts = merge_contexts(contract_contexts + pytest_contexts + test_contexts)
 
     for item in contexts:
         item["_score"] = score_context(item, pytest_signals, ai_reasoning)
@@ -337,9 +289,7 @@ def main() -> int:
     for item in contexts:
         item.pop("_score", None)
 
-    result = {
-        "fix_contexts": contexts
-    }
+    result = {"fix_contexts": contexts}
 
     write_json(AUDIT_OUT / "fix_context.json", result)
     print(json.dumps(result, indent=2, ensure_ascii=False))
