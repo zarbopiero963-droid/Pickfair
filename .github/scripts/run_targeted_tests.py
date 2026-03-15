@@ -33,27 +33,45 @@ def write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def unique_keep_order(items: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for item in items:
+        item = str(item).strip()
+        if not item or item in seen:
+            continue
+        out.append(item)
+        seen.add(item)
+    return out
+
+
 def collect_targets() -> list[str]:
-    failing_tests = read_json(AUDIT_OUT / "failing_tests.json").get("targets", []) or []
-    fix_contexts = read_json(AUDIT_OUT / "fix_context.json").get("fix_contexts", []) or []
+    failing_tests_data = read_json(AUDIT_OUT / "failing_tests.json")
+    fix_context_data = read_json(AUDIT_OUT / "fix_context.json")
+    test_failure_context_data = read_json(AUDIT_OUT / "test_failure_context.json")
 
     targets: list[str] = []
-    seen = set()
 
-    for item in failing_tests:
+    for item in failing_tests_data.get("targets", []) or []:
         test_file = str(item.get("test_file", "")).strip()
-        if test_file and test_file not in seen:
+        if test_file.startswith("tests/"):
             targets.append(test_file)
-            seen.add(test_file)
 
-    for item in fix_contexts:
+    for item in test_failure_context_data.get("test_failure_contexts", []) or []:
+        test_file = str(item.get("target_file", "")).strip()
+        if test_file.startswith("tests/"):
+            targets.append(test_file)
+
+    for item in fix_context_data.get("fix_contexts", []) or []:
         for test_file in item.get("related_tests", []) or []:
             test_file = str(test_file).strip()
-            if test_file and test_file not in seen and test_file.startswith("tests/"):
+            if test_file.startswith("tests/"):
                 targets.append(test_file)
-                seen.add(test_file)
 
-    return targets[:12]
+    targets = unique_keep_order(targets)
+
+    # Manteniamo il set piccolo e mirato
+    return targets[:10]
 
 
 def extract_failure_lines(output: str) -> list[str]:
@@ -128,6 +146,7 @@ def main() -> int:
         "",
         "Targets:",
     ]
+
     for item in targets:
         md_lines.append(f"- {item}")
 
