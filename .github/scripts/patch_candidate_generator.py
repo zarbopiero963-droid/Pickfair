@@ -183,6 +183,14 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
         score += 140
     if issue_type == "contract_test_failure":
         score += 120
+    if issue_type == "lint_failure":
+        score += 115
+    if issue_type == "runtime_failure":
+        score += 120
+    if issue_type == "test_failure":
+        score += 110
+    if issue_type == "ci_failure":
+        score += 100
 
     for signal in pytest_signals:
         if target_file and target_file in signal:
@@ -207,7 +215,7 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
                 score += 90
 
     score += min(len(item.get("related_tests", []) or []), 6) * 3
-    score += min(len(item.get("related_contracts", []) or []), 4) * 4
+    score += min(len(item.get("related_contracts", [] ) or []), 4) * 4
     score += min(len(item.get("notes", []) or []), 4) * 2
 
     return score
@@ -229,12 +237,42 @@ def select_best_subset(paths: list[str], max_items: int) -> list[str]:
     return out
 
 
-def load_target_context() -> dict:
+def load_candidate_fix_contexts() -> list[dict]:
+    filtered_fix_context = read_json(AUDIT_OUT / "filtered_fix_context.json")
     issue_classification = read_json(AUDIT_OUT / "issue_classification.json")
+
+    filtered = filtered_fix_context.get("filtered_contexts", [])
+    classified = issue_classification.get("fix_contexts", [])
+
+    if filtered:
+        filtered_targets = {
+            str(item.get("target_file", "")).strip(): item
+            for item in filtered
+            if str(item.get("target_file", "")).strip()
+        }
+
+        out = []
+        for item in classified:
+            target_file = str(item.get("target_file", "")).strip()
+            if not target_file:
+                continue
+            if target_file not in filtered_targets:
+                continue
+            out.append(item)
+
+        if out:
+            return out
+
+    return classified or []
+
+
+def load_target_context() -> dict:
+    fix_contexts = load_candidate_fix_contexts()
     global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
     test_failure_context = read_json(AUDIT_OUT / "test_failure_context.json")
+    issue_classification = read_json(AUDIT_OUT / "issue_classification.json")
+    repair_history = read_json(AUDIT_OUT / "repair_history.json")
 
-    fix_contexts = issue_classification.get("fix_contexts", [])
     if not fix_contexts:
         return {}
 
@@ -278,7 +316,10 @@ def load_target_context() -> dict:
             break
 
     if not selected and filtered_contexts:
-        safe_first = [x for x in filtered_contexts if str(x.get("classification", "")).strip() == "AUTO_FIX_SAFE"]
+        safe_first = [
+            x for x in filtered_contexts
+            if str(x.get("classification", "")).strip() == "AUTO_FIX_SAFE"
+        ]
         if safe_first:
             selected = [safe_first[0]]
         else:
@@ -311,7 +352,9 @@ def load_target_context() -> dict:
                     "issue_type": target.get("issue_type", ""),
                     "related_source_file": target.get("related_source_file", ""),
                     "classification": target.get("classification", ""),
-                    "classification_reasons": trim_list(target.get("classification_reasons", []) or [], 4),
+                    "classification_reasons": trim_list(
+                        target.get("classification_reasons", []) or [], 4
+                    ),
                 },
                 "target_file_text": trimmed_text(read_text(target_file), MAX_TARGET_FILE_CHARS),
                 "related_tests_text": {
@@ -361,6 +404,11 @@ def load_target_context() -> dict:
         },
         "failing_tests": normalized_failing_tests,
         "classification_summary": issue_classification.get("summary", {}),
+        "repair_history_summary": {
+            "successful_repairs": len(repair_history.get("successful_repairs", []) or []),
+            "failed_repairs": len(repair_history.get("failed_repairs", []) or []),
+            "skipped_contexts": len(repair_history.get("skipped_contexts", []) or []),
+        },
     }
 
 
@@ -381,6 +429,7 @@ Rules:
 - NEVER patch targets classified as HUMAN_ONLY
 - prefer AUTO_FIX_SAFE targets over AUTO_FIX_REVIEW targets
 - for AUTO_FIX_REVIEW targets, keep changes even smaller and avoid business-logic redesign
+- assume filtered_fix_context already removed previously attempted contexts; do not broaden scope beyond the provided targets
 
 Return STRICT JSON:
 {
@@ -401,6 +450,7 @@ Return STRICT JSON:
     user_payload = {
         "task": "Generate the smallest safe coordinated patch candidate for the selected P0 fix contexts.",
         "classification_summary": ctx.get("classification_summary", {}),
+        "repair_history_summary": ctx.get("repair_history_summary", {}),
         "targets": [
             {
                 "target_file": str(x.get("target_file", "")).strip(),
@@ -408,7 +458,9 @@ Return STRICT JSON:
                 "priority": x.get("priority", ""),
                 "issue_type": x.get("issue_type", ""),
                 "classification": x.get("classification", ""),
-                "classification_reasons": trim_list(x.get("classification_reasons", []) or [], 4),
+                "classification_reasons": trim_list(
+                    x.get("classification_reasons", []) or [], 4
+                ),
                 "related_tests": select_best_subset(x.get("related_tests", []) or [], 3),
                 "related_contracts": select_best_subset(x.get("related_contracts", []) or [], 2),
                 "notes": trim_list(x.get("notes", []) or [], 5),
