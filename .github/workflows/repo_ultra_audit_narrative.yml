@@ -263,29 +263,27 @@ jobs:
           set +e
           mkdir -p audit_out
 
-          for f in \
-            repo_api_report_v4.json \
-            repo_autopsy_summary.json \
-            repo_autopsy.json \
-            repo_fix_backlog.json \
-            repo_fix_backlog_pretty.md
-          do
-            if [ -f "$f" ]; then
-              cp "$f" "audit_out/$(basename "$f")"
-            fi
-          done
+          copy_first_match() {
+            TARGET_NAME="$1"
+            FOUND_PATH="$(find . -type f -name "$TARGET_NAME" \
+              ! -path "./audit_out/*" \
+              ! -path "./audit_raw/*" \
+              | head -n 1)"
 
-          for f in \
-            repo_api_report_v4.json \
-            repo_autopsy_summary.json \
-            repo_autopsy.json \
-            repo_fix_backlog.json \
-            repo_fix_backlog_pretty.md
-          do
-            if [ -f "audit_out/$f" ]; then
-              echo "FOUND: audit_out/$f"
+            if [ -n "$FOUND_PATH" ]; then
+              cp "$FOUND_PATH" "audit_out/$TARGET_NAME"
+              echo "FOUND: $FOUND_PATH -> audit_out/$TARGET_NAME"
+            else
+              echo "MISSING: $TARGET_NAME"
             fi
-          done
+          }
+
+          copy_first_match "repo_api_report_v4.json"
+          copy_first_match "repo_autopsy_summary.json"
+          copy_first_match "repo_autopsy.json"
+          copy_first_match "repo_fix_backlog.json"
+          copy_first_match "repo_fix_backlog_pretty.md"
+
           set -e
 
       - name: Show repository diagnostics files
@@ -294,7 +292,13 @@ jobs:
         run: |
           echo ""
           echo "================ REPOSITORY DIAGNOSTICS FILES =============="
-          ls -lah audit_out/repo_* 2>/dev/null || echo "No repo_* diagnostics files found in audit_out"
+          find audit_out -maxdepth 1 -type f \
+            \( -name "repo_api_report_v4.json" \
+            -o -name "repo_autopsy_summary.json" \
+            -o -name "repo_autopsy.json" \
+            -o -name "repo_fix_backlog.json" \
+            -o -name "repo_fix_backlog_pretty.md" \) \
+            | sort || true
           echo "============================================================"
 
       - name: Collect recent failed external CI logs into audit_raw
