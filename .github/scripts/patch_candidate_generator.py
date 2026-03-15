@@ -37,12 +37,25 @@ def write_json(path: Path, data) -> None:
     )
 
 
+def load_failing_tests() -> list[dict]:
+    path = AUDIT_OUT / "failing_tests.json"
+    if not path.exists():
+        return []
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        targets = data.get("targets", [])
+        return targets if isinstance(targets, list) else []
+    except Exception:
+        return []
+
+
 def parse_json_content(content: str) -> dict:
     content = (content or "").strip()
 
     if not content:
         return {
-            "summary": "Empty AI response",
+            "summary": "Patch candidate response was empty.",
             "target_files": [],
             "why_this_fix": "",
             "proposed_patches": [],
@@ -106,7 +119,7 @@ def parse_json_content(content: str) -> dict:
                         break
 
     return {
-        "summary": "Invalid JSON from AI",
+        "summary": "Patch candidate response was not valid JSON.",
         "target_files": [],
         "why_this_fix": "",
         "proposed_patches": [],
@@ -114,6 +127,58 @@ def parse_json_content(content: str) -> dict:
         "risk": "unknown",
         "raw_content": content,
     }
+
+
+def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -> int:
+    score = 0
+
+    target_file = str(item.get("target_file", "")).strip()
+    required_symbols = item.get("required_symbols", []) or []
+    issue_type = str(item.get("issue_type", "")).strip()
+
+    if item.get("priority") == "P0":
+        score += 100
+
+    if issue_type == "empty_test_file":
+        score += 180
+
+    if issue_type == "corrupted_or_non_test_content":
+        score += 170
+
+    if issue_type == "missing_public_contract":
+        score += 130
+
+    if issue_type == "contract_test_failure":
+        score += 120
+
+    if issue_type == "normal_test_file":
+        score += 40
+
+    for signal in pytest_signals:
+        if target_file and target_file in signal:
+            score += 50
+
+        for symbol in required_symbols:
+            if symbol and symbol in signal:
+                score += 80
+
+    for contract in contracts:
+        try:
+            contract_file = str(contract[0]).strip()
+            contract_symbol = str(contract[1]).strip()
+        except Exception:
+            continue
+
+        if target_file and target_file == contract_file:
+            score += 60
+
+        for symbol in required_symbols:
+            if symbol and symbol == contract_symbol:
+                score += 90
+
+    score += min(len(item.get("related_tests", []) or []), 10)
+    score += min(len(item.get("related_contracts", []) or []), 10) * 2
+    return score
 
 
 def load_target_context() -> dict:
@@ -125,22 +190,43 @@ def load_target_context() -> dict:
     if not fix_contexts:
         return {}
 
-    targets = []
+    pytest_signals = global_context.get("pytest_signals", []) or []
+    contracts = global_context.get("contracts", []) or []
+    failing_tests = test_failure_context.get("test_failure_contexts", []) or []
+    failing_targets = load_failing_tests()
 
+    scored = []
     for item in fix_contexts:
-        if item.get("priority") == "P0":
-            targets.append(item)
+        score = _score_fix_context(item, pytest_signals, contracts)
+        scored.append((score, item))
 
-    if not targets and fix_contexts:
-        targets = [fix_contexts[0]]
+    scored.sort(key=lambda x: x[0], reverse=True)
 
-    targets = targets[:5]
+    selected = []
+    seen = set()
+
+    for score, item in scored:
+        target_file = str(item.get("target_file", "")).strip()
+
+        if not target_file or target_file in seen:
+            continue
+
+        if item.get("priority") != "P0":
+            continue
+
+        seen.add(target_file)
+        selected.append(item)
+
+        if len(selected) >= 5:
+            break
+
+    if not selected and fix_contexts:
+        selected = [fix_contexts[0]]
 
     files_payload = []
 
-    for target in targets:
+    for target in selected:
         target_file = ROOT / target["target_file"]
-
         related_tests = [ROOT / t for t in target.get("related_tests", [])]
         related_fixtures = [ROOT / t for t in target.get("related_fixtures", [])]
         related_contracts = [ROOT / t for t in target.get("related_contracts", [])]
@@ -168,10 +254,11 @@ def load_target_context() -> dict:
         )
 
     return {
-        "targets": targets,
+        "targets": selected,
         "files_payload": files_payload,
         "global_context": global_context,
-        "failing_tests": test_failure_context.get("test_failure_contexts", []),
+        "failing_tests": failing_tests,
+        "failing_test_targets": failing_targets,
     }
 
 
@@ -184,46 +271,93 @@ GENERAL RULES
 - generate minimal safe patches
 - preserve backward compatibility
 - never redesign modules
-- modify only provided files
-- restore missing public contracts
-- respect test expectations
-- prefer fixing multiple P0 issues in one patch when closely related
+- never introduce new architecture
+- modify only the files explicitly provided in the context
+- restore missing public contracts required by tests
+- respect existing API contracts and test expectations
+- prefer solving multiple closely-related P0 blockers in one coordinated patch
+- avoid touching unrelated modules
+- patches must compile and be syntactically valid Python
 
+TEST TARGETING RULE
 
-TEST REPAIR RULES
+The CI system provides the list of failing tests.
 
-Sometimes the failing file is a test file.
+Prefer fixing the module related to the failing test.
 
-If a test file is:
+Example mapping:
+
+test_executor_manager.py -> executor_manager.py
+test_auto_updater.py -> auto_updater.py
+
+Always prioritize repairing the module causing the failing test before modifying unrelated files.
+
+TEST REPAIR RULES (VERY IMPORTANT)
+
+Sometimes the failing file is a TEST FILE itself.
+
+If a failing test file is:
 
 - empty
-- corrupted
 - truncated
-- contains non-pytest code
+- corrupted
+- containing non-pytest content
+- containing only a filename
+- syntactically invalid
 
-you must repair the test.
+you must repair the test file.
 
-But NEVER create placeholder tests.
+However:
 
-Forbidden:
+You MUST NOT generate placeholder tests.
 
-assert True
-pass
-dummy tests
+This means:
 
-Instead generate the SMALLEST SEMANTICALLY CORRECT pytest test.
+- NEVER generate tests like assert True
+- NEVER generate tests like pass
+- NEVER generate dummy tests
+- NEVER generate fake smoke tests
+
+unless the original contract truly required only import coverage.
+
+Instead you must generate:
+
+the smallest SEMANTICALLY CORRECT pytest test.
 
 The repaired test must:
 
-- verify real behavior
-- match the related module
-- reproduce the failure context
+- reproduce the behavior implied by the failure context
+- be consistent with the related source module
+- check a real expected behavior
+- remain minimal but meaningful
 - avoid inventing new features
+- avoid testing unrelated behavior
 
+GOOD EXAMPLE
 
-PATCH FORMAT
+If a module exposes:
 
-Return STRICT JSON:
+ExecutorManager.shutdown()
+
+a minimal correct test is:
+
+    ex = ExecutorManager()
+    ex.shutdown()
+    assert ex.running is False
+
+This is correct because it verifies real behavior.
+
+BAD EXAMPLE
+
+    assert True
+
+PATCH RULES
+
+Each patch must be provided as a unified diff.
+
+Do NOT output explanations outside JSON.
+
+Return STRICT JSON with this schema:
 
 {
   "summary": "...",
@@ -232,7 +366,7 @@ Return STRICT JSON:
   "proposed_patches": [
     {
       "target_file": "path.py",
-      "patch": "unified diff"
+      "patch": "unified diff patch"
     }
   ],
   "tests_to_run": [],
@@ -244,8 +378,10 @@ Return STRICT JSON:
         "targets": ctx["targets"],
         "files_payload": ctx["files_payload"],
         "failing_tests": ctx["failing_tests"],
+        "user_failing_tests": ctx["failing_test_targets"],
         "global_context": {
             "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
+            "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
             "contracts": ctx["global_context"].get("contracts", [])[:20],
         },
     }
@@ -264,6 +400,9 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
     }
 
     patches = data.get("proposed_patches", [])
+    if not isinstance(patches, list):
+        patches = []
+
     normalized = []
 
     for item in patches:
@@ -286,21 +425,90 @@ def normalize_patch_candidate(data: dict, ctx: dict) -> dict:
             }
         )
 
+    tests_to_run = data.get("tests_to_run", [])
+    if not isinstance(tests_to_run, list):
+        tests_to_run = []
+
+    risk = str(data.get("risk", "unknown")).strip().lower() or "unknown"
+    if risk not in {"low", "medium", "high", "unknown"}:
+        risk = "unknown"
+
     return {
         "summary": str(data.get("summary", "")).strip(),
         "target_files": [p["target_file"] for p in normalized],
         "why_this_fix": str(data.get("why_this_fix", "")).strip(),
         "proposed_patches": normalized,
-        "tests_to_run": data.get("tests_to_run", []),
-        "risk": str(data.get("risk", "unknown")).lower(),
+        "tests_to_run": tests_to_run,
+        "risk": risk,
     }
+
+
+def render_patch_candidate_md(data: dict, model_used: str) -> str:
+    lines = []
+    lines.append("Patch Candidate")
+    lines.append("")
+    lines.append(f"Model used: {model_used}")
+    lines.append("")
+    lines.append(f"Summary: {data.get('summary', '')}")
+    lines.append("")
+    lines.append("Target files:")
+
+    target_files = data.get("target_files", [])
+    if target_files:
+        for file in target_files:
+            lines.append(f"- {file}")
+    else:
+        lines.append("- Nessun file target disponibile.")
+
+    lines.append("")
+    lines.append(f"Risk: {data.get('risk', '')}")
+    lines.append("")
+    lines.append("Why this fix")
+    lines.append(data.get("why_this_fix", ""))
+    lines.append("")
+    lines.append("Tests to run")
+
+    tests = data.get("tests_to_run", [])
+    if tests:
+        for test in tests:
+            lines.append(f"- {test}")
+    else:
+        lines.append("- Nessun test suggerito.")
+
+    lines.append("")
+    lines.append("Proposed patches")
+    lines.append("")
+
+    proposed = data.get("proposed_patches", [])
+    if proposed:
+        for item in proposed:
+            lines.append(f"Target file: {item.get('target_file', '')}")
+            lines.append("")
+            lines.append("```diff")
+            lines.append(item.get("patch", ""))
+            lines.append("```")
+            lines.append("")
+    else:
+        lines.append("_Nessuna patch disponibile._")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def main() -> int:
     ctx = load_target_context()
 
     if not ctx:
-        write_text(AUDIT_OUT / "patch_candidate.md", "No context available")
+        data = {
+            "summary": "No fix context available",
+            "target_files": [],
+            "why_this_fix": "",
+            "proposed_patches": [],
+            "tests_to_run": [],
+            "risk": "unknown",
+        }
+        write_json(AUDIT_OUT / "patch_candidate.json", data)
+        write_text(AUDIT_OUT / "patch_candidate.md", "No context.")
         return 0
 
     try:
@@ -311,42 +519,30 @@ def main() -> int:
             messages=messages,
         )
 
-        content = resp.get("content", "")
-        model_used = resp.get("model_used", "unknown")
+        content = resp["content"]
+        model_used = resp["model_used"]
 
         parsed = parse_json_content(content)
         normalized = normalize_patch_candidate(parsed, ctx)
 
+        if not normalized["proposed_patches"]:
+            raise RuntimeError("AI non ha prodotto patch valide")
+
         write_json(AUDIT_OUT / "patch_candidate.json", normalized)
+        write_text(
+            AUDIT_OUT / "patch_candidate.md",
+            render_patch_candidate_md(normalized, model_used),
+        )
 
-        md = f"""
-Patch Candidate
-
-Model: {model_used}
-
-Summary:
-{normalized.get("summary","")}
-
-Target files:
-{normalized.get("target_files",[])}
-
-Risk:
-{normalized.get("risk","")}
-
-Why this fix:
-{normalized.get("why_this_fix","")}
-"""
-
-        write_text(AUDIT_OUT / "patch_candidate.md", md)
-
-        print("Patch candidate generated")
+        print("Patch candidate generator completato")
+        print("Model:", model_used)
+        return 0
 
     except Exception as exc:
-
         fallback = {
-            "summary": "Patch generator failed",
-            "why_this_fix": str(exc),
+            "summary": "Patch candidate generator failed",
             "target_files": [],
+            "why_this_fix": str(exc),
             "proposed_patches": [],
             "tests_to_run": [],
             "risk": "unknown",
@@ -355,12 +551,11 @@ Why this fix:
         write_json(AUDIT_OUT / "patch_candidate.json", fallback)
         write_text(
             AUDIT_OUT / "patch_candidate.md",
-            json.dumps(fallback, indent=2),
+            json.dumps(fallback, indent=2, ensure_ascii=False),
         )
 
-        print("Patch generator error:", exc)
-
-    return 0
+        print("Patch candidate generator fallito:", exc)
+        return 0
 
 
 if __name__ == "__main__":
