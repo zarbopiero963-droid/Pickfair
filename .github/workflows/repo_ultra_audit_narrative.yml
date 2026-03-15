@@ -70,6 +70,7 @@ jobs:
           test -f .github/scripts/post_patch_review.py
           test -f .github/scripts/build_pr_comment.py
           test -f .github/scripts/build_merge_summary.py
+          test -f .github/scripts/ai_repair_loop.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -306,6 +307,12 @@ jobs:
             echo "post_patch_review.md not found"
           fi
           echo "===================================================="
+
+      - name: Run AI repair loop
+        if: always()
+        run: |
+          python .github/scripts/ai_repair_loop.py
+        continue-on-error: true
 
       - name: Evaluate final PR gate
         if: always()
