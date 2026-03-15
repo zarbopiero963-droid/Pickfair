@@ -17,6 +17,55 @@ from urllib.request import Request, urlopen
 DEFAULT_UPDATE_URL = "https://api.github.com/repos/petiro/Pickfair/releases/latest"
 
 
+class AutoUpdater:
+    """Backward-compatible auto updater facade."""
+
+    def __init__(self, current_version=None, enabled=False, update_url=None):
+        self.enabled = enabled
+        self.current_version = current_version
+        self.update_url = update_url or DEFAULT_UPDATE_URL
+
+    def enable(self):
+        self.enabled = True
+
+    def disable(self):
+        self.enabled = False
+
+    def set_current_version(self, version):
+        self.current_version = version
+
+    def check(self, callback=None, update_url=None):
+        if not self.enabled:
+            result = {"update_available": False, "error": "AutoUpdater disabled"}
+            if callback:
+                callback(result)
+            return None
+
+        if not self.current_version:
+            result = {"update_available": False, "error": "Current version not set"}
+            if callback:
+                callback(result)
+            return None
+
+        return check_for_updates(
+            self.current_version,
+            callback=callback,
+            update_url=update_url or self.update_url,
+        )
+
+    def check_for_updates(self, callback=None, update_url=None):
+        return self.check(callback=callback, update_url=update_url)
+
+    def open_download_page(self, url):
+        return open_download_page(url)
+
+    def download_update(self, download_url, progress_callback=None):
+        return download_update(download_url, progress_callback=progress_callback)
+
+    def install_update(self, update_path, current_exe_path=None):
+        return install_update(update_path, current_exe_path=current_exe_path)
+
+
 def parse_version(version_str):
     """Parse version string like '3.4.0' into tuple (3, 4, 0)."""
     try:
