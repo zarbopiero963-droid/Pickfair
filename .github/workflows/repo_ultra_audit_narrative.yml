@@ -76,6 +76,18 @@ jobs:
           test -f .github/scripts/run_targeted_tests.py
           echo "Scripts found."
 
+      - name: Detect workflow mode
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "workflow_mode=pr_validation" >> "$GITHUB_OUTPUT"
+            echo "Workflow mode: pr_validation"
+          else
+            echo "workflow_mode=full_repair" >> "$GITHUB_OUTPUT"
+            echo "Workflow mode: full_repair"
+          fi
+
       - name: Load AI Governance Docs
         if: always()
         run: |
@@ -103,7 +115,7 @@ jobs:
           echo "============================================================"
 
       - name: Run AI repair loop
-        if: always()
+        if: steps.mode.outputs.workflow_mode == 'full_repair'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
@@ -114,6 +126,49 @@ jobs:
         run: |
           python .github/scripts/ai_repair_loop.py
         continue-on-error: true
+
+      - name: Build PR validation fallback state
+        if: steps.mode.outputs.workflow_mode == 'pr_validation'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          out = Path("audit_out")
+          out.mkdir(parents=True, exist_ok=True)
+
+          state = {
+              "final_status": "pr_validation_mode",
+              "repo_materially_greener": False,
+              "repo_fully_green": False,
+              "continuation_recommended": False,
+              "next_action": "validate_existing_pr_only",
+              "cycles": [],
+          }
+
+          report = "\n".join([
+              "AI Repair Loop Report",
+              "",
+              "Final status: pr_validation_mode",
+              "Max cycles: 0",
+              "Repo materially greener: NO",
+              "Repo fully green: NO",
+              "Continuation recommended: NO",
+              "Next action: validate_existing_pr_only",
+              "",
+              "This run was triggered by pull_request.",
+              "Repair loop intentionally skipped to avoid generating a second patch on top of an existing AI patch PR.",
+              "",
+          ])
+
+          (out / "ai_repair_loop_state.json").write_text(
+              json.dumps(state, indent=2, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          (out / "ai_repair_loop_report.md").write_text(report, encoding="utf-8")
+          print(report)
+          PY
 
       - name: Show repair loop report
         if: always()
@@ -334,8 +389,46 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Evaluate final PR gate
+      - name: Build merge summary
         if: always()
+        run: |
+          python .github/scripts/build_merge_summary.py
+        continue-on-error: true
+
+      - name: Show merge summary
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ MERGE SUMMARY ============================="
+          if [ -f audit_out/merge_summary.md ]; then
+            cat audit_out/merge_summary.md
+          else
+            echo "merge_summary.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Build PR comment files
+        if: always()
+        run: |
+          python .github/scripts/build_pr_comment.py
+        continue-on-error: true
+
+      - name: Show PR comment preview
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PR COMMENT PREVIEW ========================"
+          if [ -f audit_out/pr_comment.md ]; then
+            cat audit_out/pr_comment.md
+          else
+            echo "pr_comment.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Evaluate final PR gate
+        if: steps.mode.outputs.workflow_mode == 'full_repair'
         id: review_gate
         shell: bash
         run: |
@@ -399,46 +492,8 @@ jobs:
               f.write(f"gate_reason={reason}\n")
           PY
 
-      - name: Build merge summary
-        if: always()
-        run: |
-          python .github/scripts/build_merge_summary.py
-        continue-on-error: true
-
-      - name: Show merge summary
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ MERGE SUMMARY ============================="
-          if [ -f audit_out/merge_summary.md ]; then
-            cat audit_out/merge_summary.md
-          else
-            echo "merge_summary.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Build PR comment files
-        if: always()
-        run: |
-          python .github/scripts/build_pr_comment.py
-        continue-on-error: true
-
-      - name: Show PR comment preview
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PR COMMENT PREVIEW ========================"
-          if [ -f audit_out/pr_comment.md ]; then
-            cat audit_out/pr_comment.md
-          else
-            echo "pr_comment.md not found"
-          fi
-          echo "============================================================"
-
       - name: Fail workflow if final gate is not approved
-        if: always()
+        if: steps.mode.outputs.workflow_mode == 'full_repair'
         shell: bash
         run: |
           if [ "${{ steps.review_gate.outputs.allow_pr }}" != "true" ]; then
@@ -448,7 +503,7 @@ jobs:
           echo "Final PR gate approved."
 
       - name: Create AI fix branch
-        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.review_gate.outputs.allow_pr == 'true'
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.review_gate.outputs.allow_pr == 'true'
         id: create_ai_branch
         shell: bash
         run: |
@@ -545,7 +600,7 @@ jobs:
         continue-on-error: true
 
       - name: Create or update Pull Request
-        if: always() && github.event_name != 'pull_request' && steps.create_ai_branch.outputs.has_changes == 'true'
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && steps.create_ai_branch.outputs.has_changes == 'true'
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -570,7 +625,7 @@ jobs:
           echo "pr_number=$NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Post AI comment to PR
-        if: always() && github.event_name != 'pull_request' && steps.create_pr.outputs.pr_number != ''
+        if: steps.mode.outputs.workflow_mode == 'full_repair' && github.event_name != 'pull_request' && steps.create_pr.outputs.pr_number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
