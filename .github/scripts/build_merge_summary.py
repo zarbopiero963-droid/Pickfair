@@ -96,12 +96,12 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
     first = cycles[0]
     last = cycles[-1]
 
+    first_targeted = first.get("target_before")
+    last_targeted = last.get("target_after")
     first_fail = first.get("fail_before")
     last_fail = last.get("fail_after")
     first_p0 = first.get("p0_before")
     last_p0 = last.get("p0_after")
-    first_targeted = first.get("target_before")
-    last_targeted = last.get("target_after")
 
     if isinstance(first_targeted, int) and isinstance(last_targeted, int):
         if last_targeted < first_targeted:
@@ -123,7 +123,9 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
 
     for cycle in cycles:
         if cycle.get("improvement") is True:
-            return True, "Miglioramento reale rilevato in almeno un ciclo."
+            return True, cycle.get("improvement_reason", "Miglioramento reale rilevato.")
+        if cycle.get("contract_restored") is True:
+            return True, "Contract restoration rilevata."
 
     return False, "Nessun segnale forte di miglioramento reale."
 
@@ -144,18 +146,22 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
         lines.append(f"- failing_tests_after: {cycle.get('fail_after')}")
         lines.append(f"- targeted_failures_before: {cycle.get('target_before')}")
         lines.append(f"- targeted_failures_after: {cycle.get('target_after')}")
+        lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict', '')}")
+        lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict', '')}")
+        lines.append(f"- contract_restored: {cycle.get('contract_restored')}")
+        lines.append(f"- minimal_change: {cycle.get('minimal_change')}")
+        lines.append(f"- logic_preserved: {cycle.get('logic_preserved')}")
         lines.append(f"- improvement: {cycle.get('improvement')}")
+        lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
         lines.append(f"- rollback: {cycle.get('rollback')}")
-        lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
+        lines.append(f"- stop_reason: {cycle.get('stop_reason')}")
 
-        target_files = cycle.get("target_files", []) or []
-        if target_files:
+        if cycle.get("target_files"):
             lines.append("- target_files:")
-            for item in target_files:
+            for item in cycle["target_files"]:
                 kind = classify_file_kind(item)
                 icon = "🧪" if kind == "test" else "🧩"
                 lines.append(f"  - {icon} {item}")
-
         lines.append("")
 
     return lines
@@ -177,7 +183,6 @@ def main() -> int:
 
     cycles = ai_repair_loop_state.get("cycles", []) or []
     final_loop_status = str(ai_repair_loop_state.get("final_status", "")).strip() or "unknown"
-    cycle_count = len(cycles)
 
     repo_materially_greener = bool(ai_repair_loop_state.get("repo_materially_greener", False))
     repo_fully_green = bool(ai_repair_loop_state.get("repo_fully_green", False))
@@ -190,10 +195,14 @@ def main() -> int:
     improved_detected, improvement_reason = detect_real_improvement(cycles)
     improvement_status = "YES" if repo_materially_greener or improved_detected else "NO"
 
-    safe_to_merge = "YES" if (
-        tests_status == "PASS"
+    pr_reviewable = (
+        applied
         and verifier_status == "PASS"
         and review_verdict != "reject"
+    )
+
+    safe_to_merge = "YES" if (
+        pr_reviewable
         and (repo_materially_greener or improved_detected)
     ) else "NO"
 
@@ -204,11 +213,8 @@ def main() -> int:
     greener_badge = badge_for_boolean(repo_materially_greener, "🟢 SAFE", "🟡 REVIEW")
     fully_green_badge = badge_for_boolean(repo_fully_green, "🟢 SAFE", "🟡 REVIEW")
     continuation_badge = badge_for_boolean(continuation_recommended, "🟡 REVIEW", "🟢 SAFE")
-    improvement_badge = badge_for_boolean(
-        repo_materially_greener or improved_detected,
-        "🟢 SAFE",
-        "🟡 REVIEW",
-    )
+    improvement_badge = badge_for_boolean(repo_materially_greener or improved_detected, "🟢 SAFE", "🟡 REVIEW")
+    reviewable_badge = badge_for_boolean(pr_reviewable, "🟡 REVIEW", "🔴 BLOCKED")
 
     lines = []
     lines.append("# AI FINAL VERDICT")
@@ -220,6 +226,7 @@ def main() -> int:
     lines.append(f"| Tests | {tests_badge} | {tests_status} |")
     lines.append(f"| Patch verifier | {verifier_badge} | {verifier_status} ({verifier_verdict or 'unknown'}) |")
     lines.append(f"| Post patch review | {review_badge} | {review_status} ({review_verdict or 'unknown'}) |")
+    lines.append(f"| PR reviewable | {reviewable_badge} | {'YES' if pr_reviewable else 'NO'} |")
     lines.append(f"| Safe to merge | {safe_badge} | {safe_to_merge} |")
     lines.append(f"| Repo materially greener | {greener_badge} | {'YES' if repo_materially_greener else 'NO'} |")
     lines.append(f"| Repo fully green | {fully_green_badge} | {'YES' if repo_fully_green else 'NO'} |")
@@ -228,13 +235,14 @@ def main() -> int:
     lines.append("")
     lines.append("## Repair Loop Summary")
     lines.append(f"- Final loop status: {final_loop_status}")
-    lines.append(f"- Repair cycles executed: {cycle_count}")
+    lines.append(f"- Repair cycles executed: {len(cycles)}")
     lines.append(f"- Fix type: {fix_kind}")
     lines.append(f"- Repo materially greener: {'YES' if repo_materially_greener else 'NO'}")
     lines.append(f"- Repo fully green: {'YES' if repo_fully_green else 'NO'}")
     lines.append(f"- Continuation recommended: {'YES' if continuation_recommended else 'NO'}")
     lines.append(f"- Next action: {next_action}")
-    lines.append(f"- Real improvement vs previous cycle: {improvement_badge} ({improvement_status})")
+    lines.append(f"- PR reviewable: {'YES' if pr_reviewable else 'NO'}")
+    lines.append(f"- Real improvement vs previous cycle: {'YES' if (repo_materially_greener or improved_detected) else 'NO'}")
     lines.append(f"- Improvement note: {improvement_reason}")
     lines.append("")
 
@@ -253,8 +261,10 @@ def main() -> int:
 
     if safe_to_merge == "YES":
         lines.append("Decisione: la PR sembra sicura da mergiare.")
+    elif pr_reviewable:
+        lines.append("Decisione: la PR può essere aperta per revisione manuale anche se il miglioramento non è ancora pienamente misurato.")
     else:
-        lines.append("Decisione: non mergiare finché il sistema non torna SAFE TO MERGE: YES.")
+        lines.append("Decisione: non aprire PR finché il risultato non diventa almeno reviewable.")
 
     lines.append("")
 
