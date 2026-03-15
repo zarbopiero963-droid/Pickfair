@@ -20,6 +20,7 @@ def write_text(path: Path, text: str) -> None:
 
 def main() -> int:
     merge_summary = read_text(AUDIT_OUT / "merge_summary.md").strip()
+    loop_report = read_text(AUDIT_OUT / "ai_repair_loop_report.md").strip()
     root_cause = read_text(AUDIT_OUT / "root_cause.md").strip()
     fix_suggestions = read_text(AUDIT_OUT / "fix_suggestions.md").strip()
     patch_candidate = read_text(AUDIT_OUT / "patch_candidate.md").strip()
@@ -33,11 +34,17 @@ This PR was generated automatically by the AI repair pipeline.
 
 Included pipeline stages:
 - repository audit
+- failing test extraction
 - AI reasoning
+- priority fix selection
+- test failure context
+- fix context generation
 - patch candidate generation
 - patch verification
 - patch apply
 - post patch AI review
+- multi-cycle AI repair loop
+- final merge summary
 
 This PR is created only when:
 - the patch was actually applied
@@ -51,6 +58,9 @@ Please review the artifacts and checks before merging.
         "",
         "## SAFE TO MERGE",
         merge_summary or "_Missing merge summary report._",
+        "",
+        "## Repair Loop Report",
+        loop_report or "_Missing repair loop report._",
         "",
         "## Root cause",
         root_cause or "_Missing root cause report._",
