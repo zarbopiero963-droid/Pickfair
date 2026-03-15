@@ -890,6 +890,10 @@ jobs:
 
             Reason: ${{ steps.pr_gate.outputs.reason }}
           branch: ai-repair
+          add-paths: |
+            *.py
+            tests/**/*.py
+            .github/scripts/**/*.py
 
       - name: Enable auto merge
         if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.auto_merge == 'true'
