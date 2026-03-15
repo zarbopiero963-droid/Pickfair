@@ -128,6 +128,30 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Show self-healing status
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("audit_out/ai_repair_loop_state.json")
+          if not path.exists():
+              print("Repo materially greener: UNKNOWN")
+              print("Repo fully green: UNKNOWN")
+              print("Continuation recommended: UNKNOWN")
+              print("Next action: unknown")
+              raise SystemExit(0)
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+
+          print(f"Repo materially greener: {'YES' if data.get('repo_materially_greener') else 'NO'}")
+          print(f"Repo fully green: {'YES' if data.get('repo_fully_green') else 'NO'}")
+          print(f"Continuation recommended: {'YES' if data.get('continuation_recommended') else 'NO'}")
+          print(f"Next action: {data.get('next_action', 'unknown')}")
+          PY
+
       - name: Show deterministic report file
         if: always()
         shell: bash
@@ -339,21 +363,18 @@ jobs:
               post = json.loads(post_path.read_text(encoding="utf-8"))
               apply_report = json.loads(apply_path.read_text(encoding="utf-8"))
 
-              final_status = str(loop_state.get("final_status", "")).strip().lower()
               verdict = str(post.get("final_verdict", "")).strip().lower()
               applied = bool(apply_report.get("applied", False))
-              cycles = loop_state.get("cycles", []) or []
+              greener = bool(loop_state.get("repo_materially_greener", False))
 
-              improved = any(c.get("improvement_detected") is True for c in cycles)
-
-              if verdict != "reject" and applied and improved:
+              if verdict != "reject" and applied and greener:
                   allow_pr = "true"
-                  reason = final_status or "improved_and_applied"
+                  reason = loop_state.get("next_action", "improved_and_applied")
               elif verdict == "reject":
                   reason = "post_patch_review_reject"
               elif not applied:
                   reason = "patch_not_applied"
-              elif not improved:
+              elif not greener:
                   reason = "no_real_improvement"
 
           print(f"allow_pr={allow_pr}")
