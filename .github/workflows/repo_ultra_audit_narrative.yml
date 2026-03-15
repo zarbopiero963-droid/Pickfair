@@ -348,6 +348,7 @@ jobs:
           post_path = Path("audit_out/post_patch_review.json")
           apply_path = Path("audit_out/patch_apply_report.json")
           loop_path = Path("audit_out/ai_repair_loop_state.json")
+          verification_path = Path("audit_out/patch_verification.json")
 
           allow_pr = "false"
           reason = "unknown"
@@ -358,24 +359,37 @@ jobs:
               reason = "missing_post_patch_review"
           elif not apply_path.exists():
               reason = "missing_patch_apply_report"
+          elif not verification_path.exists():
+              reason = "missing_patch_verification"
           else:
               loop_state = json.loads(loop_path.read_text(encoding="utf-8"))
               post = json.loads(post_path.read_text(encoding="utf-8"))
               apply_report = json.loads(apply_path.read_text(encoding="utf-8"))
+              verification = json.loads(verification_path.read_text(encoding="utf-8"))
 
               verdict = str(post.get("final_verdict", "")).strip().lower()
+              verifier = str(verification.get("verdict", "")).strip().lower()
               applied = bool(apply_report.get("applied", False))
               greener = bool(loop_state.get("repo_materially_greener", False))
 
-              if verdict != "reject" and applied and greener:
+              reviewable = (
+                  applied
+                  and verifier in {"approve", "weak-approve"}
+                  and verdict != "reject"
+              )
+
+              if reviewable:
                   allow_pr = "true"
-                  reason = loop_state.get("next_action", "improved_and_applied")
+                  if greener:
+                      reason = loop_state.get("next_action", "improved_and_applied")
+                  else:
+                      reason = "reviewable_fix_pr"
               elif verdict == "reject":
                   reason = "post_patch_review_reject"
               elif not applied:
                   reason = "patch_not_applied"
-              elif not greener:
-                  reason = "no_real_improvement"
+              else:
+                  reason = "not_reviewable"
 
           print(f"allow_pr={allow_pr}")
           print(f"gate_reason={reason}")
