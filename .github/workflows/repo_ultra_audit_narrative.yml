@@ -69,6 +69,7 @@ jobs:
           test -f .github/scripts/apply_patch_candidate.py
           test -f .github/scripts/post_patch_review.py
           test -f .github/scripts/build_pr_comment.py
+          test -f .github/scripts/build_merge_summary.py
           echo "Scripts found."
 
       - name: Run deterministic repo audit
@@ -349,6 +350,25 @@ jobs:
               f.write(f"allow_pr={allow_pr}\n")
               f.write(f"gate_reason={reason}\n")
           PY
+
+      - name: Build merge summary
+        if: always()
+        run: |
+          python .github/scripts/build_merge_summary.py
+        continue-on-error: true
+
+      - name: Show merge summary
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ MERGE SUMMARY ============================="
+          if [ -f audit_out/merge_summary.md ]; then
+            cat audit_out/merge_summary.md
+          else
+            echo "merge_summary.md not found"
+          fi
+          echo "============================================================"
 
       - name: Build PR comment files
         if: always()
