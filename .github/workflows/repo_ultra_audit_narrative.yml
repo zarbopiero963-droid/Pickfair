@@ -374,8 +374,8 @@ jobs:
 
               reviewable = (
                   applied
-                  and verifier in {"approve", "weak-approve"}
-                  and verdict != "reject"
+                  and verifier in {"approve", "weak-approve", "review"}
+                  and verdict in {"approve", "review"}
               )
 
               if reviewable:
@@ -454,7 +454,6 @@ jobs:
         run: |
           python - <<'PY'
           import json
-          import subprocess
           import sys
           from pathlib import Path
 
