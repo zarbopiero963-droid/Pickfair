@@ -44,7 +44,7 @@ def write_json(path: Path, data) -> None:
     )
 
 
-def first_existing(candidates: list[Path]) -> Path | None:
+def first_existing(candidates: list[Path]):
     for path in candidates:
         if path.exists():
             return path
