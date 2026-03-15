@@ -335,14 +335,18 @@ jobs:
           print("External CI log collection completed.")
           PY
 
-      - name: Show collected external CI logs
+      - name: Show external CI log files
         if: always()
         shell: bash
         run: |
           echo ""
-          echo "================ EXTERNAL CI LOG FILES ===================="
-          find audit_raw/external_ci_logs -maxdepth 1 -type f | sort || true
-          echo "==========================================================="
+          echo "================ EXTERNAL CI LOG FILES ====================="
+          if [ -d audit_raw/external_ci_logs ]; then
+            find audit_raw/external_ci_logs -maxdepth 1 -type f | sort || true
+          else
+            echo "No external CI log directory."
+          fi
+          echo "============================================================"
 
       - name: Build CI failure context
         if: always()
@@ -360,6 +364,31 @@ jobs:
             cat audit_out/ci_failure_context.json
           else
             echo "ci_failure_context.json not found"
+          fi
+          echo "============================================================"
+
+      - name: Rebuild test failure context after CI ingestion
+        if: always()
+        run: |
+          python .github/scripts/build_test_failure_context.py
+        continue-on-error: true
+
+      - name: Rebuild fix context after CI ingestion
+        if: always()
+        run: |
+          python .github/scripts/build_fix_context.py
+        continue-on-error: true
+
+      - name: Show rebuilt fix context
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ REBUILT FIX CONTEXT ======================="
+          if [ -f audit_out/fix_context.json ]; then
+            cat audit_out/fix_context.json
+          else
+            echo "fix_context.json not found"
           fi
           echo "============================================================"
 
