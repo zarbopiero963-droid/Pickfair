@@ -53,13 +53,13 @@ def run_script(script: str) -> bool:
 
 
 def git_commit() -> str:
-    r = subprocess.run(
+    result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
-    return (r.stdout or "").strip()
+    return (result.stdout or "").strip()
 
 
 def git_restore(commit: str):
@@ -209,8 +209,8 @@ def refresh_after_apply() -> bool:
         ".github/scripts/workflow_signal_aggregator.py",
     ]
 
-    for s in scripts:
-        if not run_script(s):
+    for script in scripts:
+        if not run_script(script):
             return False
 
     return True
@@ -282,29 +282,29 @@ def build_report(cycles: list[dict], final_status: str, greener: bool, fully_gre
     lines.append(f"Next action: {next_action}")
     lines.append("")
 
-    for c in cycles:
-        lines.append(f"Cycle {c['cycle']}")
-        lines.append(f"- base_commit: {c['base_commit']}")
-        lines.append(f"- p0_before: {c['p0_before']}")
-        lines.append(f"- p0_after: {c['p0_after']}")
-        lines.append(f"- failing_tests_before: {c['fail_before']}")
-        lines.append(f"- failing_tests_after: {c['fail_after']}")
-        lines.append(f"- targeted_before: {c['target_before']}")
-        lines.append(f"- targeted_after: {c['target_after']}")
-        lines.append(f"- ci_failures_before: {c['ci_before']}")
-        lines.append(f"- ci_failures_after: {c['ci_after']}")
-        lines.append(f"- patch_verifier_verdict: {c.get('patch_verifier_verdict', '')}")
-        lines.append(f"- post_patch_review_verdict: {c.get('post_patch_review_verdict', '')}")
-        lines.append(f"- contract_restored: {c.get('contract_restored')}")
-        lines.append(f"- minimal_change: {c.get('minimal_change')}")
-        lines.append(f"- logic_preserved: {c.get('logic_preserved')}")
-        lines.append(f"- improvement: {c['improvement']}")
-        lines.append(f"- improvement_reason: {c.get('improvement_reason', '')}")
-        lines.append(f"- rollback: {c['rollback']}")
-        lines.append(f"- stop_reason: {c['stop_reason']}")
-        if c.get("target_files"):
+    for cycle in cycles:
+        lines.append(f"Cycle {cycle['cycle']}")
+        lines.append(f"- base_commit: {cycle['base_commit']}")
+        lines.append(f"- p0_before: {cycle['p0_before']}")
+        lines.append(f"- p0_after: {cycle['p0_after']}")
+        lines.append(f"- failing_tests_before: {cycle['fail_before']}")
+        lines.append(f"- failing_tests_after: {cycle['fail_after']}")
+        lines.append(f"- targeted_before: {cycle['target_before']}")
+        lines.append(f"- targeted_after: {cycle['target_after']}")
+        lines.append(f"- ci_failures_before: {cycle['ci_before']}")
+        lines.append(f"- ci_failures_after: {cycle['ci_after']}")
+        lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict', '')}")
+        lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict', '')}")
+        lines.append(f"- contract_restored: {cycle.get('contract_restored')}")
+        lines.append(f"- minimal_change: {cycle.get('minimal_change')}")
+        lines.append(f"- logic_preserved: {cycle.get('logic_preserved')}")
+        lines.append(f"- improvement: {cycle['improvement']}")
+        lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
+        lines.append(f"- rollback: {cycle['rollback']}")
+        lines.append(f"- stop_reason: {cycle['stop_reason']}")
+        if cycle.get("target_files"):
             lines.append("- target_files:")
-            for item in c["target_files"]:
+            for item in cycle["target_files"]:
                 lines.append(f"  - {item}")
         lines.append("")
 
@@ -316,16 +316,16 @@ def main():
     final_status = "unknown"
     greener = False
 
-    for cycle in range(1, MAX_REPAIR_CYCLES + 1):
+    for cycle_no in range(1, MAX_REPAIR_CYCLES + 1):
         info = {
-            "cycle": cycle,
+            "cycle": cycle_no,
             "rollback": False,
             "target_files": [],
         }
 
         print("")
         print("#" * 80)
-        print(f"REPAIR CYCLE {cycle}")
+        print(f"REPAIR CYCLE {cycle_no}")
         print("#" * 80)
 
         base_commit = git_commit()
@@ -345,8 +345,8 @@ def main():
             ".github/scripts/run_targeted_tests.py",
         ]
 
-        for s in setup_scripts:
-            if not run_script(s):
+        for script in setup_scripts:
+            if not run_script(script):
                 info["stop_reason"] = "setup_failed"
                 info["p0_before"] = count_p0()
                 info["p0_after"] = count_p0()
@@ -543,7 +543,7 @@ def main():
 
         cycles.append(info)
 
-        if cycle == MAX_REPAIR_CYCLES:
+        if cycle_no == MAX_REPAIR_CYCLES:
             final_status = "max_cycles_reached"
             break
 
