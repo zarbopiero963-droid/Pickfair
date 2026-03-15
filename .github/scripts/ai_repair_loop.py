@@ -89,10 +89,99 @@ def targeted_failures():
     return None
 
 
-def detect_improvement(before, after) -> bool:
-    if before is None or after is None:
-        return False
-    return after < before
+def patch_verifier_verdict() -> str:
+    data = read_json(AUDIT_OUT / "patch_verification.json")
+    return str(data.get("verdict", "")).strip().lower()
+
+
+def post_patch_review_verdict() -> str:
+    data = read_json(AUDIT_OUT / "post_patch_review.json")
+    return str(data.get("final_verdict", "")).strip().lower()
+
+
+def patch_applied() -> bool:
+    data = read_json(AUDIT_OUT / "patch_apply_report.json")
+    return bool(data.get("applied", False))
+
+
+def patch_target_files() -> list[str]:
+    data = read_json(AUDIT_OUT / "patch_candidate.json")
+    files = data.get("target_files", [])
+    if isinstance(files, list):
+        return [str(x).strip() for x in files if str(x).strip()]
+    return []
+
+
+def contract_restored_flags() -> dict:
+    data = read_json(AUDIT_OUT / "post_patch_review.json")
+    return {
+        "contract_restored": bool(data.get("contract_restored", False)),
+        "minimal_change": bool(data.get("minimal_change", False)),
+        "logic_preserved": bool(data.get("logic_preserved", False)),
+    }
+
+
+def detect_improvement(
+    *,
+    p0_before,
+    p0_after,
+    fail_before,
+    fail_after,
+    target_before,
+    target_after,
+    verifier_verdict,
+    review_verdict,
+    applied,
+    contract_restored,
+    minimal_change,
+    logic_preserved,
+    target_files,
+):
+    reasons = []
+
+    if isinstance(target_before, int) and isinstance(target_after, int):
+        if target_after < target_before:
+            reasons.append(f"Targeted failures reduced from {target_before} to {target_after}.")
+        elif target_after > target_before:
+            return False, f"Targeted failures worsened from {target_before} to {target_after}."
+
+    if isinstance(fail_before, int) and isinstance(fail_after, int):
+        if fail_after < fail_before:
+            reasons.append(f"Failing tests reduced from {fail_before} to {fail_after}.")
+        elif fail_after > fail_before:
+            return False, f"Failing tests worsened from {fail_before} to {fail_after}."
+
+    if isinstance(p0_before, int) and isinstance(p0_after, int):
+        if p0_after < p0_before:
+            reasons.append(f"P0 reduced from {p0_before} to {p0_after}.")
+        elif p0_after > p0_before:
+            return False, f"P0 worsened from {p0_before} to {p0_after}."
+
+    contract_like_files = {
+        "auto_updater.py",
+        "executor_manager.py",
+        "tests/fixtures/system_payloads.py",
+    }
+
+    touched_contract_files = any(f in contract_like_files for f in (target_files or []))
+
+    if (
+        applied
+        and verifier_verdict in {"approve", "weak-approve"}
+        and review_verdict != "reject"
+        and contract_restored
+        and minimal_change
+        and logic_preserved
+        and touched_contract_files
+    ):
+        reasons.append(
+            "Contract restoration detected on key public API files with applied patch, acceptable verifier result, and no reject."
+        )
+
+    if reasons:
+        return True, " | ".join(reasons)
+
+    return False, "No measurable improvement detected."
 
 
 def refresh_after_apply() -> bool:
@@ -125,8 +214,9 @@ def compute_repo_fully_green(cycles: list[dict]) -> bool:
         if p0_after == 0 and fail_after == 0:
             return True
 
-    if isinstance(target_after, int) and target_after == 0 and isinstance(p0_after, int) and p0_after == 0:
-        return True
+    if isinstance(target_after, int) and isinstance(p0_after, int):
+        if target_after == 0 and p0_after == 0:
+            return True
 
     return False
 
@@ -136,7 +226,13 @@ def compute_next_action(final_status: str, greener: bool, fully_green: bool) -> 
         return "repository_green_stop"
     if greener:
         return "merge_current_pr_then_auto_rerun_on_main"
-    if final_status in {"no_progress", "post_patch_review_reject", "patch_generation_failed", "patch_verifier_failed"}:
+    if final_status in {
+        "no_progress",
+        "post_patch_review_reject",
+        "patch_generation_failed",
+        "patch_verifier_failed",
+        "patch_apply_failed",
+    }:
         return "manual_intervention_needed"
     return "inspect_latest_run"
 
@@ -165,9 +261,19 @@ def build_report(cycles: list[dict], final_status: str, greener: bool, fully_gre
         lines.append(f"- failing_tests_after: {c['fail_after']}")
         lines.append(f"- targeted_before: {c['target_before']}")
         lines.append(f"- targeted_after: {c['target_after']}")
+        lines.append(f"- patch_verifier_verdict: {c.get('patch_verifier_verdict', '')}")
+        lines.append(f"- post_patch_review_verdict: {c.get('post_patch_review_verdict', '')}")
+        lines.append(f"- contract_restored: {c.get('contract_restored')}")
+        lines.append(f"- minimal_change: {c.get('minimal_change')}")
+        lines.append(f"- logic_preserved: {c.get('logic_preserved')}")
         lines.append(f"- improvement: {c['improvement']}")
+        lines.append(f"- improvement_reason: {c.get('improvement_reason', '')}")
         lines.append(f"- rollback: {c['rollback']}")
         lines.append(f"- stop_reason: {c['stop_reason']}")
+        if c.get("target_files"):
+            lines.append("- target_files:")
+            for item in c["target_files"]:
+                lines.append(f"  - {item}")
         lines.append("")
 
     return "\n".join(lines)
@@ -182,6 +288,7 @@ def main():
         info = {
             "cycle": cycle,
             "rollback": False,
+            "target_files": [],
         }
 
         print("")
@@ -213,6 +320,7 @@ def main():
                 info["target_before"] = targeted_failures()
                 info["target_after"] = targeted_failures()
                 info["improvement"] = False
+                info["improvement_reason"] = "Setup pipeline failed."
                 cycles.append(info)
                 final_status = "setup_failed"
                 break
@@ -230,9 +338,12 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["improvement"] = False
+            info["improvement_reason"] = "Patch generation failed."
             cycles.append(info)
             final_status = "patch_generation_failed"
             break
+
+        info["target_files"] = patch_target_files()
 
         if not run_script(".github/scripts/patch_verifier.py"):
             info["stop_reason"] = "patch_verifier_failed"
@@ -240,6 +351,7 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["improvement"] = False
+            info["improvement_reason"] = "Patch verifier failed."
             cycles.append(info)
             final_status = "patch_verifier_failed"
             break
@@ -250,6 +362,7 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["improvement"] = False
+            info["improvement_reason"] = "Patch apply failed."
             cycles.append(info)
             final_status = "patch_apply_failed"
             break
@@ -260,6 +373,7 @@ def main():
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
             info["improvement"] = False
+            info["improvement_reason"] = "Refresh after apply failed."
             cycles.append(info)
             final_status = "refresh_failed"
             break
@@ -268,11 +382,52 @@ def main():
         info["fail_after"] = failing_tests()
         info["target_after"] = targeted_failures()
 
-        improved = detect_improvement(info["target_before"], info["target_after"])
+        if not run_script(".github/scripts/post_patch_review.py"):
+            info["stop_reason"] = "post_patch_review_failed"
+            info["improvement"] = False
+            info["improvement_reason"] = "Post patch review failed to execute."
+            cycles.append(info)
+            final_status = "post_patch_review_failed"
+            break
+
+        info["patch_verifier_verdict"] = patch_verifier_verdict()
+        info["post_patch_review_verdict"] = post_patch_review_verdict()
+
+        flags = contract_restored_flags()
+        info["contract_restored"] = flags["contract_restored"]
+        info["minimal_change"] = flags["minimal_change"]
+        info["logic_preserved"] = flags["logic_preserved"]
+
+        improved, reason = detect_improvement(
+            p0_before=info["p0_before"],
+            p0_after=info["p0_after"],
+            fail_before=info["fail_before"],
+            fail_after=info["fail_after"],
+            target_before=info["target_before"],
+            target_after=info["target_after"],
+            verifier_verdict=info["patch_verifier_verdict"],
+            review_verdict=info["post_patch_review_verdict"],
+            applied=patch_applied(),
+            contract_restored=info["contract_restored"],
+            minimal_change=info["minimal_change"],
+            logic_preserved=info["logic_preserved"],
+            target_files=info["target_files"],
+        )
+
         info["improvement"] = improved
+        info["improvement_reason"] = reason
 
         if improved:
             greener = True
+
+        if info["post_patch_review_verdict"] == "reject":
+            git_restore(base_commit)
+            refresh_after_apply()
+            info["rollback"] = True
+            info["stop_reason"] = "post_patch_review_reject"
+            cycles.append(info)
+            final_status = "post_patch_review_reject"
+            break
 
         if not improved:
             git_restore(base_commit)
@@ -281,24 +436,6 @@ def main():
             info["stop_reason"] = "no_progress"
             cycles.append(info)
             final_status = "no_progress"
-            break
-
-        if not run_script(".github/scripts/post_patch_review.py"):
-            info["stop_reason"] = "post_patch_review_failed"
-            cycles.append(info)
-            final_status = "post_patch_review_failed"
-            break
-
-        review = read_json(AUDIT_OUT / "post_patch_review.json")
-        verdict = str(review.get("final_verdict", "")).strip().lower()
-
-        if verdict == "reject":
-            git_restore(base_commit)
-            refresh_after_apply()
-            info["rollback"] = True
-            info["stop_reason"] = "post_patch_review_reject"
-            cycles.append(info)
-            final_status = "post_patch_review_reject"
             break
 
         if info["p0_after"] == 0 and info["fail_after"] == 0:
