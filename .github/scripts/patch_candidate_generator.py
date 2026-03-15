@@ -99,7 +99,7 @@ def parse_json_content(content: str) -> dict:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    candidate = content[start:i + 1]
+                    candidate = content[start : i + 1]
                     try:
                         return json.loads(candidate)
                     except Exception:
@@ -121,9 +121,16 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
 
     target_file = str(item.get("target_file", "")).strip()
     required_symbols = item.get("required_symbols", []) or []
+    issue_type = str(item.get("issue_type", "")).strip()
 
     if item.get("priority") == "P0":
         score += 100
+
+    if issue_type == "empty_test_file":
+        score += 180
+
+    if issue_type == "corrupted_or_non_test_content":
+        score += 170
 
     for signal in pytest_signals:
         if target_file and target_file in signal:
@@ -154,6 +161,7 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
 def load_target_context() -> dict:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
+    test_failure_context = read_json(AUDIT_OUT / "test_failure_context.json")
 
     fix_contexts = fix_context.get("fix_contexts", [])
     if not fix_contexts:
@@ -161,6 +169,7 @@ def load_target_context() -> dict:
 
     pytest_signals = global_context.get("pytest_signals", []) or []
     contracts = global_context.get("contracts", []) or []
+    failing_tests = test_failure_context.get("test_failure_contexts", []) or []
 
     scored = []
     for item in fix_contexts:
@@ -223,6 +232,7 @@ def load_target_context() -> dict:
         "targets": selected,
         "files_payload": files_payload,
         "global_context": global_context,
+        "failing_tests": failing_tests,
     }
 
 
@@ -238,6 +248,8 @@ Rules:
 - restore missing public contracts
 - respect tests
 - prefer solving multiple closely-related P0 blockers in one coordinated patch
+- if a failing test file is empty, corrupted, or contains non-test content, repair the test file itself with the minimum valid pytest test
+- when repairing a broken test file, do not invent large new behaviors; write the smallest meaningful test consistent with the related source file and the failure context
 
 Return STRICT JSON:
 
@@ -259,6 +271,7 @@ Return STRICT JSON:
     user_payload = {
         "targets": ctx["targets"],
         "files_payload": ctx["files_payload"],
+        "failing_tests": ctx["failing_tests"],
         "global_context": {
             "pytest_signals": ctx["global_context"].get("pytest_signals", [])[:20],
             "ai_root_causes": ctx["global_context"].get("ai_root_causes", [])[:10],
