@@ -123,6 +123,7 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
 
     for cycle in cycles:
         lines.append(f"### Cycle {cycle.get('cycle', '?')}")
+        lines.append(f"- base_commit: {cycle.get('base_commit')}")
         lines.append(f"- p0_before: {cycle.get('p0_before')}")
         lines.append(f"- p0_after: {cycle.get('p0_after')}")
         lines.append(f"- failing_tests_before: {cycle.get('failing_tests_before')}")
@@ -135,6 +136,7 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
         lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict')}")
         lines.append(f"- improvement_detected: {cycle.get('improvement_detected')}")
         lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
+        lines.append(f"- rollback_performed: {cycle.get('rollback_performed')}")
         lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
 
         target_files = cycle.get("target_files", []) or []
