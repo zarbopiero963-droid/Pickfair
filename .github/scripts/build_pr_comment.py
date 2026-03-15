@@ -192,4 +192,4 @@ Please review the artifacts and checks before merging.
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main()) 
