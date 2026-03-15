@@ -31,6 +31,22 @@ def normalize_status(value: str, ok_values: set[str]) -> str:
     return "PASS" if value in ok_values else "FAIL"
 
 
+def badge_for_safe_to_merge(value: str) -> str:
+    value = (value or "").strip().upper()
+    if value == "YES":
+        return "🟢 SAFE"
+    return "🔴 BLOCKED"
+
+
+def badge_for_review_verdict(verdict: str) -> str:
+    verdict = (verdict or "").strip().lower()
+    if verdict == "approve":
+        return "🟢 SAFE"
+    if verdict in {"weak-approve", "review"}:
+        return "🟡 REVIEW"
+    return "🔴 BLOCKED"
+
+
 def collect_touched_files(cycles: list[dict]) -> list[str]:
     touched = []
     seen = set()
@@ -71,11 +87,11 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
     if not cycles:
         return False, "Nessun ciclo disponibile."
 
-    p0_values = [c.get("p0_before") for c in cycles if c.get("p0_before") is not None]
+    p0_before_values = [c.get("p0_before") for c in cycles if c.get("p0_before") is not None]
     p0_after_values = [c.get("p0_after") for c in cycles if c.get("p0_after") is not None]
 
-    if p0_values and p0_after_values:
-        first_before = p0_values[0]
+    if p0_before_values and p0_after_values:
+        first_before = p0_before_values[0]
         last_after = p0_after_values[-1]
 
         if isinstance(first_before, int) and isinstance(last_after, int):
@@ -118,7 +134,9 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
         if target_files:
             lines.append("- target_files:")
             for item in target_files:
-                lines.append(f"  - {item}")
+                kind = classify_file_kind(item)
+                icon = "🧪" if kind == "test" else "🧩"
+                lines.append(f"  - {icon} {item}")
 
         lines.append("")
 
@@ -146,7 +164,6 @@ def main() -> int:
     touched_files = collect_touched_files(cycles)
     fix_kind = collect_fix_kinds(touched_files)
     improved, improvement_reason = detect_real_improvement(cycles)
-
     improvement_status = "YES" if improved else "NO"
 
     safe_to_merge = "YES" if (
@@ -155,27 +172,38 @@ def main() -> int:
         and review_status == "PASS"
     ) else "NO"
 
+    safe_badge = badge_for_safe_to_merge(safe_to_merge)
+    verifier_badge = badge_for_review_verdict(verifier_verdict)
+    review_badge = badge_for_review_verdict(review_verdict)
+    tests_badge = "🟢 SAFE" if tests_status == "PASS" else "🔴 BLOCKED"
+    improvement_badge = "🟢 SAFE" if improved else "🟡 REVIEW"
+
     lines = []
     lines.append("# AI FINAL VERDICT")
     lines.append("")
-    lines.append(f"Tests: {tests_status}")
-    lines.append(f"Patch verifier: {verifier_status} ({verifier_verdict or 'unknown'})")
-    lines.append(f"Post patch review: {review_status} ({review_verdict or 'unknown'})")
+    lines.append(f"## {safe_badge}")
     lines.append("")
-    lines.append(f"SAFE TO MERGE: {safe_to_merge}")
+    lines.append("| Campo | Stato | Dettaglio |")
+    lines.append("|---|---|---|")
+    lines.append(f"| Tests | {tests_badge} | {tests_status} |")
+    lines.append(f"| Patch verifier | {verifier_badge} | {verifier_status} ({verifier_verdict or 'unknown'}) |")
+    lines.append(f"| Post patch review | {review_badge} | {review_status} ({review_verdict or 'unknown'}) |")
+    lines.append(f"| Safe to merge | {safe_badge} | {safe_to_merge} |")
     lines.append("")
     lines.append("## Repair Loop Summary")
     lines.append(f"- Final loop status: {final_loop_status}")
     lines.append(f"- Repair cycles executed: {cycle_count}")
     lines.append(f"- Fix type: {fix_kind}")
-    lines.append(f"- Real improvement vs previous cycle: {improvement_status}")
+    lines.append(f"- Real improvement vs previous cycle: {improvement_badge} ({improvement_status})")
     lines.append(f"- Improvement note: {improvement_reason}")
     lines.append("")
 
     lines.append("## Files touched across cycles")
     if touched_files:
         for file in touched_files:
-            lines.append(f"- {file} [{classify_file_kind(file)}]")
+            kind = classify_file_kind(file)
+            icon = "🧪" if kind == "test" else "🧩"
+            lines.append(f"- {icon} {file} [{kind}]")
     else:
         lines.append("- Nessun file toccato.")
     lines.append("")
