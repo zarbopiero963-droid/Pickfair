@@ -53,7 +53,7 @@ def run_script(script: str) -> bool:
     return result.returncode == 0
 
 
-def git_commit():
+def git_commit() -> str:
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=ROOT,
@@ -63,20 +63,20 @@ def git_commit():
     return (r.stdout or "").strip()
 
 
-def git_restore(commit):
+def git_restore(commit: str):
     subprocess.run(
         ["git", "reset", "--hard", commit],
         cwd=ROOT,
     )
 
 
-def count_p0():
+def count_p0() -> int:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     items = fix_context.get("fix_contexts", [])
     return len([x for x in items if x.get("priority") == "P0"])
 
 
-def failing_tests():
+def failing_tests() -> int:
     data = read_json(AUDIT_OUT / "failing_tests.json")
     return len(data.get("failing_tests", []))
 
@@ -89,18 +89,13 @@ def targeted_failures():
     return None
 
 
-def detect_improvement(before, after):
+def detect_improvement(before, after) -> bool:
     if before is None or after is None:
         return False
-
-    if after < before:
-        return True
-
-    return False
+    return after < before
 
 
-def refresh_after_apply():
-
+def refresh_after_apply() -> bool:
     scripts = [
         ".github/scripts/run_targeted_tests.py",
         ".github/scripts/repo_ultra_audit_narrative.py",
@@ -117,7 +112,38 @@ def refresh_after_apply():
     return True
 
 
-def build_report(cycles, final_status, greener):
+def compute_repo_fully_green(cycles: list[dict]) -> bool:
+    if not cycles:
+        return False
+
+    last = cycles[-1]
+    p0_after = last.get("p0_after")
+    fail_after = last.get("fail_after")
+    target_after = last.get("target_after")
+
+    if isinstance(p0_after, int) and isinstance(fail_after, int):
+        if p0_after == 0 and fail_after == 0:
+            return True
+
+    if isinstance(target_after, int) and target_after == 0 and isinstance(p0_after, int) and p0_after == 0:
+        return True
+
+    return False
+
+
+def compute_next_action(final_status: str, greener: bool, fully_green: bool) -> str:
+    if fully_green:
+        return "repository_green_stop"
+    if greener:
+        return "merge_current_pr_then_auto_rerun_on_main"
+    if final_status in {"no_progress", "post_patch_review_reject", "patch_generation_failed", "patch_verifier_failed"}:
+        return "manual_intervention_needed"
+    return "inspect_latest_run"
+
+
+def build_report(cycles: list[dict], final_status: str, greener: bool, fully_green: bool) -> str:
+    continuation_recommended = greener and not fully_green
+    next_action = compute_next_action(final_status, greener, fully_green)
 
     lines = []
     lines.append("AI Repair Loop Report")
@@ -125,10 +151,12 @@ def build_report(cycles, final_status, greener):
     lines.append(f"Final status: {final_status}")
     lines.append(f"Max cycles: {MAX_REPAIR_CYCLES}")
     lines.append(f"Repo materially greener: {'YES' if greener else 'NO'}")
+    lines.append(f"Repo fully green: {'YES' if fully_green else 'NO'}")
+    lines.append(f"Continuation recommended: {'YES' if continuation_recommended else 'NO'}")
+    lines.append(f"Next action: {next_action}")
     lines.append("")
 
     for c in cycles:
-
         lines.append(f"Cycle {c['cycle']}")
         lines.append(f"- base_commit: {c['base_commit']}")
         lines.append(f"- p0_before: {c['p0_before']}")
@@ -146,13 +174,11 @@ def build_report(cycles, final_status, greener):
 
 
 def main():
-
     cycles = []
     final_status = "unknown"
     greener = False
 
     for cycle in range(1, MAX_REPAIR_CYCLES + 1):
-
         info = {
             "cycle": cycle,
             "rollback": False,
@@ -180,9 +206,19 @@ def main():
         for s in setup_scripts:
             if not run_script(s):
                 info["stop_reason"] = "setup_failed"
+                info["p0_before"] = count_p0()
+                info["p0_after"] = count_p0()
+                info["fail_before"] = failing_tests()
+                info["fail_after"] = failing_tests()
+                info["target_before"] = targeted_failures()
+                info["target_after"] = targeted_failures()
+                info["improvement"] = False
                 cycles.append(info)
                 final_status = "setup_failed"
                 break
+
+        if final_status == "setup_failed":
+            break
 
         info["p0_before"] = count_p0()
         info["fail_before"] = failing_tests()
@@ -190,24 +226,40 @@ def main():
 
         if not run_script(".github/scripts/patch_candidate_generator.py"):
             info["stop_reason"] = "patch_generation_failed"
+            info["p0_after"] = count_p0()
+            info["fail_after"] = failing_tests()
+            info["target_after"] = targeted_failures()
+            info["improvement"] = False
             cycles.append(info)
             final_status = "patch_generation_failed"
             break
 
         if not run_script(".github/scripts/patch_verifier.py"):
             info["stop_reason"] = "patch_verifier_failed"
+            info["p0_after"] = count_p0()
+            info["fail_after"] = failing_tests()
+            info["target_after"] = targeted_failures()
+            info["improvement"] = False
             cycles.append(info)
             final_status = "patch_verifier_failed"
             break
 
         if not run_script(".github/scripts/apply_patch_candidate.py"):
             info["stop_reason"] = "patch_apply_failed"
+            info["p0_after"] = count_p0()
+            info["fail_after"] = failing_tests()
+            info["target_after"] = targeted_failures()
+            info["improvement"] = False
             cycles.append(info)
             final_status = "patch_apply_failed"
             break
 
         if not refresh_after_apply():
             info["stop_reason"] = "refresh_failed"
+            info["p0_after"] = count_p0()
+            info["fail_after"] = failing_tests()
+            info["target_after"] = targeted_failures()
+            info["improvement"] = False
             cycles.append(info)
             final_status = "refresh_failed"
             break
@@ -223,15 +275,30 @@ def main():
             greener = True
 
         if not improved:
-
             git_restore(base_commit)
             refresh_after_apply()
-
             info["rollback"] = True
             info["stop_reason"] = "no_progress"
-
             cycles.append(info)
             final_status = "no_progress"
+            break
+
+        if not run_script(".github/scripts/post_patch_review.py"):
+            info["stop_reason"] = "post_patch_review_failed"
+            cycles.append(info)
+            final_status = "post_patch_review_failed"
+            break
+
+        review = read_json(AUDIT_OUT / "post_patch_review.json")
+        verdict = str(review.get("final_verdict", "")).strip().lower()
+
+        if verdict == "reject":
+            git_restore(base_commit)
+            refresh_after_apply()
+            info["rollback"] = True
+            info["stop_reason"] = "post_patch_review_reject"
+            cycles.append(info)
+            final_status = "post_patch_review_reject"
             break
 
         if info["p0_after"] == 0 and info["fail_after"] == 0:
@@ -242,7 +309,15 @@ def main():
 
         cycles.append(info)
 
-    report = build_report(cycles, final_status, greener)
+        if cycle == MAX_REPAIR_CYCLES:
+            final_status = "max_cycles_reached"
+            break
+
+    fully_green = compute_repo_fully_green(cycles)
+    continuation_recommended = greener and not fully_green
+    next_action = compute_next_action(final_status, greener, fully_green)
+
+    report = build_report(cycles, final_status, greener, fully_green)
 
     write_text(AUDIT_OUT / "ai_repair_loop_report.md", report)
 
@@ -251,6 +326,9 @@ def main():
         {
             "final_status": final_status,
             "repo_materially_greener": greener,
+            "repo_fully_green": fully_green,
+            "continuation_recommended": continuation_recommended,
+            "next_action": next_action,
             "cycles": cycles,
         },
     )
