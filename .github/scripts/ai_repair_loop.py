@@ -53,6 +53,38 @@ def run_script(script: str) -> tuple[bool, int]:
     return result.returncode == 0, result.returncode
 
 
+def git_commit() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return (result.stdout or "").strip()
+
+
+def git_diff_has_changes() -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--quiet"],
+        cwd=ROOT,
+    )
+    result_cached = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=ROOT,
+    )
+    return not (result.returncode == 0 and result_cached.returncode == 0)
+
+
+def git_restore_hard(commit_sha: str) -> bool:
+    result = subprocess.run(
+        ["git", "reset", "--hard", commit_sha],
+        cwd=ROOT,
+        capture_output=False,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def count_p0() -> int:
     fix_context = read_json(AUDIT_OUT / "fix_context.json")
     contexts = fix_context.get("fix_contexts", [])
@@ -101,6 +133,7 @@ def build_cycle_report(cycles: list[dict], final_status: str) -> str:
 
     for cycle in cycles:
         lines.append(f"## Cycle {cycle.get('cycle')}")
+        lines.append(f"- base_commit: {cycle.get('base_commit')}")
         lines.append(f"- p0_before: {cycle.get('p0_before')}")
         lines.append(f"- p0_after: {cycle.get('p0_after')}")
         lines.append(f"- failing_tests_before: {cycle.get('failing_tests_before')}")
@@ -113,6 +146,7 @@ def build_cycle_report(cycles: list[dict], final_status: str) -> str:
         lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict')}")
         lines.append(f"- improvement_detected: {cycle.get('improvement_detected')}")
         lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
+        lines.append(f"- rollback_performed: {cycle.get('rollback_performed')}")
         lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
 
         target_files = cycle.get("target_files", []) or []
@@ -155,6 +189,23 @@ def detect_improvement(cycle_info: dict) -> tuple[bool, str]:
     return False, "No measurable improvement detected."
 
 
+def refresh_after_apply() -> bool:
+    scripts = [
+        ".github/scripts/run_targeted_tests.py",
+        ".github/scripts/repo_ultra_audit_narrative.py",
+        ".github/scripts/extract_failing_tests.py",
+        ".github/scripts/build_test_failure_context.py",
+        ".github/scripts/build_fix_context.py",
+        ".github/scripts/workflow_signal_aggregator.py",
+    ]
+
+    for script in scripts:
+        ok, _ = run_script(script)
+        if not ok:
+            return False
+    return True
+
+
 def main() -> int:
     cycles: list[dict] = []
     final_status = "unknown"
@@ -164,6 +215,7 @@ def main() -> int:
             "cycle": cycle_number,
             "stop_reason": "",
             "target_files": [],
+            "rollback_performed": False,
         }
 
         print("")
@@ -186,6 +238,7 @@ def main() -> int:
             ok, code = run_script(script)
             if not ok:
                 cycle_info["stop_reason"] = f"script_failed:{script}:{code}"
+                cycle_info["base_commit"] = git_commit()
                 cycle_info["p0_before"] = count_p0()
                 cycle_info["p0_after"] = count_p0()
                 cycle_info["failing_tests_before"] = failing_test_count()
@@ -204,6 +257,8 @@ def main() -> int:
                 write_text(AUDIT_OUT / "ai_repair_loop_report.md", build_cycle_report(cycles, final_status))
                 return 0
 
+        base_commit = git_commit()
+        cycle_info["base_commit"] = base_commit
         cycle_info["p0_before"] = count_p0()
         cycle_info["failing_tests_before"] = failing_test_count()
         cycle_info["targeted_failures_before"] = targeted_failure_count()
@@ -286,26 +341,7 @@ def main() -> int:
             final_status = "patch_not_applied"
             break
 
-        ok, code = run_script(".github/scripts/run_targeted_tests.py")
-        if not ok:
-            cycle_info["post_patch_review_verdict"] = ""
-            cycle_info["p0_after"] = count_p0()
-            cycle_info["failing_tests_after"] = failing_test_count()
-            cycle_info["targeted_failures_after"] = targeted_failure_count()
-            cycle_info["improvement_detected"] = False
-            cycle_info["improvement_reason"] = "Targeted tests failed to execute."
-            cycle_info["stop_reason"] = f"script_failed:.github/scripts/run_targeted_tests.py:{code}"
-            cycles.append(cycle_info)
-            final_status = "targeted_tests_failed"
-            break
-
-        ok, code = run_script(".github/scripts/repo_ultra_audit_narrative.py")
-        ok2, code2 = run_script(".github/scripts/extract_failing_tests.py")
-        ok3, code3 = run_script(".github/scripts/build_test_failure_context.py")
-        ok4, code4 = run_script(".github/scripts/build_fix_context.py")
-        ok5, code5 = run_script(".github/scripts/workflow_signal_aggregator.py")
-
-        if not all([ok, ok2, ok3, ok4, ok5]):
+        if not refresh_after_apply():
             cycle_info["post_patch_review_verdict"] = ""
             cycle_info["p0_after"] = count_p0()
             cycle_info["failing_tests_after"] = failing_test_count()
@@ -325,6 +361,16 @@ def main() -> int:
         cycle_info["improvement_detected"] = improved
         cycle_info["improvement_reason"] = reason
 
+        if not improved:
+            restored = git_restore_hard(base_commit)
+            cycle_info["rollback_performed"] = restored
+            refresh_after_apply()
+            cycle_info["stop_reason"] = "no_meaningful_progress"
+            cycle_info["post_patch_review_verdict"] = ""
+            cycles.append(cycle_info)
+            final_status = "no_meaningful_progress"
+            break
+
         ok, code = run_script(".github/scripts/post_patch_review.py")
         cycle_info["post_patch_review_verdict"] = post_review_verdict()
 
@@ -335,21 +381,18 @@ def main() -> int:
             break
 
         if cycle_info["post_patch_review_verdict"] == "reject":
+            restored = git_restore_hard(base_commit)
+            cycle_info["rollback_performed"] = restored
+            refresh_after_apply()
             cycle_info["stop_reason"] = "post_patch_review_reject"
             cycles.append(cycle_info)
             final_status = "post_review_reject"
             break
 
-        if improved and cycle_info["p0_after"] == 0 and cycle_info["failing_tests_after"] == 0:
+        if cycle_info["p0_after"] == 0 and cycle_info["failing_tests_after"] == 0:
             cycle_info["stop_reason"] = "all_green"
             cycles.append(cycle_info)
             final_status = "all_green"
-            break
-
-        if not improved:
-            cycle_info["stop_reason"] = "no_meaningful_progress"
-            cycles.append(cycle_info)
-            final_status = "no_meaningful_progress"
             break
 
         if cycle_number == MAX_REPAIR_CYCLES:
