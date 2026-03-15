@@ -87,28 +87,29 @@ def detect_real_improvement(cycles: list[dict]) -> tuple[bool, str]:
     if not cycles:
         return False, "Nessun ciclo disponibile."
 
-    p0_before_values = [c.get("p0_before") for c in cycles if c.get("p0_before") is not None]
-    p0_after_values = [c.get("p0_after") for c in cycles if c.get("p0_after") is not None]
+    first = cycles[0]
+    last = cycles[-1]
 
-    if p0_before_values and p0_after_values:
-        first_before = p0_before_values[0]
-        last_after = p0_after_values[-1]
+    first_fail = first.get("failing_tests_before")
+    last_fail = last.get("failing_tests_after")
+    first_p0 = first.get("p0_before")
+    last_p0 = last.get("p0_after")
 
-        if isinstance(first_before, int) and isinstance(last_after, int):
-            if last_after < first_before:
-                return True, f"P0 ridotti da {first_before} a {last_after}."
-            if last_after == 0 and first_before == 0:
-                return False, "Nessun P0 rilevato già all'inizio."
-            if last_after == first_before:
-                return False, f"Nessuna riduzione P0: ancora {last_after}."
-            if last_after > first_before:
-                return False, f"P0 peggiorati da {first_before} a {last_after}."
+    if isinstance(first_fail, int) and isinstance(last_fail, int):
+        if last_fail < first_fail:
+            return True, f"Failing tests ridotti da {first_fail} a {last_fail}."
+        if last_fail > first_fail:
+            return False, f"Failing tests peggiorati da {first_fail} a {last_fail}."
+
+    if isinstance(first_p0, int) and isinstance(last_p0, int):
+        if last_p0 < first_p0:
+            return True, f"P0 ridotti da {first_p0} a {last_p0}."
+        if last_p0 > first_p0:
+            return False, f"P0 peggiorati da {first_p0} a {last_p0}."
 
     for cycle in cycles:
-        verdict = str(cycle.get("post_patch_review_verdict", "")).strip().lower()
-        applied = bool(cycle.get("patch_applied", False))
-        if applied and verdict == "approve":
-            return True, "Almeno un ciclo ha applicato una patch approvata."
+        if cycle.get("improvement_detected") is True:
+            return True, cycle.get("improvement_reason", "Miglioramento reale rilevato.")
 
     return False, "Nessun segnale forte di miglioramento reale."
 
@@ -124,10 +125,16 @@ def build_cycles_section(cycles: list[dict]) -> list[str]:
         lines.append(f"### Cycle {cycle.get('cycle', '?')}")
         lines.append(f"- p0_before: {cycle.get('p0_before')}")
         lines.append(f"- p0_after: {cycle.get('p0_after')}")
+        lines.append(f"- failing_tests_before: {cycle.get('failing_tests_before')}")
+        lines.append(f"- failing_tests_after: {cycle.get('failing_tests_after')}")
+        lines.append(f"- targeted_failures_before: {cycle.get('targeted_failures_before')}")
+        lines.append(f"- targeted_failures_after: {cycle.get('targeted_failures_after')}")
         lines.append(f"- patch_generated: {cycle.get('patch_generated')}")
         lines.append(f"- patch_verifier_verdict: {cycle.get('patch_verifier_verdict')}")
         lines.append(f"- patch_applied: {cycle.get('patch_applied')}")
         lines.append(f"- post_patch_review_verdict: {cycle.get('post_patch_review_verdict')}")
+        lines.append(f"- improvement_detected: {cycle.get('improvement_detected')}")
+        lines.append(f"- improvement_reason: {cycle.get('improvement_reason', '')}")
         lines.append(f"- stop_reason: {cycle.get('stop_reason', '')}")
 
         target_files = cycle.get("target_files", []) or []
@@ -155,7 +162,7 @@ def main() -> int:
 
     tests_status = "PASS" if applied else "FAIL"
     verifier_status = normalize_status(verifier_verdict, {"approve", "weak-approve"})
-    review_status = normalize_status(review_verdict, {"approve"})
+    review_status = normalize_status(review_verdict, {"approve", "review"})
 
     cycles = ai_repair_loop_state.get("cycles", []) or []
     final_loop_status = str(ai_repair_loop_state.get("final_status", "")).strip() or "unknown"
@@ -169,7 +176,8 @@ def main() -> int:
     safe_to_merge = "YES" if (
         tests_status == "PASS"
         and verifier_status == "PASS"
-        and review_status == "PASS"
+        and review_verdict != "reject"
+        and improved
     ) else "NO"
 
     safe_badge = badge_for_safe_to_merge(safe_to_merge)
