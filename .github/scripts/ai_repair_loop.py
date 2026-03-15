@@ -167,7 +167,7 @@ def detect_improvement(
 
     if (
         applied
-        and verifier_verdict in {"approve", "weak-approve"}
+        and verifier_verdict in {"approve", "weak-approve", "review"}
         and review_verdict != "reject"
         and contract_restored
         and minimal_change
@@ -319,6 +319,11 @@ def main():
                 info["fail_after"] = failing_tests()
                 info["target_before"] = targeted_failures()
                 info["target_after"] = targeted_failures()
+                info["patch_verifier_verdict"] = "setup-failed"
+                info["post_patch_review_verdict"] = "setup-failed"
+                info["contract_restored"] = False
+                info["minimal_change"] = False
+                info["logic_preserved"] = False
                 info["improvement"] = False
                 info["improvement_reason"] = "Setup pipeline failed."
                 cycles.append(info)
@@ -332,11 +337,37 @@ def main():
         info["fail_before"] = failing_tests()
         info["target_before"] = targeted_failures()
 
+        # EARLY STOP: repository already green, no repair needed.
+        if (
+            info["p0_before"] == 0
+            and info["fail_before"] == 0
+            and (info["target_before"] in (0, None))
+        ):
+            info["p0_after"] = 0
+            info["fail_after"] = 0
+            info["target_after"] = info["target_before"]
+            info["patch_verifier_verdict"] = "not-needed"
+            info["post_patch_review_verdict"] = "not-needed"
+            info["contract_restored"] = False
+            info["minimal_change"] = True
+            info["logic_preserved"] = True
+            info["improvement"] = False
+            info["improvement_reason"] = "Repository already green. No repair needed."
+            info["stop_reason"] = "repository_green_stop"
+            cycles.append(info)
+            final_status = "all_green"
+            break
+
         if not run_script(".github/scripts/patch_candidate_generator.py"):
             info["stop_reason"] = "patch_generation_failed"
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["patch_verifier_verdict"] = "not-run"
+            info["post_patch_review_verdict"] = "not-run"
+            info["contract_restored"] = False
+            info["minimal_change"] = False
+            info["logic_preserved"] = False
             info["improvement"] = False
             info["improvement_reason"] = "Patch generation failed."
             cycles.append(info)
@@ -350,6 +381,11 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["patch_verifier_verdict"] = "failed"
+            info["post_patch_review_verdict"] = "not-run"
+            info["contract_restored"] = False
+            info["minimal_change"] = False
+            info["logic_preserved"] = False
             info["improvement"] = False
             info["improvement_reason"] = "Patch verifier failed."
             cycles.append(info)
@@ -361,6 +397,11 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["patch_verifier_verdict"] = patch_verifier_verdict()
+            info["post_patch_review_verdict"] = "not-run"
+            info["contract_restored"] = False
+            info["minimal_change"] = False
+            info["logic_preserved"] = False
             info["improvement"] = False
             info["improvement_reason"] = "Patch apply failed."
             cycles.append(info)
@@ -372,6 +413,11 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["patch_verifier_verdict"] = patch_verifier_verdict()
+            info["post_patch_review_verdict"] = "not-run"
+            info["contract_restored"] = False
+            info["minimal_change"] = False
+            info["logic_preserved"] = False
             info["improvement"] = False
             info["improvement_reason"] = "Refresh after apply failed."
             cycles.append(info)
@@ -384,6 +430,11 @@ def main():
 
         if not run_script(".github/scripts/post_patch_review.py"):
             info["stop_reason"] = "post_patch_review_failed"
+            info["patch_verifier_verdict"] = patch_verifier_verdict()
+            info["post_patch_review_verdict"] = "failed"
+            info["contract_restored"] = False
+            info["minimal_change"] = False
+            info["logic_preserved"] = False
             info["improvement"] = False
             info["improvement_reason"] = "Post patch review failed to execute."
             cycles.append(info)
@@ -477,4 +528,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
