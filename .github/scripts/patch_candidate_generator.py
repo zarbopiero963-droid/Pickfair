@@ -9,7 +9,6 @@ from openrouter_model_router import call_openrouter
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
-
 MAX_TARGETS = 3
 MAX_TARGET_FILE_CHARS = 18000
 MAX_RELATED_TEST_CHARS = 8000
@@ -20,6 +19,13 @@ MAX_PYTEST_SIGNALS = 12
 MAX_AI_ROOT_CAUSES = 6
 MAX_CONTRACTS = 10
 MAX_FAILING_TEST_CONTEXTS = 6
+
+
+CLASS_PRIORITY = {
+    "AUTO_FIX_SAFE": 0,
+    "AUTO_FIX_REVIEW": 1,
+    "HUMAN_ONLY": 2,
+}
 
 
 def read_text(path: Path) -> str:
@@ -54,6 +60,22 @@ def trimmed_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def trim_list(items, limit: int) -> list[str]:
+    out = []
+    seen = set()
+
+    for item in items or []:
+        value = str(item).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+        if len(out) >= limit:
+            break
+
+    return out
 
 
 def parse_json_content(content: str) -> dict:
@@ -141,9 +163,17 @@ def _score_fix_context(item: dict, pytest_signals: list[str], contracts: list) -
     target_file = str(item.get("target_file", "")).strip()
     required_symbols = item.get("required_symbols", []) or []
     issue_type = str(item.get("issue_type", "")).strip()
+    classification = str(item.get("classification", "")).strip()
 
     if item.get("priority") == "P0":
         score += 100
+
+    if classification == "AUTO_FIX_SAFE":
+        score += 120
+    elif classification == "AUTO_FIX_REVIEW":
+        score += 70
+    elif classification == "HUMAN_ONLY":
+        score -= 500
 
     if issue_type == "empty_test_file":
         score += 180
@@ -200,11 +230,11 @@ def select_best_subset(paths: list[str], max_items: int) -> list[str]:
 
 
 def load_target_context() -> dict:
-    fix_context = read_json(AUDIT_OUT / "fix_context.json")
+    issue_classification = read_json(AUDIT_OUT / "issue_classification.json")
     global_context = read_json(AUDIT_OUT / "global_workflow_context.json")
     test_failure_context = read_json(AUDIT_OUT / "test_failure_context.json")
 
-    fix_contexts = fix_context.get("fix_contexts", [])
+    fix_contexts = issue_classification.get("fix_contexts", [])
     if not fix_contexts:
         return {}
 
@@ -212,17 +242,28 @@ def load_target_context() -> dict:
     contracts = global_context.get("contracts", []) or []
     failing_tests = test_failure_context.get("test_failure_contexts", []) or []
 
-    scored = []
+    filtered_contexts = []
     for item in fix_contexts:
-        score = _score_fix_context(item, pytest_signals, contracts)
-        scored.append((score, item))
+        classification = str(item.get("classification", "")).strip()
+        if classification == "HUMAN_ONLY":
+            continue
+        filtered_contexts.append(item)
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    if not filtered_contexts:
+        return {}
+
+    scored = []
+    for item in filtered_contexts:
+        score = _score_fix_context(item, pytest_signals, contracts)
+        class_rank = CLASS_PRIORITY.get(str(item.get("classification", "")).strip(), 99)
+        scored.append((class_rank, -score, item))
+
+    scored.sort(key=lambda x: (x[0], x[1]))
 
     selected = []
     seen = set()
 
-    for score, item in scored:
+    for _, _, item in scored:
         target_file = str(item.get("target_file", "")).strip()
         if not target_file or target_file in seen:
             continue
@@ -236,8 +277,12 @@ def load_target_context() -> dict:
         if len(selected) >= MAX_TARGETS:
             break
 
-    if not selected and fix_contexts:
-        selected = [fix_contexts[0]]
+    if not selected and filtered_contexts:
+        safe_first = [x for x in filtered_contexts if str(x.get("classification", "")).strip() == "AUTO_FIX_SAFE"]
+        if safe_first:
+            selected = [safe_first[0]]
+        else:
+            selected = [filtered_contexts[0]]
 
     files_payload = []
 
@@ -261,10 +306,12 @@ def load_target_context() -> dict:
                     "related_tests": related_tests_rel,
                     "related_fixtures": related_fixtures_rel,
                     "related_contracts": related_contracts_rel,
-                    "notes": select_best_subset(target.get("notes", []) or [], 5),
+                    "notes": trim_list(target.get("notes", []) or [], 5),
                     "priority": target.get("priority", ""),
                     "issue_type": target.get("issue_type", ""),
                     "related_source_file": target.get("related_source_file", ""),
+                    "classification": target.get("classification", ""),
+                    "classification_reasons": trim_list(target.get("classification_reasons", []) or [], 4),
                 },
                 "target_file_text": trimmed_text(read_text(target_file), MAX_TARGET_FILE_CHARS),
                 "related_tests_text": {
@@ -300,7 +347,7 @@ def load_target_context() -> dict:
                 "target_file": str(item.get("target_file", "")).strip(),
                 "issue_type": str(item.get("issue_type", "")).strip(),
                 "related_source_file": str(item.get("related_source_file", "")).strip(),
-                "notes": select_best_subset(item.get("notes", []) or [], 4),
+                "notes": trim_list(item.get("notes", []) or [], 4),
             }
         )
 
@@ -313,6 +360,7 @@ def load_target_context() -> dict:
             "contracts": (global_context.get("contracts", []) or [])[:MAX_CONTRACTS],
         },
         "failing_tests": normalized_failing_tests,
+        "classification_summary": issue_classification.get("summary", {}),
     }
 
 
@@ -330,6 +378,9 @@ Rules:
 - prefer solving multiple closely-related P0 blockers in one coordinated patch
 - if a failing test file is empty, corrupted, or contains non-test content, repair the test file itself with the minimum valid pytest test
 - when repairing a broken test file, do not invent large new behaviors; write the smallest meaningful test consistent with the related source file and the failure context
+- NEVER patch targets classified as HUMAN_ONLY
+- prefer AUTO_FIX_SAFE targets over AUTO_FIX_REVIEW targets
+- for AUTO_FIX_REVIEW targets, keep changes even smaller and avoid business-logic redesign
 
 Return STRICT JSON:
 {
@@ -349,15 +400,18 @@ Return STRICT JSON:
 
     user_payload = {
         "task": "Generate the smallest safe coordinated patch candidate for the selected P0 fix contexts.",
+        "classification_summary": ctx.get("classification_summary", {}),
         "targets": [
             {
                 "target_file": str(x.get("target_file", "")).strip(),
                 "required_symbols": x.get("required_symbols", []) or [],
                 "priority": x.get("priority", ""),
                 "issue_type": x.get("issue_type", ""),
+                "classification": x.get("classification", ""),
+                "classification_reasons": trim_list(x.get("classification_reasons", []) or [], 4),
                 "related_tests": select_best_subset(x.get("related_tests", []) or [], 3),
                 "related_contracts": select_best_subset(x.get("related_contracts", []) or [], 2),
-                "notes": select_best_subset(x.get("notes", []) or [], 5),
+                "notes": trim_list(x.get("notes", []) or [], 5),
             }
             for x in ctx["targets"]
         ],
