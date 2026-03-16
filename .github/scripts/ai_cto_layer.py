@@ -23,10 +23,7 @@ def read_json(path: Path):
 
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def normalize_path(path: str) -> str:
@@ -34,7 +31,9 @@ def normalize_path(path: str) -> str:
 
 
 def collect_ci_failures():
-    data = read_json(AUDIT_OUT / "ci_failures.json")
+    data = read_json(AUDIT_OUT / "ci_failure_context.json")
+    if not data:
+        data = read_json(AUDIT_OUT / "ci_failures.json")
     return data.get("ci_failures", [])
 
 
@@ -56,9 +55,9 @@ def collect_api_report():
 def classify_priority(issue_type: str) -> str:
     issue_type = str(issue_type or "").strip()
 
-    if issue_type in {"missing_public_contract", "runtime_failure"}:
+    if issue_type in {"missing_public_contract", "runtime_failure", "lint_failure"}:
         return "P0"
-    if issue_type in {"lint_failure", "test_failure", "ci_failure", "contract_test_failure"}:
+    if issue_type in {"test_failure", "ci_failure", "contract_test_failure"}:
         return "P1"
     return "P2"
 
@@ -73,21 +72,26 @@ def build_ci_items(ci_failures):
 
         priority = classify_priority(issue_type)
         reasons = []
-        if f.get("signal"):
-            reasons.append(str(f.get("signal")).strip())
-        if f.get("error_type"):
-            reasons.append(f"error_type={f.get('error_type')}")
+        signal = str(f.get("signal", "")).strip()
+        error_type = str(f.get("error_type", "")).strip()
 
-        out.append({
-            "file": target_file,
-            "target_file": target_file,
-            "priority": priority,
-            "source": "ci_failure",
-            "kind": issue_type,
-            "issue_type": issue_type,
-            "signal": str(f.get("signal", "")).strip(),
-            "reasons": reasons[:4],
-        })
+        if signal:
+            reasons.append(signal)
+        if error_type:
+            reasons.append(f"error_type={error_type}")
+
+        out.append(
+            {
+                "file": target_file,
+                "target_file": target_file,
+                "priority": priority,
+                "source": "ci_failure",
+                "kind": issue_type,
+                "issue_type": issue_type,
+                "signal": signal,
+                "reasons": reasons[:4],
+            }
+        )
     return out
 
 
@@ -105,21 +109,25 @@ def build_backlog_items(backlog):
         kind = str(b.get("kind", "") or b.get("type", "")).strip() or "backlog_item"
 
         reasons = []
-        if b.get("description"):
-            reasons.append(str(b.get("description")).strip())
-        if b.get("title"):
-            reasons.append(str(b.get("title")).strip())
+        description = str(b.get("description", "")).strip()
+        title = str(b.get("title", "")).strip()
+        if description:
+            reasons.append(description)
+        if title:
+            reasons.append(title)
 
-        out.append({
-            "file": target_file,
-            "target_file": target_file,
-            "priority": priority,
-            "source": "backlog",
-            "kind": kind,
-            "issue_type": kind,
-            "signal": str(b.get("description", "") or b.get("title", "")).strip(),
-            "reasons": reasons[:4],
-        })
+        out.append(
+            {
+                "file": target_file,
+                "target_file": target_file,
+                "priority": priority,
+                "source": "backlog",
+                "kind": kind,
+                "issue_type": kind,
+                "signal": description or title,
+                "reasons": reasons[:4],
+            }
+        )
     return out
 
 
@@ -136,24 +144,27 @@ def build_api_items(api_issues):
         symbol = str(a.get("symbol", "")).strip()
         kind = str(a.get("kind", "") or a.get("issue", "")).strip() or "api_gap"
         issue_type = "missing_nominal_test" if symbol else "ci_failure"
-        priority = "P1" if symbol else "P2"
+        priority = "P2" if issue_type == "missing_nominal_test" else "P2"
 
         reasons = []
+        detail = str(a.get("detail", "")).strip()
         if symbol:
             reasons.append(f"missing nominal test for symbol={symbol}")
-        if a.get("detail"):
-            reasons.append(str(a.get("detail")).strip())
+        if detail:
+            reasons.append(detail)
 
-        out.append({
-            "file": target_file,
-            "target_file": target_file,
-            "priority": priority,
-            "source": "api_report",
-            "kind": kind,
-            "issue_type": issue_type,
-            "signal": str(a.get("detail", "") or symbol).strip(),
-            "reasons": reasons[:4],
-        })
+        out.append(
+            {
+                "file": target_file,
+                "target_file": target_file,
+                "priority": priority,
+                "source": "api_report",
+                "kind": kind,
+                "issue_type": issue_type,
+                "signal": detail or symbol,
+                "reasons": reasons[:4],
+            }
+        )
     return out
 
 
@@ -162,6 +173,15 @@ def dedupe_items(items):
 
     def rank(priority: str) -> int:
         return {"P0": 0, "P1": 1, "P2": 2}.get(str(priority or "").strip().upper(), 9)
+
+    issue_rank = {
+        "missing_public_contract": 0,
+        "runtime_failure": 1,
+        "lint_failure": 2,
+        "test_failure": 3,
+        "ci_failure": 4,
+        "missing_nominal_test": 5,
+    }
 
     for item in items:
         target_file = normalize_path(item.get("file", "") or item.get("target_file", ""))
@@ -177,14 +197,29 @@ def dedupe_items(items):
             continue
 
         current = merged[key]
-        if rank(item.get("priority")) < rank(current.get("priority")):
+
+        new_priority = str(item.get("priority", "")).strip().upper()
+        cur_priority = str(current.get("priority", "")).strip().upper()
+        new_issue = str(item.get("issue_type", "")).strip()
+        cur_issue = str(current.get("issue_type", "")).strip()
+
+        should_replace = False
+        if rank(new_priority) < rank(cur_priority):
+            should_replace = True
+        elif rank(new_priority) == rank(cur_priority):
+            if issue_rank.get(new_issue, 99) < issue_rank.get(cur_issue, 99):
+                should_replace = True
+
+        if should_replace:
             current["priority"] = item.get("priority")
             current["kind"] = item.get("kind")
             current["issue_type"] = item.get("issue_type")
             current["source"] = item.get("source")
             current["signal"] = item.get("signal")
 
-        current["reasons"] = list(dict.fromkeys((current.get("reasons", []) or []) + (item.get("reasons", []) or [])))[:6]
+        current["reasons"] = list(
+            dict.fromkeys((current.get("reasons", []) or []) + (item.get("reasons", []) or []))
+        )[:6]
 
     return list(merged.values())
 
