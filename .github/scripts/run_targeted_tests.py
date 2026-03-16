@@ -6,7 +6,8 @@ from pathlib import Path
 
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
-AUDIT_RAW = ROOT / "audit_raw"
+
+MAX_TARGETS = 8
 
 
 def read_text(path: Path) -> str:
@@ -23,147 +24,208 @@ def read_json(path: Path):
         return {}
 
 
-def write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def unique_keep_order(items: list[str]) -> list[str]:
-    out = []
-    seen = set()
-    for item in items:
-        item = str(item).strip()
-        if not item or item in seen:
-            continue
-        out.append(item)
-        seen.add(item)
-    return out
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
+
+
+def repo_exists(rel_path: str) -> bool:
+    rel_path = normalize_path(rel_path)
+    if not rel_path:
+        return False
+    return (ROOT / rel_path).exists()
+
+
+def is_test_file(rel_path: str) -> bool:
+    rel = normalize_path(rel_path).lower()
+    return rel.startswith("tests/") and rel.endswith(".py")
+
+
+def is_runtime_python(rel_path: str) -> bool:
+    rel = normalize_path(rel_path).lower()
+    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
+
+
+def path_to_pytest_guess(runtime_file: str) -> list[str]:
+    rel = normalize_path(runtime_file)
+    if not rel:
+        return []
+
+    stem = Path(rel).stem
+    guesses = [
+        f"tests/test_{stem}.py",
+        f"tests/contracts/test_{stem}.py",
+        f"tests/guardrails/test_{stem}.py",
+    ]
+    return guesses
 
 
 def collect_targets() -> list[str]:
-    failing_tests_data = read_json(AUDIT_OUT / "failing_tests.json")
-    fix_context_data = read_json(AUDIT_OUT / "fix_context.json")
-    test_failure_context_data = read_json(AUDIT_OUT / "test_failure_context.json")
+    targets = []
 
-    targets: list[str] = []
+    targeted = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = targeted.get("patch_candidate") or {}
 
-    for item in failing_tests_data.get("targets", []) or []:
-        test_file = str(item.get("test_file", "")).strip()
-        if test_file.startswith("tests/"):
-            targets.append(test_file)
+    target_file = normalize_path(candidate.get("target_file", ""))
+    related_source_file = normalize_path(candidate.get("related_source_file", ""))
 
-    for item in test_failure_context_data.get("test_failure_contexts", []) or []:
-        test_file = str(item.get("target_file", "")).strip()
-        if test_file.startswith("tests/"):
-            targets.append(test_file)
+    if target_file:
+        targets.append(target_file)
+    if related_source_file and related_source_file not in targets:
+        targets.append(related_source_file)
 
-    for item in fix_context_data.get("fix_contexts", []) or []:
-        for test_file in item.get("related_tests", []) or []:
-            test_file = str(test_file).strip()
-            if test_file.startswith("tests/"):
-                targets.append(test_file)
+    fix_context = read_json(AUDIT_OUT / "fix_context.json")
+    for item in fix_context.get("fix_contexts", []) or []:
+        tf = normalize_path(item.get("target_file", ""))
+        if tf and tf not in targets:
+            targets.append(tf)
+        rs = normalize_path(item.get("related_source_file", ""))
+        if rs and rs not in targets:
+            targets.append(rs)
 
-    targets = unique_keep_order(targets)
+        for t in item.get("related_tests", []) or []:
+            t = normalize_path(t)
+            if t and t not in targets:
+                targets.append(t)
 
-    # Manteniamo il set piccolo e mirato
-    return targets[:10]
+    final_targets = []
+    seen = set()
 
-
-def extract_failure_lines(output: str) -> list[str]:
-    patterns = (
-        "FAILED ",
-        "ERROR ",
-        "ImportError",
-        "ModuleNotFoundError",
-        "AttributeError",
-        "TypeError",
-        "RuntimeError",
-        "AssertionError",
-        "KeyError",
-        "NameError",
-        "cannot import name",
-    )
-
-    lines = []
-    for raw in output.splitlines():
-        line = raw.strip()
-        if not line:
+    for item in targets:
+        item = normalize_path(item)
+        if not item or item in seen:
             continue
-        if any(p in line for p in patterns):
-            lines.append(line)
+        seen.add(item)
+        final_targets.append(item)
 
-    return lines[:200]
+    return final_targets[:MAX_TARGETS]
 
 
-def main() -> int:
-    targets = collect_targets()
+def resolve_pytest_targets(raw_targets: list[str]) -> list[str]:
+    resolved = []
+    seen = set()
 
-    if not targets:
-        result = {
-            "status": "no-targets",
-            "targets": [],
-            "pytest_exit_code": None,
-            "failure_count": 0,
-            "failure_lines": [],
-        }
-        write_json(AUDIT_OUT / "targeted_test_results.json", result)
-        write_text(AUDIT_OUT / "targeted_test_results.md", "No targeted tests available.\n")
-        print("No targeted tests available.")
-        return 0
+    for rel in raw_targets:
+        rel = normalize_path(rel)
+        if not rel:
+            continue
 
-    cmd = ["pytest", "-q", *targets]
+        if is_test_file(rel) and repo_exists(rel):
+            if rel not in seen:
+                resolved.append(rel)
+                seen.add(rel)
+            continue
 
-    proc = subprocess.run(
+        if is_runtime_python(rel):
+            guesses = path_to_pytest_guess(rel)
+            for guess in guesses:
+                if repo_exists(guess) and guess not in seen:
+                    resolved.append(guess)
+                    seen.add(guess)
+
+    return resolved
+
+
+def run_one_pytest(target: str) -> dict:
+    cmd = ["python", "-m", "pytest", "-q", target]
+    result = subprocess.run(
         cmd,
         cwd=ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
 
-    output = (proc.stdout or "") + ("\n" if proc.stdout and proc.stderr else "") + (proc.stderr or "")
-    write_text(AUDIT_RAW / "targeted_pytest.log", output)
+    out = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    status = "passed" if result.returncode == 0 else "failed"
 
-    failure_lines = extract_failure_lines(output)
-
-    result = {
-        "status": "completed",
-        "targets": targets,
-        "pytest_exit_code": proc.returncode,
-        "failure_count": len(failure_lines),
-        "failure_lines": failure_lines,
+    return {
+        "target": target,
+        "returncode": result.returncode,
+        "status": status,
+        "output": out[:12000],
     }
 
-    md_lines = [
-        "Targeted Test Results",
-        "",
-        f"Pytest exit code: {proc.returncode}",
-        f"Failure count: {len(failure_lines)}",
-        "",
-        "Targets:",
-    ]
 
-    for item in targets:
-        md_lines.append(f"- {item}")
+def build_markdown(results: list[dict], summary: dict) -> str:
+    lines = []
+    lines.append("Targeted Test Results")
+    lines.append("")
+    lines.append(f"Targets considered: {summary.get('target_count', 0)}")
+    lines.append(f"Targets executed: {summary.get('executed_count', 0)}")
+    lines.append(f"Failure count: {summary.get('failure_count', 0)}")
+    lines.append("")
 
-    md_lines.append("")
-    md_lines.append("Failure lines:")
-    if failure_lines:
-        for line in failure_lines:
-            md_lines.append(f"- {line}")
-    else:
-        md_lines.append("- None")
+    if not results:
+        lines.append("No targeted tests available.")
+        return "\n".join(lines)
 
-    md_lines.append("")
+    for item in results:
+        lines.append(f"## {item.get('target', '')}")
+        lines.append(f"- status: {item.get('status', '')}")
+        lines.append(f"- returncode: {item.get('returncode', '')}")
+        output = str(item.get("output", "")).strip()
+        if output:
+            lines.append("")
+            lines.append("```text")
+            lines.append(output[:4000])
+            lines.append("```")
+        lines.append("")
 
-    write_json(AUDIT_OUT / "targeted_test_results.json", result)
-    write_text(AUDIT_OUT / "targeted_test_results.md", "\n".join(md_lines))
+    return "\n".join(lines)
 
-    print("\n".join(md_lines))
+
+def main() -> int:
+    raw_targets = collect_targets()
+    pytest_targets = resolve_pytest_targets(raw_targets)
+
+    results = []
+    failure_count = 0
+
+    for target in pytest_targets:
+        result = run_one_pytest(target)
+        results.append(result)
+        if result["returncode"] != 0:
+            failure_count += 1
+
+    summary = {
+        "target_count": len(raw_targets),
+        "executed_count": len(pytest_targets),
+        "failure_count": failure_count,
+        "targets": pytest_targets,
+        "raw_targets": raw_targets,
+    }
+
+    payload = {
+        "summary": summary,
+        "results": results,
+        "failure_count": failure_count,
+        "targets": pytest_targets,
+        "raw_targets": raw_targets,
+    }
+
+    write_json(AUDIT_OUT / "targeted_test_results.json", payload)
+    write_text(AUDIT_OUT / "targeted_test_results.md", build_markdown(results, summary))
+
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
