@@ -29,6 +29,11 @@ def write_json(path: Path, data) -> None:
     )
 
 
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def normalize_path(path_str: str) -> str:
     raw = str(path_str or "").strip().replace("\\", "/")
     if not raw:
@@ -51,6 +56,11 @@ def is_runtime_python(path_str: str) -> bool:
     return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
 
 
+def is_test_python(path_str: str) -> bool:
+    rel = normalize_path(path_str).lower()
+    return rel.startswith("tests/") and rel.endswith(".py")
+
+
 def is_generated_test(path_str: str) -> bool:
     return normalize_path(path_str).lower().startswith("tests/generated/")
 
@@ -68,123 +78,459 @@ def is_github_script(path_str: str) -> bool:
     return normalize_path(path_str).lower().startswith(".github/scripts/")
 
 
-def classify_item(item: dict) -> tuple[str, list[str]]:
-    target_file = normalize_path(item.get("target_file", ""))
-    issue_type = str(item.get("issue_type", "")).strip()
-    notes = item.get("notes", []) or []
+def is_contract_like_target(path_str: str) -> bool:
+    rel = normalize_path(path_str)
+    return rel in {
+        "auto_updater.py",
+        "executor_manager.py",
+        "tests/fixtures/system_payloads.py",
+    }
 
-    reasons = []
 
-    if not target_file:
-        return "HUMAN_ONLY", ["Missing target file."]
+def unique_keep(items, limit: int | None = None) -> list[str]:
+    out = []
+    seen = set()
+    for item in items or []:
+        value = str(item).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+        if limit is not None and len(out) >= limit:
+            break
+    return out
 
-    if is_github_script(target_file):
-        return "HUMAN_ONLY", ["Workflow/script target: avoid blind auto-fix."]
 
-    if is_hft_test(target_file):
-        return "HUMAN_ONLY", ["HFT-related tests are too sensitive for blind auto-fix."]
+def classification_map(classification_payload: dict) -> dict:
+    result = {}
+    for item in classification_payload.get("fix_contexts", []) or []:
+        target = normalize_path(item.get("target_file", ""))
+        if target:
+            result[target] = item
+    return result
 
-    if is_generated_test(target_file):
-        reasons.append("Generated test target: safe nominal test area.")
-        return "AUTO_FIX_SAFE", reasons
 
-    if issue_type == "missing_nominal_test":
-        reasons.append("Nominal test generation is safe.")
-        return "AUTO_FIX_SAFE", reasons
+def cto_priority_map(cto_payload: dict) -> dict:
+    result = {}
+    for item in cto_payload.get("repair_order", []) or []:
+        target = normalize_path(item.get("file", ""))
+        if target and target not in result:
+            result[target] = item
+    return result
+
+
+def repo_diag_symbol_map(repo_diag: dict) -> dict:
+    result = {}
+    for item in repo_diag.get("public_symbols_without_nominal_tests", []) or []:
+        target = normalize_path(item.get("file", ""))
+        if not target:
+            continue
+        result.setdefault(target, []).append(item)
+    return result
+
+
+def test_failure_context_map(test_failure_ctx: dict) -> dict:
+    result = {}
+    for item in test_failure_ctx.get("test_failure_contexts", []) or []:
+        target = normalize_path(item.get("target_file", ""))
+        if target:
+            result[target] = item
+    return result
+
+
+def build_notes(*groups) -> list[str]:
+    return unique_keep(
+        [str(item).strip() for group in groups for item in (group or []) if str(item).strip()],
+        12,
+    )
+
+
+def build_patch_intents(target_file: str, issue_type: str, classification: str) -> list[str]:
+    target_file = normalize_path(target_file)
+    intents = []
 
     if issue_type == "missing_public_contract":
-        reasons.append("Public contract restoration can be auto-fixed conservatively.")
-        return "AUTO_FIX_SAFE", reasons
+        intents.extend(
+            [
+                "restore_missing_public_symbol",
+                "prefer_smallest_compatibility_wrapper",
+                "avoid_logic_redesign",
+            ]
+        )
 
-    if issue_type == "contract_test_failure":
-        reasons.append("Contract test failure should remain reviewable.")
-        return "AUTO_FIX_REVIEW", reasons
+    elif issue_type == "runtime_failure":
+        intents.extend(
+            [
+                "apply_minimal_runtime_fix",
+                "prefer_guard_clause_or_small_compatibility_fix",
+                "avoid_large_refactor",
+            ]
+        )
 
-    if issue_type == "lint_failure":
-        if is_runtime_python(target_file):
-            reasons.append("Runtime lint failure: usually local, mechanical, and safe.")
-            return "AUTO_FIX_SAFE", reasons
-        if is_python(target_file):
-            reasons.append("Python lint failure: typically safe.")
-            return "AUTO_FIX_SAFE", reasons
+    elif issue_type == "lint_failure":
+        intents.extend(
+            [
+                "apply_mechanical_lint_fix",
+                "prefer_ruff_safe_changes",
+                "avoid_behavior_changes",
+            ]
+        )
 
-    if issue_type == "runtime_failure":
-        if is_runtime_python(target_file):
-            reasons.append("Runtime module failure: candidate for reviewable fix.")
-            reasons.append("Prefer conservative local patching and targeted tests.")
-            return "AUTO_FIX_REVIEW", reasons
-        if is_guardrail_test(target_file):
-            reasons.append("Guardrail runtime-like failure: keep under review.")
-            return "AUTO_FIX_REVIEW", reasons
+    elif issue_type == "test_failure":
+        intents.extend(
+            [
+                "apply_minimal_test_fix",
+                "preserve_runtime_behavior",
+                "avoid_relaxing_assertions_without_reason",
+            ]
+        )
 
-    if issue_type == "test_failure":
-        if is_guardrail_test(target_file):
-            reasons.append("Guardrail test: area delicata, consentita solo con review.")
-            return "AUTO_FIX_REVIEW", reasons
-        if normalize_path(target_file).startswith("tests/") and is_python(target_file):
-            reasons.append("Ordinary test failure: reviewable.")
-            return "AUTO_FIX_REVIEW", reasons
+    elif issue_type == "missing_nominal_test":
+        intents.extend(
+            [
+                "generate_nominal_test",
+                "avoid_mock-heavy_or_shallow_test",
+            ]
+        )
 
-    if issue_type == "ci_failure":
-        if is_runtime_python(target_file):
-            reasons.append("CI-linked runtime target: reviewable but not blindly safe.")
-            return "AUTO_FIX_REVIEW", reasons
-        reasons.append("Generic CI failure without strong local proof.")
-        return "HUMAN_ONLY", reasons
+    elif issue_type == "ci_failure":
+        intents.extend(
+            [
+                "prefer_small_local_fix",
+                "require_local_repro_or_clear_targeted_context",
+            ]
+        )
 
-    if notes:
-        text_blob = " ".join(str(x) for x in notes).lower()
-        if "ruff" in text_blob or "lint" in text_blob:
-            if is_runtime_python(target_file):
-                reasons.append("Detected lint-like signal from notes on runtime target.")
-                return "AUTO_FIX_SAFE", reasons
-        if "failed" in text_blob and is_guardrail_test(target_file):
-            reasons.append("Guardrail-related failing signal in notes.")
-            return "AUTO_FIX_REVIEW", reasons
+    else:
+        intents.append("manual_review_first")
 
+    if classification == "AUTO_FIX_SAFE":
+        intents.append("safe_autofix_allowed")
+    elif classification == "AUTO_FIX_REVIEW":
+        intents.append("reviewable_autofix_allowed")
+    else:
+        intents.append("manual_review_only")
+
+    if is_generated_test(target_file):
+        intents.append("target_is_generated_test")
+    if is_guardrail_test(target_file):
+        intents.append("target_is_guardrail_test")
     if is_runtime_python(target_file):
-        reasons.append("Fallback runtime target: keep under review.")
-        return "AUTO_FIX_REVIEW", reasons
+        intents.append("target_is_runtime_python")
+    if is_contract_like_target(target_file):
+        intents.append("target_is_contract_like")
 
-    if is_python(target_file):
-        reasons.append("Fallback Python target: keep under review.")
-        return "AUTO_FIX_REVIEW", reasons
+    return unique_keep(intents, 12)
 
-    return "HUMAN_ONLY", ["Unknown/non-python target."]
+
+def derive_related_source(item: dict, tf_ctx_map: dict) -> str:
+    target = normalize_path(item.get("target_file", ""))
+    direct = normalize_path(item.get("related_source_file", ""))
+    if direct:
+        return direct
+
+    tf_ctx = tf_ctx_map.get(target, {})
+    derived = normalize_path(tf_ctx.get("related_source_file", ""))
+    if derived:
+        return derived
+
+    if is_runtime_python(target):
+        return target
+
+    return ""
+
+
+def derive_related_tests(item: dict, tf_ctx_map: dict) -> list[str]:
+    target = normalize_path(item.get("target_file", ""))
+    tests = list(item.get("related_tests", []) or [])
+
+    tf_ctx = tf_ctx_map.get(target, {})
+    tests.extend(tf_ctx.get("related_tests", []) or [])
+
+    if not tests and is_runtime_python(target):
+        stem = Path(target).stem
+        guesses = [
+            f"tests/test_{stem}.py",
+            f"tests/contracts/test_{stem}.py",
+            f"tests/guardrails/test_{stem}.py",
+        ]
+        for guess in guesses:
+            if (ROOT / guess).exists():
+                tests.append(guess)
+
+    if target.startswith("tests/") and target.endswith(".py"):
+        tests.append(target)
+
+    return unique_keep([normalize_path(x) for x in tests if normalize_path(x)], 6)
+
+
+def derive_required_symbols(item: dict, repo_diag_symbols: dict) -> list[str]:
+    target = normalize_path(item.get("target_file", ""))
+    symbols = list(item.get("required_symbols", []) or [])
+
+    if not symbols and target in repo_diag_symbols:
+        for sym in repo_diag_symbols[target][:3]:
+            name = str(sym.get("symbol", "")).strip()
+            if name:
+                symbols.append(name)
+
+    return unique_keep(symbols, 4)
+
+
+def build_candidate(item: dict, cto_item: dict, repo_diag_symbols: dict, tf_ctx_map: dict, strategy: str) -> dict:
+    target_file = normalize_path(item.get("target_file", ""))
+    issue_type = str(item.get("issue_type", "")).strip()
+    classification = str(item.get("classification", "")).strip()
+
+    related_source_file = derive_related_source(item, tf_ctx_map)
+    related_tests = derive_related_tests(item, tf_ctx_map)
+    required_symbols = derive_required_symbols(item, repo_diag_symbols)
+
+    notes = build_notes(
+        item.get("notes", []) or [],
+        item.get("classification_reasons", []) or [],
+        cto_item.get("reasons", []) if cto_item else [],
+        [
+            f"strategy={strategy}",
+            f"issue_type={issue_type}",
+            f"classification={classification}",
+            f"target_file={target_file}",
+        ],
+    )
+
+    cto_priority = str(cto_item.get("priority", "")).strip() if cto_item else ""
+    cto_kind = str(cto_item.get("kind", "")).strip() if cto_item else ""
+
+    candidate = {
+        "strategy": strategy,
+        "target_file": target_file,
+        "related_source_file": related_source_file,
+        "issue_type": issue_type,
+        "classification": classification,
+        "cto_priority": cto_priority,
+        "cto_kind": cto_kind,
+        "required_symbols": required_symbols,
+        "related_tests": related_tests,
+        "patch_intents": build_patch_intents(target_file, issue_type, classification),
+        "notes": notes,
+    }
+    return candidate
+
+
+def score_item(item: dict, cto_item: dict) -> tuple:
+    target = normalize_path(item.get("target_file", ""))
+    issue_type = str(item.get("issue_type", "")).strip()
+    classification = str(item.get("classification", "")).strip()
+    cto_priority = str(cto_item.get("priority", "P2")).strip().upper()
+
+    priority_rank = {"P0": 0, "P1": 1, "P2": 2}
+    issue_rank = {
+        "missing_public_contract": 0,
+        "runtime_failure": 1,
+        "lint_failure": 2,
+        "missing_nominal_test": 3,
+        "test_failure": 4,
+        "ci_failure": 5,
+        "contract_test_failure": 6,
+    }
+    class_rank = {
+        "AUTO_FIX_SAFE": 0,
+        "AUTO_FIX_REVIEW": 1,
+        "HUMAN_ONLY": 9,
+    }
+
+    target_kind_rank = 5
+    if is_contract_like_target(target):
+        target_kind_rank = 0
+    elif is_runtime_python(target):
+        target_kind_rank = 1
+    elif is_generated_test(target):
+        target_kind_rank = 2
+    elif is_test_python(target) and not is_guardrail_test(target):
+        target_kind_rank = 3
+    elif is_guardrail_test(target):
+        target_kind_rank = 4
+
+    return (
+        priority_rank.get(cto_priority, 3),
+        issue_rank.get(issue_type, 99),
+        class_rank.get(classification, 99),
+        target_kind_rank,
+        target,
+    )
+
+
+def choose_candidate(contexts) -> dict | None:
+    classification_payload = contexts["classification"]
+    test_gap = contexts["test_gap"]
+    repo_diag = contexts["repo_diag"]
+    cto_payload = contexts["cto"]
+    tf_ctx = contexts["test_failure_context"]
+
+    classified_items = classification_payload.get("fix_contexts", []) or []
+    cto_map = cto_priority_map(cto_payload)
+    repo_diag_symbols = repo_diag_symbol_map(repo_diag)
+    tf_ctx_map = test_failure_context_map(tf_ctx)
+
+    filtered = []
+    for item in classified_items:
+        target = normalize_path(item.get("target_file", ""))
+        classification = str(item.get("classification", "")).strip()
+
+        if not target:
+            continue
+        if classification == "HUMAN_ONLY":
+            continue
+        if is_github_script(target):
+            continue
+        if is_hft_test(target):
+            continue
+
+        cto_item = cto_map.get(target, {})
+        filtered.append((score_item(item, cto_item), item, cto_item))
+
+    if filtered:
+        filtered.sort(key=lambda x: x[0])
+
+        _, best_item, cto_item = filtered[0]
+        issue_type = str(best_item.get("issue_type", "")).strip()
+        classification = str(best_item.get("classification", "")).strip()
+        target = normalize_path(best_item.get("target_file", ""))
+
+        if issue_type == "missing_public_contract":
+            strategy = "compatibility_contract_fix"
+        elif issue_type == "runtime_failure" and classification == "AUTO_FIX_SAFE":
+            strategy = "runtime_failure_safe_fix"
+        elif issue_type == "runtime_failure":
+            strategy = "runtime_failure_review_fix"
+        elif issue_type == "lint_failure":
+            strategy = "runtime_lint_safe_fix" if is_runtime_python(target) else "python_lint_safe_fix"
+        elif issue_type == "missing_nominal_test":
+            strategy = "generate_nominal_test"
+        elif issue_type == "test_failure":
+            strategy = "safe_test_fix" if classification == "AUTO_FIX_SAFE" else "reviewable_test_fix"
+        elif issue_type == "ci_failure":
+            strategy = "reviewable_ci_fix"
+        else:
+            strategy = "reviewable_fix"
+
+        return build_candidate(best_item, cto_item, repo_diag_symbols, tf_ctx_map, strategy)
+
+    generated = test_gap.get("generated_tests", []) or []
+    if generated:
+        picked = generated[0]
+        source_file = normalize_path(picked.get("source_file", ""))
+        generated_test_file = normalize_path(picked.get("generated_test_file", ""))
+        if generated_test_file:
+            cto_item = cto_map.get(source_file, {})
+            return {
+                "strategy": "generate_nominal_test",
+                "target_file": generated_test_file,
+                "related_source_file": source_file,
+                "issue_type": "missing_nominal_test",
+                "classification": "AUTO_FIX_SAFE",
+                "cto_priority": str(cto_item.get("priority", "")).strip(),
+                "cto_kind": str(cto_item.get("kind", "")).strip(),
+                "required_symbols": [],
+                "related_tests": [generated_test_file],
+                "patch_intents": [
+                    "generate_nominal_test",
+                    "avoid_mock-heavy_or_shallow_test",
+                    "safe_autofix_allowed",
+                    "target_is_generated_test",
+                ],
+                "notes": build_notes(
+                    [
+                        "generated nominal test from diagnostics",
+                        f"source_file={source_file}" if source_file else "",
+                    ],
+                    cto_item.get("reasons", []) if cto_item else [],
+                ),
+            }
+
+    return None
+
+
+def render_markdown(result: dict) -> str:
+    candidate = result.get("patch_candidate")
+    if not candidate:
+        return "Patch Candidate\n\nNo viable patch candidate found.\n"
+
+    lines = []
+    lines.append("Patch Candidate")
+    lines.append("")
+    lines.append(f"Reason: {result.get('reason', '')}")
+    lines.append("")
+    lines.append(f"Strategy: {candidate.get('strategy', '')}")
+    lines.append(f"Target file: {candidate.get('target_file', '')}")
+    lines.append(f"Related source file: {candidate.get('related_source_file', '')}")
+    lines.append(f"Issue type: {candidate.get('issue_type', '')}")
+    lines.append(f"Classification: {candidate.get('classification', '')}")
+    lines.append(f"CTO priority: {candidate.get('cto_priority', '')}")
+    lines.append(f"CTO kind: {candidate.get('cto_kind', '')}")
+    lines.append("")
+    lines.append("Required symbols")
+    req = candidate.get("required_symbols", []) or []
+    if req:
+        for item in req:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Nessun simbolo specifico richiesto.")
+    lines.append("")
+    lines.append("Related tests")
+    tests = candidate.get("related_tests", []) or []
+    if tests:
+        for item in tests:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Nessun test correlato disponibile.")
+    lines.append("")
+    lines.append("Patch intents")
+    intents = candidate.get("patch_intents", []) or []
+    if intents:
+        for item in intents:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Nessun patch intent disponibile.")
+    lines.append("")
+    lines.append("Notes")
+    notes = candidate.get("notes", []) or []
+    if notes:
+        for item in notes:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- Nessuna nota disponibile.")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main() -> int:
-    fix_context = read_json(AUDIT_OUT / "fix_context.json")
-    items = fix_context.get("fix_contexts", []) or []
-
-    classified = []
-    summary = {
-        "AUTO_FIX_SAFE": 0,
-        "AUTO_FIX_REVIEW": 0,
-        "HUMAN_ONLY": 0,
+    contexts = {
+        "classification": read_json(AUDIT_OUT / "issue_classification.json"),
+        "repo_diag": read_json(AUDIT_OUT / "repo_diagnostics_context.json"),
+        "test_gap": read_json(AUDIT_OUT / "test_gap_generation_report.json"),
+        "fix_context": read_json(AUDIT_OUT / "fix_context.json"),
+        "cto": read_json(AUDIT_OUT / "ai_cto_layer.json"),
+        "ci_failure": read_json(AUDIT_OUT / "ci_failure_context.json"),
+        "test_failure_context": read_json(AUDIT_OUT / "test_failure_context.json"),
     }
 
-    for item in items:
-        cloned = dict(item)
-        target_file = normalize_path(cloned.get("target_file", ""))
-        cloned["target_file"] = target_file
+    candidate = choose_candidate(contexts)
 
-        related_source = normalize_path(cloned.get("related_source_file", ""))
-        cloned["related_source_file"] = related_source
+    if not candidate:
+        result = {
+            "patch_candidate": None,
+            "reason": "no_viable_target",
+        }
+    else:
+        result = {
+            "patch_candidate": candidate,
+            "reason": "target_selected",
+        }
 
-        classification, reasons = classify_item(cloned)
-        cloned["classification"] = classification
-        cloned["classification_reasons"] = reasons
+    write_json(AUDIT_OUT / "patch_candidate.json", result)
+    write_text(AUDIT_OUT / "patch_candidate.md", render_markdown(result))
 
-        summary[classification] = summary.get(classification, 0) + 1
-        classified.append(cloned)
-
-    result = {
-        "fix_contexts": classified,
-        "summary": summary,
-    }
-
-    write_json(AUDIT_OUT / "issue_classification.json", result)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
