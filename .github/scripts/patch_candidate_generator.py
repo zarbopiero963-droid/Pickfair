@@ -38,13 +38,11 @@ def normalize_path(path_str: str) -> str:
     raw = str(path_str or "").strip().replace("\\", "/")
     if not raw:
         return ""
-    try:
-        p = Path(raw)
-        if p.is_absolute():
-            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
-    except Exception:
-        pass
-    return raw.lstrip("./")
+
+    while raw.startswith("./"):
+        raw = raw[2:]
+
+    return raw
 
 
 def repo_exists(rel_path: str) -> bool:
@@ -97,6 +95,7 @@ def is_contract_like_target(path_str: str) -> bool:
 def unique_keep(items, limit: int | None = None) -> list[str]:
     out = []
     seen = set()
+
     for item in items or []:
         value = str(item).strip()
         if not value or value in seen:
@@ -105,6 +104,7 @@ def unique_keep(items, limit: int | None = None) -> list[str]:
         out.append(value)
         if limit is not None and len(out) >= limit:
             break
+
     return out
 
 
@@ -113,6 +113,18 @@ def build_notes(*groups) -> list[str]:
         [str(item).strip() for group in groups for item in (group or []) if str(item).strip()],
         18,
     )
+
+
+def load_issue_items(classification_payload: dict) -> list[dict]:
+    items = classification_payload.get("fix_contexts", []) or []
+    if items:
+        return items
+
+    items = classification_payload.get("issue_classification", []) or []
+    if items:
+        return items
+
+    return []
 
 
 def cto_priority_map(cto_payload: dict) -> dict:
@@ -173,12 +185,15 @@ def ci_issue_counts(ci_map: dict) -> dict[str, int]:
         "test_failure": 0,
         "ci_failure": 0,
         "missing_nominal_test": 0,
+        "contract_test_failure": 0,
     }
+
     for items in ci_map.values():
         for item in items:
             issue_type = str(item.get("issue_type", "")).strip()
             if issue_type in counts:
                 counts[issue_type] += 1
+
     return counts
 
 
@@ -202,6 +217,8 @@ def detect_strategy(target_file: str, issue_type: str, classification: str) -> s
         return "safe_test_fix" if classification == "AUTO_FIX_SAFE" else "reviewable_test_fix"
     if issue_type == "ci_failure":
         return "runtime_ci_fix" if is_runtime_python(target_file) else "reviewable_ci_fix"
+    if issue_type == "contract_test_failure":
+        return "reviewable_test_fix"
     return "reviewable_fix"
 
 
@@ -242,6 +259,7 @@ def derive_related_source(item: dict, tf_ctx_map: dict) -> str:
 
     if is_runtime_python(target):
         return target
+
     return ""
 
 
@@ -295,6 +313,11 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
         intents.extend([
             "prefer_small_local_fix",
             "prefer_runtime_or_lint_target_if_available",
+        ])
+    elif issue_type == "contract_test_failure":
+        intents.extend([
+            "apply_minimal_test_fix",
+            "preserve_contract_behavior",
         ])
     else:
         intents.append("manual_review_first")
@@ -355,13 +378,10 @@ def score_item(item: dict, cto_item: dict, ci_map: dict, prefer_runtime: bool) -
         target_kind_rank = 8
 
     ci_hits = len(ci_map.get(target, []))
-
-    # penalità forte per generated tests quando ci sono runtime/lint reali
     generated_penalty = 0
     if prefer_runtime and is_generated_test(target):
         generated_penalty = 50
 
-    # premio forte ai runtime veri quando il CI ha pressione runtime/lint
     runtime_bonus = -20 if (prefer_runtime and is_runtime_python(target)) else 0
 
     return (
@@ -386,7 +406,7 @@ def choose_from_classified_items(
     prefer_runtime = has_real_runtime_or_lint_pressure(ci_map)
     ranked = []
 
-    for item in classification_payload.get("fix_contexts", []) or []:
+    for item in load_issue_items(classification_payload):
         target = normalize_path(item.get("target_file", ""))
         classification = str(item.get("classification", "")).strip()
         issue_type = str(item.get("issue_type", "")).strip()
@@ -400,7 +420,6 @@ def choose_from_classified_items(
         if is_hft_test(target):
             continue
 
-        # Se ci sono failure runtime/lint reali, non vogliamo partire da generated tests
         if prefer_runtime and issue_type == "missing_nominal_test" and is_generated_test(target):
             continue
 
@@ -454,7 +473,6 @@ def choose_from_classified_items(
 
 
 def choose_generated_test_candidate(test_gap: dict, cto_map: dict, ci_map: dict) -> dict | None:
-    # fallback solo se NON esistono runtime/lint reali
     if has_real_runtime_or_lint_pressure(ci_map):
         return None
 
