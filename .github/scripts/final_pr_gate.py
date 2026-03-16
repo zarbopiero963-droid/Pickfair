@@ -22,66 +22,129 @@ def read_json(path: Path):
         return {}
 
 
-def has_real_progress(loop_state: dict, apply_report: dict) -> bool:
-    if not bool(apply_report.get("applied", False)):
-        return False
-
-    cycles = loop_state.get("cycles", []) or []
-    if not cycles:
-        return False
-
-    last = cycles[-1]
-    if bool(last.get("rollback", False)):
-        return False
-    if not bool(last.get("improvement", False)):
-        return False
-
-    return True
-
-
-def main() -> int:
-    merge_state = read_json(AUDIT_OUT / "merge_controller_state.json")
-    loop_state = read_json(AUDIT_OUT / "ai_repair_loop_state.json")
-    apply_report = read_json(AUDIT_OUT / "patch_apply_report.json")
-
-    decision = str(merge_state.get("decision", "")).strip()
-    reason = str(merge_state.get("reason", "")).strip()
-
-    should_merge = bool(merge_state.get("should_merge", False))
-    should_open_pr = bool(merge_state.get("should_open_or_update_pr", False))
-    real_progress = has_real_progress(loop_state, apply_report)
-
-    allow_pr = False
-
-    if decision in {"MERGE_READY", "REVIEW_ONLY"} and should_open_pr and real_progress:
-        allow_pr = True
-
-    if not real_progress and reason in {"approved_patch", "reviewable_patch", "block"}:
-        reason = "no_real_committable_change"
-
-    print("")
-    print("Final PR gate")
-    print(f"Decision: {decision}")
-    print(f"Reason: {reason}")
-    print(f"Allow PR: {allow_pr}")
-    print(f"Auto merge: {should_merge}")
-    print(f"Real progress: {real_progress}")
+def write_output(key: str, value: str):
 
     github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output:
-        with open(github_output, "a", encoding="utf-8") as f:
-            f.write(f"allow_pr={str(allow_pr).lower()}\n")
-            f.write(f"auto_merge={str(should_merge and allow_pr).lower()}\n")
-            f.write(f"reason={reason}\n")
-            f.write(f"real_progress={str(real_progress).lower()}\n")
+
+    if not github_output:
+        return
+
+    with open(github_output, "a") as f:
+        f.write(f"{key}={value}\n")
+
+
+def normalize(v):
+    return str(v).strip().lower()
+
+
+def main():
+
+    patch_apply = read_json(AUDIT_OUT / "patch_apply_report.json")
+    verification = read_json(AUDIT_OUT / "patch_verification.json")
+    review = read_json(AUDIT_OUT / "post_patch_review.json")
+    merge_state = read_json(AUDIT_OUT / "merge_controller_state.json")
+
+    applied = bool(patch_apply.get("applied", False))
+
+    verifier_verdict = normalize(verification.get("verdict", "reject"))
+    review_verdict = normalize(
+        review.get("review_verdict", review.get("final_verdict", "reject"))
+    )
+
+    merge_allowed = bool(merge_state.get("merge_allowed", False))
+    auto_merge = bool(merge_state.get("auto_merge", False))
+
+    reason = "unknown"
+    allow_pr = False
+    real_progress = False
+
+    print("Final PR gate")
+
+    # -----------------------------
+    # NO PATCH APPLIED
+    # -----------------------------
+
+    if not applied:
+
+        reason = "no_patch_applied"
+        allow_pr = False
+        real_progress = False
+
+    # -----------------------------
+    # PATCH REJECTED
+    # -----------------------------
+
+    elif verifier_verdict == "reject" or review_verdict == "reject":
+
+        reason = "patch_rejected"
+        allow_pr = False
+        real_progress = False
+
+    # -----------------------------
+    # REVIEW PATCH
+    # -----------------------------
+
+    elif review_verdict == "review":
+
+        reason = "reviewable_patch"
+        allow_pr = True
+        real_progress = True
+        auto_merge = False
+
+    # -----------------------------
+    # WEAK APPROVE
+    # -----------------------------
+
+    elif review_verdict == "weak-approve":
+
+        reason = "weak_approve_patch"
+        allow_pr = True
+        real_progress = True
+
+    # -----------------------------
+    # APPROVE
+    # -----------------------------
+
+    elif review_verdict == "approve":
+
+        reason = "approved_patch"
+        allow_pr = True
+        real_progress = True
+
+    # -----------------------------
+    # FALLBACK
+    # -----------------------------
+
+    else:
+
+        reason = "rolled_back_no_committable_change"
+        allow_pr = False
+        real_progress = False
+
+    # -----------------------------
+    # MERGE POLICY
+    # -----------------------------
+
+    if not merge_allowed:
+        auto_merge = False
+
+    print(f"Decision: {'OPEN_PR' if allow_pr else 'BLOCK'}")
+    print(f"Reason: {reason}")
+    print(f"Allow PR: {allow_pr}")
+    print(f"Auto merge: {auto_merge}")
+    print(f"Real progress: {real_progress}")
+
+    write_output("allow_pr", str(allow_pr).lower())
+    write_output("auto_merge", str(auto_merge).lower())
+    write_output("reason", reason)
+    write_output("real_progress", str(real_progress).lower())
 
     if not allow_pr:
-        print(f"Final PR gate blocked cleanly. Reason: {reason}")
-        return 0
+        print("Final PR gate blocked.")
+        exit(1)
 
     print("PR gate passed.")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
