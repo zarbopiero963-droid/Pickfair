@@ -10,6 +10,11 @@ AUDIT_OUT = ROOT / "audit_out"
 LOG_DIR = AUDIT_RAW / "external_ci_logs"
 MAX_FAILURES = 300
 
+PYTHON_FILE_RE = re.compile(r"([A-Za-z0-9_./-]+\.py):(\d+)(?::(\d+))?")
+TEST_FILE_RE = re.compile(r"(tests/[A-Za-z0-9_./-]+\.py)")
+TRACEBACK_FILE_RE = re.compile(r'File "([^"]+\.py)", line (\d+)')
+CANNOT_IMPORT_RE = re.compile(r"cannot import name ['\"]?([A-Za-z0-9_]+)['\"]?", re.I)
+
 
 def read_text(path: Path) -> str:
     try:
@@ -20,53 +25,168 @@ def read_text(path: Path) -> str:
 
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def normalize_path(path_str: str) -> str:
-    return str(path_str or "").strip().replace("\\", "/").lstrip("./")
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    return raw.lstrip("./")
 
 
-def detect_python_file_error(line: str) -> str:
-    m = re.search(r"([A-Za-z0-9_./-]+\.py):\d+", line)
+def relative_log_path(path: Path) -> str:
+    try:
+        return normalize_path(str(path.relative_to(ROOT)))
+    except Exception:
+        return normalize_path(str(path))
+
+
+def should_ignore_line(line: str) -> bool:
+    low = line.lower().strip()
+    if not low:
+        return True
+
+    ok_prefixes = (
+        "[ok]",
+        "ok ",
+        "ok:",
+        "passed ",
+        "collected ",
+        "platform ",
+        "rootdir:",
+        "plugins:",
+        "cache hit",
+        "cache restored",
+        "restored cache",
+        "using python",
+        "set up job",
+        "post setup",
+        "post checkout",
+        "cleanup",
+        "checkout repository",
+        "setup python",
+        "install dependencies",
+        "create folders",
+        "verify required scripts",
+    )
+    if low.startswith(ok_prefixes):
+        return True
+
+    success_markers = (
+        "successfully installed",
+        "requirement already satisfied",
+        "all required scripts found",
+        "workflow mode:",
+        "collecting",
+        "downloading",
+        "installing collected packages",
+        "preparing metadata",
+        "building wheel",
+        "built wheel",
+        "uploaded bytes",
+        "artifact name is valid",
+        "root directory input is valid",
+        "finalizing artifact upload",
+        "has been successfully uploaded",
+    )
+    if any(marker in low for marker in success_markers):
+        return True
+
+    noisy_markers = (
+        "::debug::",
+        "temporarily overriding home=",
+        "adding repository directory to the temporary git global config as a safe directory",
+        "/usr/bin/git config",
+        "/usr/bin/git version",
+        "copying '/home/runner/.gitconfig'",
+        "pythonlocation:",
+        "python_root_dir:",
+        "ld_library_path:",
+        "pkg_config_path:",
+    )
+    if any(marker in low for marker in noisy_markers):
+        return True
+
+    return False
+
+
+def detect_target_file(line: str) -> str:
+    m = PYTHON_FILE_RE.search(line)
     if m:
         return normalize_path(m.group(1))
+
+    m = TRACEBACK_FILE_RE.search(line)
+    if m:
+        return normalize_path(m.group(1))
+
+    m = TEST_FILE_RE.search(line)
+    if m:
+        return normalize_path(m.group(1))
+
+    m = CANNOT_IMPORT_RE.search(line)
+    if m:
+        symbol = m.group(1)
+        symbol_map = {
+            "ExecutorManager": "executor_manager.py",
+            "AutoUpdater": "auto_updater.py",
+            "SYSTEM_PAYLOAD": "tests/fixtures/system_payloads.py",
+        }
+        if symbol in symbol_map:
+            return symbol_map[symbol]
+
     return ""
 
 
-def detect_pytest_failure(line: str) -> str:
-    m = re.search(r"(tests/[A-Za-z0-9_./-]+\.py)", line)
-    if m:
-        return normalize_path(m.group(1))
-    return ""
-
-
-def classify_issue(line: str, target_file: str) -> tuple[str, str]:
-    line_low = line.lower()
+def detect_error_type_and_issue_type(line: str, target_file: str) -> tuple[str, str]:
+    low = line.lower()
     target_low = target_file.lower()
 
-    if "ruff" in line_low or "lint" in line_low:
+    if "ruff" in low or "f401" in low or "f841" in low or "e9" in low or "undefined name" in low:
         return "python_file_error", "lint_failure"
 
-    if ("failed" in line_low or "error" in line_low) and "tests/" in line_low:
+    if "failed [" in low or (" failed" in low and "tests/" in low):
         return "pytest_failed", "test_failure"
 
-    if target_low.endswith(".py") and not target_low.startswith("tests/"):
-        if "traceback" in line_low or "runtimeerror" in line_low or "typeerror" in line_low or "attributeerror" in line_low:
+    if low.startswith("failed ") and "tests/" in low:
+        return "pytest_failed", "test_failure"
+
+    if "assertionerror" in low and target_low.startswith("tests/"):
+        return "pytest_failed", "test_failure"
+
+    runtime_markers = (
+        "traceback",
+        "typeerror",
+        "attributeerror",
+        "nameerror",
+        "keyerror",
+        "runtimeerror",
+        "importerror",
+        "modulenotfounderror",
+        "syntaxerror",
+        "cannot import name",
+    )
+    if any(marker in low for marker in runtime_markers):
+        if target_low.endswith(".py") and not target_low.startswith("tests/"):
             return "traceback_file", "runtime_failure"
-        if "error" in line_low and ".py" in line_low:
+        if target_low.startswith("tests/"):
+            return "pytest_failed", "test_failure"
+        return "traceback_file", "ci_failure"
+
+    if target_low.endswith(".py") and not target_low.startswith("tests/"):
+        if "error" in low or "exception" in low:
             return "python_file_error", "runtime_failure"
 
-    if "exit code" in line_low or "process completed with exit code" in line_low:
+    if "process completed with exit code" in low or "exit code 1" in low or "exit code 2" in low:
         return "process_exit", "ci_failure"
 
-    if "remote: error:" in line_low or "gh013" in line_low or "failed to push" in line_low:
+    if "gh013" in low or "repository rule violations" in low or "failed to push" in low:
         return "git_error", "ci_failure"
 
-    return "python_file_error", "ci_failure"
+    if target_low.startswith("tests/"):
+        return "pytest_failed", "test_failure"
+
+    return "ci_signal", "ci_failure"
 
 
 def parse_log(log_path: Path) -> list[dict]:
@@ -76,17 +196,53 @@ def parse_log(log_path: Path) -> list[dict]:
 
     for raw in lines:
         line = raw.strip()
-        if not line:
+        if should_ignore_line(line):
             continue
 
-        target = detect_python_file_error(line)
-        test_target = detect_pytest_failure(line)
-        target_file = target or test_target
+        target_file = detect_target_file(line)
 
-        if not target_file and "exit code" not in line.lower() and "gh013" not in line.lower() and "failed to push" not in line.lower():
+        low = line.lower()
+        has_failure_signal = any(
+            marker in low
+            for marker in (
+                "failed",
+                "error",
+                "traceback",
+                "exception",
+                "cannot import name",
+                "process completed with exit code",
+                "gh013",
+                "repository rule violations",
+                "failed to push",
+                "ruff",
+                "f401",
+                "f841",
+                "syntaxerror",
+                "importerror",
+                "modulenotfounderror",
+            )
+        )
+
+        if not target_file and not has_failure_signal:
             continue
 
-        error_type, issue_type = classify_issue(line, target_file)
+        error_type, issue_type = detect_error_type_and_issue_type(line, target_file)
+
+        if issue_type == "ci_failure" and not target_file:
+            # keep only truly meaningful generic CI failures
+            if not any(
+                marker in low
+                for marker in (
+                    "process completed with exit code",
+                    "gh013",
+                    "repository rule violations",
+                    "failed to push",
+                    "traceback",
+                    "exception",
+                )
+            ):
+                continue
+
         key = (log_path.name, error_type, issue_type, target_file, line)
         if key in seen:
             continue
@@ -96,7 +252,7 @@ def parse_log(log_path: Path) -> list[dict]:
             {
                 "source": "ci_pipeline",
                 "job": log_path.stem,
-                "log_file": str(normalize_path(log_path.relative_to(ROOT))),
+                "log_file": relative_log_path(log_path),
                 "error_type": error_type,
                 "issue_type": issue_type,
                 "signal": line,
@@ -126,8 +282,8 @@ def summarize(items: list[dict]) -> dict:
 
     return {
         "total_failures": len(items),
-        "by_type": by_type,
-        "by_issue_type": by_issue_type,
+        "by_type": dict(sorted(by_type.items())),
+        "by_issue_type": dict(sorted(by_issue_type.items())),
         "top_targets": dict(sorted(by_target.items(), key=lambda x: (-x[1], x[0]))[:20]),
     }
 
