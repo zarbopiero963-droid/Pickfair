@@ -35,11 +35,29 @@ def write_text(path: Path, text: str) -> None:
 
 
 def normalize_path(path_str: str) -> str:
-    return str(path_str or "").strip().replace("\\", "/")
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
 
 def is_generated_test(path_str: str) -> bool:
     return normalize_path(path_str).lower().startswith("tests/generated/")
+
+
+def is_guardrail_test(path_str: str) -> bool:
+    return normalize_path(path_str).lower().startswith("tests/guardrails/")
+
+
+def is_runtime_python(path_str: str) -> bool:
+    rel = normalize_path(path_str).lower()
+    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
 
 
 def is_contract_file(path_str: str) -> bool:
@@ -81,7 +99,9 @@ def main() -> int:
 
     verdict = str(verification.get("verdict", "")).strip().lower()
     candidate = candidate_payload.get("patch_candidate") or {}
+
     target = normalize_path(apply_report.get("target_file") or candidate.get("target_file") or "")
+    related = normalize_path(apply_report.get("related_source_file") or candidate.get("related_source_file") or "")
     strategy = str(apply_report.get("strategy") or candidate.get("strategy") or "").strip()
     issue_type = str(apply_report.get("issue_type") or candidate.get("issue_type") or "").strip()
     classification = str(apply_report.get("classification") or candidate.get("classification") or "").strip()
@@ -90,6 +110,8 @@ def main() -> int:
     failures = targeted_tests.get("failure_count")
     if not isinstance(failures, int):
         failures = None
+
+    executed_targets = targeted_tests.get("targets", []) or []
 
     review = {
         "review_verdict": "reject",
@@ -105,7 +127,7 @@ def main() -> int:
         review["summary"] = "Patch was not applied."
         review["reasons"] = [
             f"Verifier verdict: {verdict or 'unknown'}",
-            "Apply stage did not accept the patch candidate.",
+            "Apply stage did not produce a real committable diff.",
         ]
 
     elif verdict in {"approve", "weak-approve"}:
@@ -115,16 +137,22 @@ def main() -> int:
         if is_contract_file(target) and issue_type == "missing_public_contract":
             review["contract_restored"] = True
 
-        if is_generated_test(target) and strategy == "generate_nominal_test":
-            review["contract_restored"] = False
-
-        if failures == 0 or failures is None:
+        if failures == 0:
             review["review_verdict"] = "approve"
-            review["summary"] = "Patch verified and targeted tests are clean or unavailable."
+            review["summary"] = "Patch verified and targeted tests passed."
             review["reasons"] = [
                 f"Patch verifier verdict: {verdict}",
                 f"Patch strategy: {strategy or 'unknown'}",
                 f"Target file: {target or 'unknown'}",
+                f"Executed targeted tests: {len(executed_targets)}",
+            ]
+        elif failures is None and is_runtime_python(target):
+            review["review_verdict"] = "weak-approve"
+            review["summary"] = "Runtime patch applied with real diff, but no targeted tests were available."
+            review["reasons"] = [
+                f"Patch verifier verdict: {verdict}",
+                f"Target runtime file: {target or 'unknown'}",
+                "No targeted runtime tests available; keeping conservative weak-approve.",
             ]
         else:
             review["review_verdict"] = "weak-approve"
@@ -136,17 +164,41 @@ def main() -> int:
             ]
 
     elif verdict == "review":
-        review["review_verdict"] = "review"
         review["minimal_change"] = classification in {"AUTO_FIX_SAFE", "AUTO_FIX_REVIEW"}
         review["logic_preserved"] = classification in {"AUTO_FIX_SAFE", "AUTO_FIX_REVIEW"}
         review["contract_restored"] = bool(is_contract_file(target) and issue_type == "missing_public_contract")
-        review["summary"] = "Patch requires human or deeper AI review."
-        review["reasons"] = [
-            "Verifier flagged patch as reviewable but not safe for blind approval.",
-            f"Strategy: {strategy or 'unknown'}",
-            f"Target: {target or 'unknown'}",
-            f"Classification: {classification or 'unknown'}",
-        ]
+
+        if is_runtime_python(target) and failures == 0:
+            review["review_verdict"] = "approve"
+            review["summary"] = "Runtime patch was review-level but targeted tests passed."
+            review["reasons"] = [
+                f"Target runtime file: {target}",
+                "Review-level patch promoted because targeted tests are green.",
+            ]
+        elif is_runtime_python(target) and failures is None:
+            review["review_verdict"] = "review"
+            review["summary"] = "Runtime patch changed code, but there is no targeted test evidence yet."
+            review["reasons"] = [
+                f"Target runtime file: {target}",
+                "No targeted tests available for runtime module.",
+                "Keeping review verdict conservatively.",
+            ]
+        elif is_guardrail_test(target):
+            review["review_verdict"] = "review"
+            review["summary"] = "Guardrail test patch remains review-only."
+            review["reasons"] = [
+                "Guardrail tests are sensitive by design.",
+                f"Target file: {target or 'unknown'}",
+            ]
+        else:
+            review["review_verdict"] = "review"
+            review["summary"] = "Patch requires human or deeper AI review."
+            review["reasons"] = [
+                "Verifier flagged patch as reviewable but not safe for blind approval.",
+                f"Strategy: {strategy or 'unknown'}",
+                f"Target: {target or 'unknown'}",
+                f"Classification: {classification or 'unknown'}",
+            ]
 
     else:
         review["review_verdict"] = "reject"
@@ -155,6 +207,9 @@ def main() -> int:
             f"Verifier verdict: {verdict or 'unknown'}",
             "Patch not considered safe to keep in the loop.",
         ]
+
+    if related and related != target:
+        review["reasons"].append(f"Related source file: {related}")
 
     write_json(AUDIT_OUT / "post_patch_review.json", review)
     write_text(AUDIT_OUT / "post_patch_review.md", build_md(review))
