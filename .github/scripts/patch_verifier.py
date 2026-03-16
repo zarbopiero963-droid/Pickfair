@@ -65,6 +65,11 @@ def is_guardrail_test(path_str: str) -> bool:
     return normalize_path(path_str).lower().startswith("tests/guardrails/")
 
 
+def has_real_diff(apply_report: dict) -> bool:
+    targets = apply_report.get("applied_targets", []) or apply_report.get("target_files", []) or []
+    return bool(targets)
+
+
 def build_md(data: dict) -> str:
     lines = []
     lines.append("Patch Verification")
@@ -108,7 +113,6 @@ def main() -> int:
     candidate_payload = read_json(AUDIT_OUT / "patch_candidate.json")
     apply_report = read_json(AUDIT_OUT / "patch_apply_report.json")
     targeted = read_json(AUDIT_OUT / "targeted_test_results.json")
-    classification_payload = read_json(AUDIT_OUT / "issue_classification.json")
 
     candidate = candidate_payload.get("patch_candidate") or {}
     target_file = normalize_path(candidate.get("target_file", ""))
@@ -118,7 +122,12 @@ def main() -> int:
     classification = str(candidate.get("classification", "")).strip()
 
     applied = bool(apply_report.get("applied", False))
-    changed_files = [normalize_path(x) for x in (apply_report.get("applied_targets", []) or []) if normalize_path(x)]
+    real_diff = has_real_diff(apply_report)
+    changed_files = [
+        normalize_path(x)
+        for x in (apply_report.get("applied_targets", []) or apply_report.get("target_files", []) or [])
+        if normalize_path(x)
+    ]
 
     failure_count = targeted.get("failure_count")
     if not isinstance(failure_count, int):
@@ -142,7 +151,7 @@ def main() -> int:
         likely_gaps.append("Missing target file or strategy.")
         safe_next_step = "Generate a valid patch candidate first."
 
-    elif not applied:
+    elif not applied or not real_diff:
         short_summary = "Patch candidate did not produce a real committable diff."
         why.append("Apply stage reported no real file changes.")
         why.append(f"Target file: {target_file or 'unknown'}")
