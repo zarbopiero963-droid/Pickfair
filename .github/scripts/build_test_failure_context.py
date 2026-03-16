@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 import json
-import re
 from pathlib import Path
 
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
-AUDIT_RAW = ROOT / "audit_raw"
+
+MAX_CONTEXTS = 50
+MAX_RELATED_TESTS = 5
+MAX_NOTES = 6
 
 
 def read_text(path: Path) -> str:
@@ -16,139 +18,239 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def read_json(path: Path):
+    try:
+        return json.loads(read_text(path))
+    except Exception:
+        return {}
+
+
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def extract_pytest_signals(pytest_log: str) -> list[str]:
-    patterns = (
-        "ImportError",
-        "ModuleNotFoundError",
-        "AttributeError",
-        "TypeError",
-        "RuntimeError",
-        "AssertionError",
-        "KeyError",
-        "NameError",
-        "cannot import name",
-        "FAILED ",
-        "ERROR ",
-    )
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
-    signals = []
-    for raw in pytest_log.splitlines():
-        line = raw.strip()
-        if not line:
+
+def unique_keep(items, limit: int) -> list[str]:
+    out = []
+    seen = set()
+    for item in items or []:
+        value = str(item).strip()
+        if not value or value in seen:
             continue
-        if any(p in line for p in patterns):
-            signals.append(line)
-
-    return signals[:120]
-
-
-def extract_test_files(signals: list[str]) -> list[str]:
-    found = set()
-
-    for line in signals:
-        for token in line.split():
-            token = token.strip("()[],: ")
-            if token.startswith("tests/") and token.endswith(".py"):
-                found.add(token)
-
-    return sorted(found)
+        seen.add(value)
+        out.append(value)
+        if len(out) >= limit:
+            break
+    return out
 
 
-def guess_related_source_file(test_file: str) -> str:
-    path = Path(test_file)
-    name = path.name
+def guess_related_tests_for_runtime(runtime_file: str) -> list[str]:
+    rel = normalize_path(runtime_file)
+    if not rel:
+        return []
 
-    if name.startswith("test_"):
-        stem = name[len("test_") : -3]
+    stem = Path(rel).stem
+    guesses = [
+        f"tests/test_{stem}.py",
+        f"tests/contracts/test_{stem}.py",
+        f"tests/guardrails/test_{stem}.py",
+    ]
 
-        candidates = [
-            ROOT / f"{stem}.py",
-            ROOT / "tests" / "fixtures" / f"{stem}.py",
-            ROOT / "controllers" / f"{stem}.py",
-            ROOT / "core" / f"{stem}.py",
-            ROOT / "ai" / f"{stem}.py",
-            ROOT / "ui" / f"{stem}.py",
-            ROOT / "app_modules" / f"{stem}.py",
+    existing = []
+    for guess in guesses:
+        if (ROOT / guess).exists():
+            existing.append(guess)
+
+    return existing[:MAX_RELATED_TESTS]
+
+
+def build_from_ci_failures(ci_payload: dict) -> list[dict]:
+    contexts = []
+    failures = ci_payload.get("ci_failures", []) or []
+
+    for item in failures:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
+            continue
+
+        issue_type = str(item.get("issue_type", "")).strip()
+        error_type = str(item.get("error_type", "")).strip()
+        source = str(item.get("source", "")).strip()
+        job = str(item.get("job", "")).strip()
+        signal = str(item.get("signal", "")).strip()
+
+        notes = [
+            f"CI failure source: {source}" if source else "",
+            f"CI job: {job}" if job else "",
+            f"Error type: {error_type}" if error_type else "",
+            f"Signal: {signal}" if signal else "",
+            "Questo contesto proviene dai workflow CI reali del repository.",
         ]
 
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate.relative_to(ROOT)).replace("\\", "/")
+        related_tests = []
+        related_source_file = ""
 
-    return ""
+        if target_file.startswith("tests/"):
+            related_tests = [target_file]
+        elif target_file.endswith(".py") and not target_file.startswith(".github/"):
+            related_source_file = target_file
+            related_tests = guess_related_tests_for_runtime(target_file)
+
+        contexts.append(
+            {
+                "target_file": target_file,
+                "required_symbols": [],
+                "related_tests": unique_keep(related_tests, MAX_RELATED_TESTS),
+                "related_fixtures": [],
+                "related_contracts": [],
+                "notes": unique_keep(notes, MAX_NOTES),
+                "priority": "P0" if issue_type in {"runtime_failure", "lint_failure", "test_failure"} else "P1",
+                "issue_type": issue_type or "ci_failure",
+                "related_source_file": related_source_file,
+            }
+        )
+
+    return contexts
 
 
-def analyze_test_file(test_file: str) -> dict:
-    path = ROOT / test_file
-    text = read_text(path)
+def build_from_failing_tests(failing_payload: dict) -> list[dict]:
+    contexts = []
+    items = failing_payload.get("failing_tests", []) or []
 
-    stripped = text.strip()
-    is_empty = stripped == ""
-    has_test_defs = bool(re.search(r"^\s*def\s+test_[A-Za-z0-9_]+\s*\(", text, re.M))
-    has_pytest_marks = bool(re.search(r"@\s*pytest\.", text))
-    has_any_python = bool(stripped)
+    for item in items:
+        if isinstance(item, dict):
+            target_file = normalize_path(item.get("target_file", "") or item.get("file", "") or "")
+            test_name = str(item.get("test_name", "") or item.get("name", "") or "").strip()
+        else:
+            target_file = ""
+            test_name = str(item).strip()
 
-    issue_type = None
-    notes = []
+        if not target_file and test_name:
+            if "::" in test_name:
+                target_file = normalize_path(test_name.split("::", 1)[0])
 
-    if is_empty:
-        issue_type = "empty_test_file"
-        notes.append("Il file test è vuoto.")
-        notes.append("Riparare creando il test minimo valido e coerente con il failure corrente.")
-    elif has_any_python and not has_test_defs and not has_pytest_marks:
-        issue_type = "corrupted_or_non_test_content"
-        notes.append("Il file test non contiene test validi pytest.")
-        notes.append("Possibile file corrotto, placeholder sporco o contenuto non Python utile.")
-        notes.append("Riparare il file test prima di allargare il fix ai moduli di produzione.")
-    else:
-        issue_type = "normal_test_file"
-        notes.append("File test coinvolto nel failure corrente.")
+        if not target_file:
+            continue
 
-    related_source = guess_related_source_file(test_file)
+        notes = [
+            "Questo contesto proviene dal deterministic failing test extractor.",
+            f"Failing test: {test_name}" if test_name else "",
+        ]
 
-    related_tests = [test_file]
-    if "parallel" in test_file and (ROOT / "tests/test_executor_manager_shutdown.py").exists():
-        related_tests.append("tests/test_executor_manager_shutdown.py")
-    if "shutdown" in test_file and (ROOT / "tests/test_executor_manager_parallel.py").exists():
-        related_tests.append("tests/test_executor_manager_parallel.py")
+        contexts.append(
+            {
+                "target_file": target_file,
+                "required_symbols": [],
+                "related_tests": unique_keep([target_file] if target_file.startswith("tests/") else [], MAX_RELATED_TESTS),
+                "related_fixtures": [],
+                "related_contracts": [],
+                "notes": unique_keep(notes, MAX_NOTES),
+                "priority": "P0",
+                "issue_type": "test_failure",
+                "related_source_file": "",
+            }
+        )
 
-    context = {
-        "target_file": test_file,
-        "required_symbols": [],
-        "related_tests": sorted(set(related_tests)),
-        "related_fixtures": [],
-        "related_contracts": [],
-        "notes": notes,
-        "priority": "P0",
-        "issue_type": issue_type,
-        "related_source_file": related_source,
-    }
+    return contexts
 
-    if related_source:
-        context["notes"].append(f"Modulo sorgente probabilmente collegato: {related_source}")
 
-    return context
+def merge_contexts(contexts: list[dict]) -> list[dict]:
+    merged = {}
+
+    for item in contexts:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
+            continue
+
+        if target_file not in merged:
+            merged[target_file] = {
+                "target_file": target_file,
+                "required_symbols": [],
+                "related_tests": [],
+                "related_fixtures": [],
+                "related_contracts": [],
+                "notes": [],
+                "priority": item.get("priority", "P1"),
+                "issue_type": item.get("issue_type", "ci_failure"),
+                "related_source_file": normalize_path(item.get("related_source_file", "")),
+            }
+
+        dst = merged[target_file]
+
+        if str(item.get("priority", "")).upper() == "P0":
+            dst["priority"] = "P0"
+
+        issue_type = str(item.get("issue_type", "")).strip()
+        if issue_type == "runtime_failure":
+            dst["issue_type"] = "runtime_failure"
+        elif issue_type == "lint_failure" and dst["issue_type"] != "runtime_failure":
+            dst["issue_type"] = "lint_failure"
+        elif issue_type == "test_failure" and dst["issue_type"] not in {"runtime_failure", "lint_failure"}:
+            dst["issue_type"] = "test_failure"
+        elif issue_type == "ci_failure" and not dst["issue_type"]:
+            dst["issue_type"] = "ci_failure"
+
+        if not dst.get("related_source_file") and item.get("related_source_file"):
+            dst["related_source_file"] = normalize_path(item.get("related_source_file", ""))
+
+        for key in ["required_symbols", "related_tests", "related_fixtures", "related_contracts", "notes"]:
+            existing = set(dst.get(key, []))
+            for value in item.get(key, []) or []:
+                value = str(value).strip()
+                if not value or value in existing:
+                    continue
+                dst[key].append(value)
+                existing.add(value)
+
+    results = []
+    for item in merged.values():
+        item["required_symbols"] = unique_keep(item.get("required_symbols", []), 10)
+        item["related_tests"] = unique_keep(item.get("related_tests", []), MAX_RELATED_TESTS)
+        item["related_fixtures"] = unique_keep(item.get("related_fixtures", []), 3)
+        item["related_contracts"] = unique_keep(item.get("related_contracts", []), 3)
+        item["notes"] = unique_keep(item.get("notes", []), MAX_NOTES)
+        results.append(item)
+
+    def score(x: dict):
+        return (
+            0 if str(x.get("priority", "")).upper() == "P0" else 1,
+            0 if str(x.get("issue_type", "")).strip() == "runtime_failure" else 1,
+            0 if str(x.get("issue_type", "")).strip() == "lint_failure" else 1,
+            0 if normalize_path(x.get("target_file", "")).startswith("tests/") else 1,
+            normalize_path(x.get("target_file", "")),
+        )
+
+    results.sort(key=score)
+    return results[:MAX_CONTEXTS]
 
 
 def main() -> int:
-    pytest_log = read_text(AUDIT_RAW / "pytest.log")
-    signals = extract_pytest_signals(pytest_log)
-    test_files = extract_test_files(signals)
+    ci_payload = read_json(AUDIT_OUT / "ci_failure_context.json")
+    failing_payload = read_json(AUDIT_OUT / "failing_tests.json")
 
-    contexts = [analyze_test_file(test_file) for test_file in test_files]
+    contexts = []
+    contexts.extend(build_from_ci_failures(ci_payload))
+    contexts.extend(build_from_failing_tests(failing_payload))
 
-    payload = {
-        "pytest_signals": signals,
-        "test_failure_contexts": contexts,
+    result = {
+        "test_failure_contexts": merge_contexts(contexts),
     }
 
-    write_json(AUDIT_OUT / "test_failure_context.json", payload)
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    write_json(AUDIT_OUT / "test_failure_context.json", result)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
