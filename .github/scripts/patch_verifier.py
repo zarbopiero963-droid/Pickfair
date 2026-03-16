@@ -152,6 +152,7 @@ def main() -> int:
 
     else:
         why.append(f"Target file: {target_file or 'unknown'}")
+        why.append(f"Related source file: {related_file or 'none'}")
         why.append(f"Strategy: {strategy or 'unknown'}")
         why.append(f"Issue type: {issue_type or 'unknown'}")
         why.append(f"Classification: {classification or 'unknown'}")
