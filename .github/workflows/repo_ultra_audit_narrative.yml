@@ -64,6 +64,9 @@ jobs:
           test -f .github/scripts/repair_orchestrator.py
           test -f .github/scripts/final_pr_gate.py
           test -f .github/scripts/test_gap_generator.py
+          test -f .github/scripts/generate_repo_autopsy.py
+          test -f .github/scripts/generate_repo_api_report_v4.py
+          test -f .github/scripts/generate_repo_fix_backlog.py
           echo "All required scripts found."
 
       - name: Detect workflow mode
@@ -76,6 +79,31 @@ jobs:
             echo "workflow_mode=full_repair" >> "$GITHUB_OUTPUT"
           fi
           echo "Workflow mode: $(cat "$GITHUB_OUTPUT" | tail -n 1 | cut -d= -f2)"
+
+      - name: Collect failed external CI logs
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          gh run list --limit 20 --json databaseId,name,conclusion \
+            | jq -r '.[] | select(.conclusion=="failure") | .databaseId' \
+            | while read run_id; do
+                if [ -n "$run_id" ]; then
+                  gh run view "$run_id" --log > "audit_raw/external_ci_logs/run_${run_id}.log" || true
+                fi
+              done
+          set -e
+
+      - name: Generate repository diagnostics
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          python .github/scripts/generate_repo_autopsy.py
+          python .github/scripts/generate_repo_api_report_v4.py
+          python .github/scripts/generate_repo_fix_backlog.py
 
       # -----------------------------
       # REPO RADIOGRAPHY
@@ -270,6 +298,7 @@ jobs:
             audit_out/repo_ultra_audit_narrative.md \
             audit_out/repo_diagnostics_context.json \
             audit_out/ci_failures.json \
+            audit_out/ci_failure_context.json \
             audit_out/test_failure_context.json \
             audit_out/fix_context.json \
             audit_out/issue_classification.json \
@@ -282,10 +311,10 @@ jobs:
             audit_out/targeted_test_results.json \
             audit_out/post_patch_review.md \
             audit_out/merge_controller_report.md \
-            audit_out/ai_repair_loop_report.md \
-            audit_out/repair_orchestrator_report.md \
             audit_out/merge_controller_state.json \
+            audit_out/ai_repair_loop_report.md \
             audit_out/ai_repair_loop_state.json \
+            audit_out/repair_orchestrator_report.md \
             audit_out/repair_orchestrator_state.json
           do
             if [ -f "$f" ]; then
