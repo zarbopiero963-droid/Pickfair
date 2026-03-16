@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
-MAX_TARGETS = 8
+MAX_TARGETS = 10
 
 
 def read_text(path: Path) -> str:
@@ -64,7 +64,7 @@ def is_runtime_python(rel_path: str) -> bool:
     return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
 
 
-def path_to_pytest_guess(runtime_file: str) -> list[str]:
+def path_to_pytest_guesses(runtime_file: str) -> list[str]:
     rel = normalize_path(runtime_file)
     if not rel:
         return []
@@ -81,9 +81,8 @@ def path_to_pytest_guess(runtime_file: str) -> list[str]:
 def collect_targets() -> list[str]:
     targets = []
 
-    targeted = read_json(AUDIT_OUT / "patch_candidate.json")
-    candidate = targeted.get("patch_candidate") or {}
-
+    patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = patch_candidate.get("patch_candidate") or {}
     target_file = normalize_path(candidate.get("target_file", ""))
     related_source_file = normalize_path(candidate.get("related_source_file", ""))
 
@@ -92,31 +91,42 @@ def collect_targets() -> list[str]:
     if related_source_file and related_source_file not in targets:
         targets.append(related_source_file)
 
-    fix_context = read_json(AUDIT_OUT / "fix_context.json")
-    for item in fix_context.get("fix_contexts", []) or []:
+    tf_context = read_json(AUDIT_OUT / "test_failure_context.json")
+    for item in tf_context.get("test_failure_contexts", []) or []:
         tf = normalize_path(item.get("target_file", ""))
+        rs = normalize_path(item.get("related_source_file", ""))
         if tf and tf not in targets:
             targets.append(tf)
-        rs = normalize_path(item.get("related_source_file", ""))
         if rs and rs not in targets:
             targets.append(rs)
-
         for t in item.get("related_tests", []) or []:
             t = normalize_path(t)
             if t and t not in targets:
                 targets.append(t)
 
-    final_targets = []
-    seen = set()
+    fix_context = read_json(AUDIT_OUT / "fix_context.json")
+    for item in fix_context.get("fix_contexts", []) or []:
+        tf = normalize_path(item.get("target_file", ""))
+        rs = normalize_path(item.get("related_source_file", ""))
+        if tf and tf not in targets:
+            targets.append(tf)
+        if rs and rs not in targets:
+            targets.append(rs)
+        for t in item.get("related_tests", []) or []:
+            t = normalize_path(t)
+            if t and t not in targets:
+                targets.append(t)
 
+    final = []
+    seen = set()
     for item in targets:
         item = normalize_path(item)
         if not item or item in seen:
             continue
         seen.add(item)
-        final_targets.append(item)
+        final.append(item)
 
-    return final_targets[:MAX_TARGETS]
+    return final[:MAX_TARGETS]
 
 
 def resolve_pytest_targets(raw_targets: list[str]) -> list[str]:
@@ -135,8 +145,7 @@ def resolve_pytest_targets(raw_targets: list[str]) -> list[str]:
             continue
 
         if is_runtime_python(rel):
-            guesses = path_to_pytest_guess(rel)
-            for guess in guesses:
+            for guess in path_to_pytest_guesses(rel):
                 if repo_exists(guess) and guess not in seen:
                     resolved.append(guess)
                     seen.add(guess)
