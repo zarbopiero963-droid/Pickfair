@@ -6,21 +6,6 @@ from pathlib import Path
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
-INPUT_CANDIDATES = {
-    "repo_api_report_v4": [
-        ROOT / "audit_out" / "repo_api_report_v4.json",
-        ROOT / "repo_api_report_v4.json",
-    ],
-    "repo_autopsy_summary": [
-        ROOT / "audit_out" / "repo_autopsy_summary.json",
-        ROOT / "repo_autopsy_summary.json",
-    ],
-    "repo_fix_backlog": [
-        ROOT / "audit_out" / "repo_fix_backlog.json",
-        ROOT / "repo_fix_backlog.json",
-    ],
-}
-
 
 def read_text(path: Path) -> str:
     try:
@@ -38,265 +23,212 @@ def read_json(path: Path):
 
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
+
+
+def pick_existing(name_candidates: list[str]) -> tuple[str, dict]:
+    for name in name_candidates:
+        path = AUDIT_OUT / name
+        data = read_json(path)
+        if data:
+            return name, data
+    return "", {}
+
+
+def extract_modules_without_direct_tests(api_report: dict) -> list[str]:
+    items = api_report.get("modules_without_direct_tests", []) or api_report.get("modules_without_tests", []) or []
+    out = []
+    seen = set()
+    for item in items:
+        if isinstance(item, dict):
+            file_path = normalize_path(item.get("file", ""))
+        else:
+            file_path = normalize_path(item)
+        if file_path and file_path not in seen:
+            seen.add(file_path)
+            out.append(file_path)
+    return out[:30]
+
+
+def extract_public_symbols_without_nominal_tests(api_report: dict) -> list[dict]:
+    items = (
+        api_report.get("public_symbols_without_nominal_tests", [])
+        or api_report.get("symbols_without_tests", [])
+        or []
     )
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        file_path = normalize_path(item.get("file", ""))
+        symbol = str(item.get("symbol", "")).strip()
+        if file_path and symbol:
+            out.append(
+                {
+                    "file": file_path,
+                    "symbol": symbol,
+                    "kind": str(item.get("kind", "")).strip(),
+                }
+            )
+    return out[:120]
 
 
-def first_existing(candidates: list[Path]):
-    for path in candidates:
-        if path.exists():
-            return path
-    return None
+def extract_dead_code_candidates(api_report: dict) -> list[dict]:
+    items = api_report.get("dead_code_candidates", []) or []
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        file_path = normalize_path(item.get("file", ""))
+        symbol = str(item.get("symbol", "")).strip()
+        if file_path or symbol:
+            out.append(
+                {
+                    "file": file_path,
+                    "symbol": symbol,
+                    "reason": str(item.get("reason", "")).strip(),
+                }
+            )
+    return out[:40]
 
 
-def trim_list(values, limit: int) -> list:
+def extract_shallow_test_files(api_report: dict) -> list[str]:
+    items = api_report.get("shallow_test_files", []) or []
+    out = []
+    seen = set()
+    for item in items:
+        if isinstance(item, dict):
+            file_path = normalize_path(item.get("file", ""))
+        else:
+            file_path = normalize_path(item)
+        if file_path and file_path not in seen:
+            seen.add(file_path)
+            out.append(file_path)
+    return out[:30]
+
+
+def extract_complex_areas(autopsy_summary: dict, backlog: dict) -> list[dict]:
     out = []
     seen = set()
 
-    for item in values or []:
-        key = json.dumps(item, sort_keys=True, ensure_ascii=False) if isinstance(item, (dict, list)) else str(item)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-        if len(out) >= limit:
-            break
-
-    return out
-
-
-def normalize_public_symbols(api_report: dict) -> list[dict]:
-    result = []
-
-    candidates = (
-        api_report.get("public_symbols_without_nominal_tests")
-        or api_report.get("symbols_without_tests")
-        or api_report.get("untested_public_symbols")
-        or []
-    )
-
-    for item in candidates:
-        if isinstance(item, dict):
-            file_path = str(
-                item.get("file")
-                or item.get("path")
-                or item.get("module")
-                or ""
-            ).strip()
-            symbol = str(
-                item.get("symbol")
-                or item.get("name")
-                or item.get("public_symbol")
-                or ""
-            ).strip()
-        else:
-            file_path = ""
-            symbol = str(item).strip()
-
-        if not symbol:
-            continue
-
-        result.append(
-            {
-                "symbol": symbol,
-                "file": file_path,
-                "risk": "medium",
-                "kind": "public_symbol_without_nominal_test",
-            }
-        )
-
-    return trim_list(result, 200)
-
-
-def normalize_modules_without_tests(api_report: dict) -> list[dict]:
-    result = []
-
-    candidates = (
-        api_report.get("modules_without_direct_tests")
-        or api_report.get("modules_without_tests")
-        or []
-    )
-
-    for item in candidates:
-        if isinstance(item, dict):
-            path = str(item.get("file") or item.get("path") or item.get("module") or "").strip()
-        else:
-            path = str(item).strip()
-
-        if not path:
-            continue
-
-        result.append(
-            {
-                "file": path,
-                "risk": "medium",
-                "kind": "module_without_direct_test",
-            }
-        )
-
-    return trim_list(result, 120)
-
-
-def normalize_shallow_tests(api_report: dict) -> list[dict]:
-    result = []
-
-    candidates = api_report.get("shallow_tests") or api_report.get("shallow_test_files") or []
-
-    for item in candidates:
-        if isinstance(item, dict):
-            path = str(item.get("file") or item.get("path") or "").strip()
-        else:
-            path = str(item).strip()
-
-        if not path:
-            continue
-
-        result.append(
-            {
-                "file": path,
-                "risk": "low",
-                "kind": "shallow_test_file",
-            }
-        )
-
-    return trim_list(result, 80)
-
-
-def normalize_dead_code(api_report: dict) -> list[dict]:
-    result = []
-
-    candidates = api_report.get("dead_code_candidates") or api_report.get("dead_code") or []
-
-    for item in candidates:
-        if isinstance(item, dict):
-            path = str(item.get("file") or item.get("path") or "").strip()
-            symbol = str(item.get("symbol") or item.get("name") or "").strip()
-        else:
-            path = ""
-            symbol = str(item).strip()
-
-        if not path and not symbol:
-            continue
-
-        result.append(
-            {
-                "file": path,
-                "symbol": symbol,
-                "risk": "review_only",
-                "kind": "dead_code_candidate",
-            }
-        )
-
-    return trim_list(result, 80)
-
-
-def normalize_complex_modules(autopsy: dict, backlog: dict) -> list[dict]:
-    result = []
-
-    top_classes = autopsy.get("prod_top_classes") or autopsy.get("top_classes") or []
-    for item in top_classes:
+    for item in autopsy_summary.get("prod_top_classes", []) or []:
         if not isinstance(item, dict):
             continue
-
-        file_path = str(item.get("file") or item.get("path") or "").strip()
-        class_name = str(item.get("class") or item.get("class_name") or "").strip()
-
-        if not file_path:
+        file_path = normalize_path(item.get("file", ""))
+        if not file_path or file_path in seen:
             continue
-
-        result.append(
+        seen.add(file_path)
+        out.append(
             {
                 "file": file_path,
-                "class_name": class_name,
-                "risk": "high",
-                "kind": "complex_production_area",
+                "kind": "prod_top_class",
+                "name": str(item.get("class", "")).strip(),
+                "score": item.get("score", 0),
             }
         )
 
-    backlog_items = backlog.get("items") or backlog.get("backlog") or []
-    for item in backlog_items:
+    for item in backlog.get("fix_backlog", []) or backlog.get("items", []) or []:
         if not isinstance(item, dict):
             continue
-
-        priority = str(item.get("priority") or "").strip().upper()
-        action = str(item.get("action") or "").strip()
-        file_path = str(item.get("file") or item.get("path") or "").strip()
-        title = str(item.get("title") or item.get("summary") or "").strip()
-
-        if not file_path:
+        file_path = normalize_path(item.get("file", ""))
+        if not file_path or file_path in seen:
             continue
+        kind = str(item.get("kind", "")).strip()
+        priority = str(item.get("priority", "")).strip()
+        if priority in {"P0", "P1"} or kind in {"high_complexity_module", "complex_runtime"}:
+            seen.add(file_path)
+            out.append(
+                {
+                    "file": file_path,
+                    "kind": kind or "backlog_item",
+                    "name": str(item.get("title", "")).strip(),
+                    "score": item.get("score", 0),
+                }
+            )
 
-        if priority not in {"P0", "P1"}:
-            continue
-
-        result.append(
-            {
-                "file": file_path,
-                "title": title,
-                "action": action,
-                "risk": "high" if priority == "P0" else "medium",
-                "kind": "backlog_priority_area",
-                "priority": priority,
-            }
-        )
-
-    return trim_list(result, 120)
+    return out[:40]
 
 
-def build_summary(api_report: dict, autopsy: dict, backlog: dict) -> dict:
-    modules_wo_tests = api_report.get("modules_without_direct_tests")
-    if not isinstance(modules_wo_tests, list):
-        modules_wo_tests = api_report.get("modules_without_tests") or []
-
-    symbols_wo_tests = (
-        api_report.get("public_symbols_without_nominal_tests")
-        or api_report.get("symbols_without_tests")
-        or api_report.get("untested_public_symbols")
-        or []
-    )
-
-    dead_code = api_report.get("dead_code_candidates") or api_report.get("dead_code") or []
-    shallow_tests = api_report.get("shallow_tests") or api_report.get("shallow_test_files") or []
-    backlog_items = backlog.get("items") or backlog.get("backlog") or []
-    top_classes = autopsy.get("prod_top_classes") or autopsy.get("top_classes") or []
-
+def summarize(
+    modules_without_tests: list[str],
+    symbols_without_tests: list[dict],
+    dead_code: list[dict],
+    shallow_tests: list[str],
+    complex_areas: list[dict],
+    backlog_payload: dict,
+) -> dict:
+    backlog_items = backlog_payload.get("fix_backlog", []) or backlog_payload.get("items", []) or []
     return {
-        "modules_without_direct_tests": len(modules_wo_tests) if isinstance(modules_wo_tests, list) else 0,
-        "public_symbols_without_nominal_tests": len(symbols_wo_tests) if isinstance(symbols_wo_tests, list) else 0,
-        "dead_code_candidates": len(dead_code) if isinstance(dead_code, list) else 0,
-        "shallow_test_files": len(shallow_tests) if isinstance(shallow_tests, list) else 0,
-        "backlog_items": len(backlog_items) if isinstance(backlog_items, list) else 0,
-        "top_complex_areas": len(top_classes) if isinstance(top_classes, list) else 0,
+        "modules_without_direct_tests": len(modules_without_tests),
+        "public_symbols_without_nominal_tests": len(symbols_without_tests),
+        "dead_code_candidates": len(dead_code),
+        "shallow_test_files": len(shallow_tests),
+        "backlog_items": len(backlog_items),
+        "top_complex_areas": len(complex_areas),
     }
 
 
 def main() -> int:
-    resolved = {}
-    payload = {}
+    api_report_name, api_report = pick_existing(
+        [
+            "repo_api_report_v4.json",
+            "repo_api_report.json",
+        ]
+    )
+    autopsy_summary_name, autopsy_summary = pick_existing(
+        [
+            "repo_autopsy_summary.json",
+            "repo_autopsy.json",
+        ]
+    )
+    backlog_name, backlog = pick_existing(
+        [
+            "repo_fix_backlog.json",
+        ]
+    )
 
-    for key, candidates in INPUT_CANDIDATES.items():
-        found = first_existing(candidates)
-        resolved[key] = str(found.relative_to(ROOT)).replace("\\", "/") if found else ""
-        payload[key] = read_json(found) if found else {}
+    modules_without_tests = extract_modules_without_direct_tests(api_report)
+    symbols_without_tests = extract_public_symbols_without_nominal_tests(api_report)
+    dead_code = extract_dead_code_candidates(api_report)
+    shallow_tests = extract_shallow_test_files(api_report)
+    complex_areas = extract_complex_areas(autopsy_summary, backlog)
 
-    api_report = payload["repo_api_report_v4"]
-    autopsy = payload["repo_autopsy_summary"]
-    backlog = payload["repo_fix_backlog"]
-
-    result = {
-        "sources": resolved,
-        "summary": build_summary(api_report, autopsy, backlog),
-        "public_symbols_without_nominal_tests": normalize_public_symbols(api_report),
-        "modules_without_direct_tests": normalize_modules_without_tests(api_report),
-        "shallow_test_files": normalize_shallow_tests(api_report),
-        "dead_code_candidates": normalize_dead_code(api_report),
-        "complex_or_high_risk_areas": normalize_complex_modules(autopsy, backlog),
+    payload = {
+        "sources": {
+            "repo_api_report_v4": api_report_name,
+            "repo_autopsy_summary": autopsy_summary_name,
+            "repo_fix_backlog": backlog_name,
+        },
+        "summary": summarize(
+            modules_without_tests,
+            symbols_without_tests,
+            dead_code,
+            shallow_tests,
+            complex_areas,
+            backlog,
+        ),
+        "public_symbols_without_nominal_tests": symbols_without_tests,
+        "modules_without_direct_tests": modules_without_tests,
+        "shallow_test_files": shallow_tests,
+        "dead_code_candidates": dead_code,
+        "complex_or_high_risk_areas": complex_areas,
     }
 
-    write_json(AUDIT_OUT / "repo_diagnostics_context.json", result)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    write_json(AUDIT_OUT / "repo_diagnostics_context.json", payload)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
