@@ -48,7 +48,7 @@ jobs:
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
           fi
-          pip install pytest requests telethon customtkinter
+          pip install pytest requests telethon customtkinter ruff
           set -e
 
       - name: Prepare output folders
@@ -56,6 +56,7 @@ jobs:
           mkdir -p audit_out
           mkdir -p audit_raw
           mkdir -p audit_raw/external_ci_logs
+          mkdir -p tests/generated
 
       - name: Verify scripts exist
         run: |
@@ -66,7 +67,6 @@ jobs:
           test -f .github/scripts/build_test_failure_context.py
           test -f .github/scripts/build_fix_context.py
           test -f .github/scripts/workflow_signal_aggregator.py
-          test -f .github/scripts/openrouter_model_router.py
           test -f .github/scripts/patch_candidate_generator.py
           test -f .github/scripts/patch_verifier.py
           test -f .github/scripts/apply_patch_candidate.py
@@ -103,6 +103,7 @@ jobs:
 
       - name: Load AI Governance Docs
         if: always()
+        shell: bash
         run: |
           mkdir -p audit_raw
           if [ -f docs/REPO_RADIOGRAPHY.md ]; then
@@ -195,7 +196,7 @@ jobs:
               [
                   "gh", "pr", "list",
                   "--state", "open",
-                  "--search", "AI automated patch in:title",
+                  "--search", "AI Repair Patch in:title",
                   "--json", "number,headRefName,state"
               ],
               capture_output=True,
@@ -447,6 +448,25 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Run issue classifier
+        if: always()
+        run: |
+          python .github/scripts/issue_classifier.py
+        continue-on-error: true
+
+      - name: Show issue classification
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ ISSUE CLASSIFICATION ======================"
+          if [ -f audit_out/issue_classification.json ]; then
+            cat audit_out/issue_classification.json
+          else
+            echo "issue_classification.json not found"
+          fi
+          echo "============================================================"
+
       - name: Load repo diagnostics
         if: always()
         run: |
@@ -504,44 +524,6 @@ jobs:
           fi
           echo "============================================================"
 
-      - name: Run issue classifier
-        if: always()
-        run: |
-          python .github/scripts/issue_classifier.py
-        continue-on-error: true
-
-      - name: Show issue classification
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ ISSUE CLASSIFICATION ======================"
-          if [ -f audit_out/issue_classification.json ]; then
-            cat audit_out/issue_classification.json
-          else
-            echo "issue_classification.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Run repair memory filter
-        if: always()
-        run: |
-          python .github/scripts/repair_memory.py
-        continue-on-error: true
-
-      - name: Show filtered fix context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FILTERED FIX CONTEXT ======================"
-          if [ -f audit_out/filtered_fix_context.json ]; then
-            cat audit_out/filtered_fix_context.json
-          else
-            echo "filtered_fix_context.json not found"
-          fi
-          echo "============================================================"
-
       - name: Build global workflow context
         if: always()
         run: |
@@ -561,6 +543,63 @@ jobs:
           fi
           echo "============================================================"
 
+      - name: Generate patch candidate
+        if: always()
+        run: |
+          python .github/scripts/patch_candidate_generator.py
+        continue-on-error: true
+
+      - name: Show patch candidate
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PATCH CANDIDATE ==========================="
+          if [ -f audit_out/patch_candidate.md ]; then
+            cat audit_out/patch_candidate.md
+          else
+            echo "patch_candidate.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Apply patch candidate
+        if: steps.mode.outputs.workflow_mode == 'full_repair'
+        run: |
+          python .github/scripts/apply_patch_candidate.py
+        continue-on-error: true
+
+      - name: Show patch apply report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PATCH APPLY REPORT ========================"
+          if [ -f audit_out/patch_apply_report.md ]; then
+            cat audit_out/patch_apply_report.md
+          else
+            echo "patch_apply_report.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Run patch verifier
+        if: always()
+        run: |
+          python .github/scripts/patch_verifier.py
+        continue-on-error: true
+
+      - name: Show patch verification
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ PATCH VERIFICATION ========================"
+          if [ -f audit_out/patch_verification.md ]; then
+            cat audit_out/patch_verification.md
+          else
+            echo "patch_verification.md not found"
+          fi
+          echo "============================================================"
+
       - name: Run targeted tests
         if: always()
         run: |
@@ -577,6 +616,44 @@ jobs:
             cat audit_out/targeted_test_results.md
           else
             echo "targeted_test_results.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Run post patch review
+        if: always()
+        run: |
+          python .github/scripts/post_patch_review.py
+        continue-on-error: true
+
+      - name: Show post patch review
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ POST PATCH REVIEW ========================="
+          if [ -f audit_out/post_patch_review.md ]; then
+            cat audit_out/post_patch_review.md
+          else
+            echo "post_patch_review.md not found"
+          fi
+          echo "============================================================"
+
+      - name: Run merge controller
+        if: always()
+        run: |
+          python .github/scripts/merge_controller.py
+        continue-on-error: true
+
+      - name: Show merge controller report
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ MERGE CONTROLLER =========================="
+          if [ -f audit_out/merge_controller_report.md ]; then
+            cat audit_out/merge_controller_report.md
+          else
+            echo "merge_controller_report.md not found"
           fi
           echo "============================================================"
 
@@ -616,6 +693,7 @@ jobs:
           EXISTING_AI_PR_HEAD: ${{ steps.existing_ai_pr.outputs.head }}
         run: |
           python .github/scripts/repair_orchestrator.py
+        continue-on-error: true
 
       - name: Show repair orchestrator report
         if: always()
@@ -627,193 +705,6 @@ jobs:
             cat audit_out/repair_orchestrator_report.md
           else
             echo "repair_orchestrator_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show self-healing status
-        if: always()
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path("audit_out/repair_orchestrator_state.json")
-          if not path.exists():
-              print("Repo materially greener: UNKNOWN")
-              print("Repo fully green: UNKNOWN")
-              print("Continuation recommended: UNKNOWN")
-              print("Next action: unknown")
-              raise SystemExit(0)
-
-          data = json.loads(path.read_text(encoding="utf-8"))
-
-          print(f"Repo materially greener: {'YES' if data.get('repo_materially_greener') else 'NO'}")
-          print(f"Repo fully green: {'YES' if data.get('repo_fully_green') else 'NO'}")
-          print(f"Continuation recommended: {'YES' if data.get('continuation_recommended') else 'NO'}")
-          print(f"Next action: {data.get('next_action', 'unknown')}")
-          print(f"Orchestrator action: {data.get('action', 'unknown')}")
-          PY
-
-      - name: Show deterministic report file
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ DETERMINISTIC AUDIT REPORT ================"
-          if [ -f audit_out/repo_ultra_audit_narrative.md ]; then
-            cat audit_out/repo_ultra_audit_narrative.md
-          else
-            echo "repo_ultra_audit_narrative.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show deterministic machine file
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ DETERMINISTIC MACHINE JSON ================"
-          if [ -f audit_out/audit_machine.json ]; then
-            cat audit_out/audit_machine.json
-          else
-            echo "audit_machine.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Show failing tests
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FAILING TESTS ============================="
-          if [ -f audit_out/failing_tests.json ]; then
-            cat audit_out/failing_tests.json
-          else
-            echo "failing_tests.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Show AI root cause
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ ROOT CAUSE ================================"
-          if [ -f audit_out/root_cause.md ]; then
-            cat audit_out/root_cause.md
-          else
-            echo "root_cause.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show AI fix suggestions
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ FIX SUGGESTIONS ==========================="
-          if [ -f audit_out/fix_suggestions.md ]; then
-            cat audit_out/fix_suggestions.md
-          else
-            echo "fix_suggestions.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show priority fix order
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PRIORITY FIX ORDER ========================"
-          if [ -f audit_out/priority_fix_order.md ]; then
-            cat audit_out/priority_fix_order.md
-          else
-            echo "priority_fix_order.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show test failure context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ TEST FAILURE CONTEXT ======================"
-          if [ -f audit_out/test_failure_context.json ]; then
-            cat audit_out/test_failure_context.json
-          else
-            echo "test_failure_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Show patch candidate
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH CANDIDATE ==========================="
-          if [ -f audit_out/patch_candidate.md ]; then
-            cat audit_out/patch_candidate.md
-          else
-            echo "patch_candidate.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show patch verification
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH VERIFICATION ========================"
-          if [ -f audit_out/patch_verification.md ]; then
-            cat audit_out/patch_verification.md
-          else
-            echo "patch_verification.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show patch apply report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH APPLY REPORT ========================"
-          if [ -f audit_out/patch_apply_report.md ]; then
-            cat audit_out/patch_apply_report.md
-          else
-            echo "patch_apply_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Show post patch review
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ POST PATCH REVIEW ========================="
-          if [ -f audit_out/post_patch_review.md ]; then
-            cat audit_out/post_patch_review.md
-          else
-            echo "post_patch_review.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Run merge controller
-        if: always()
-        run: |
-          python .github/scripts/merge_controller.py
-        continue-on-error: true
-
-      - name: Show merge controller report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ MERGE CONTROLLER =========================="
-          if [ -f audit_out/merge_controller_report.md ]; then
-            cat audit_out/merge_controller_report.md
-          else
-            echo "merge_controller_report.md not found"
           fi
           echo "============================================================"
 
@@ -860,6 +751,18 @@ jobs:
         id: pr_gate
         run: |
           python .github/scripts/final_pr_gate.py
+
+      - name: Show final gate decision
+        if: always() && steps.mode.outputs.workflow_mode == 'full_repair'
+        shell: bash
+        run: |
+          echo ""
+          echo "================ FINAL PR GATE ============================="
+          echo "allow_pr=${{ steps.pr_gate.outputs.allow_pr }}"
+          echo "auto_merge=${{ steps.pr_gate.outputs.auto_merge }}"
+          echo "reason=${{ steps.pr_gate.outputs.reason }}"
+          echo "real_progress=${{ steps.pr_gate.outputs.real_progress }}"
+          echo "============================================================"
 
       - name: Create AI repair PR
         if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.allow_pr == 'true'
