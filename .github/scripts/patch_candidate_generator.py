@@ -28,7 +28,16 @@ def write_text(path, text):
 
 
 def normalize_path(path_str: str) -> str:
-    return str(path_str or "").strip().replace("\\", "/")
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
 
 def load_contexts():
@@ -39,6 +48,7 @@ def load_contexts():
         "fix_context": read_json(AUDIT_OUT / "fix_context.json"),
         "cto": read_json(AUDIT_OUT / "ai_cto_layer.json"),
         "ci_failure": read_json(AUDIT_OUT / "ci_failure_context.json"),
+        "test_failure_context": read_json(AUDIT_OUT / "test_failure_context.json"),
     }
 
 
@@ -200,6 +210,10 @@ def is_runtime_failure(item: dict) -> bool:
     return str(item.get("issue_type", "")).strip() == "runtime_failure"
 
 
+def is_lint_failure(item: dict) -> bool:
+    return str(item.get("issue_type", "")).strip() == "lint_failure"
+
+
 def is_ci_failure(item: dict) -> bool:
     return str(item.get("issue_type", "")).strip() == "ci_failure"
 
@@ -211,6 +225,7 @@ def build_runtime_score(item: dict, cto_item: dict) -> tuple:
     return (
         0 if cto_priority == "P0" else 1 if cto_priority == "P1" else 2,
         0 if is_runtime_failure(item) else 1,
+        0 if is_lint_failure(item) else 1,
         0 if is_runtime_target(target_file) else 1,
         0 if not is_guardrail_test(target_file) else 1,
         target_file,
@@ -224,9 +239,34 @@ def build_general_score(item: dict, cto_item: dict) -> tuple:
     return (
         0 if cto_priority == "P0" else 1 if cto_priority == "P1" else 2,
         0 if is_runtime_target(target_file) else 1,
+        0 if is_generated_test(target_file) else 1,
         0 if not is_guardrail_test(target_file) else 1,
         target_file,
     )
+
+
+def enrich_from_test_failure_context(item: dict, tf_context: dict) -> dict:
+    target = normalize_path(item.get("target_file", ""))
+    enriched = dict(item)
+
+    for ctx in tf_context.get("test_failure_contexts", []) or []:
+        if normalize_path(ctx.get("target_file", "")) != target:
+            continue
+
+        related_source_file = normalize_path(ctx.get("related_source_file", ""))
+        if related_source_file and not normalize_path(enriched.get("related_source_file", "")):
+            enriched["related_source_file"] = related_source_file
+
+        notes = list(enriched.get("notes", []) or [])
+        notes.extend(ctx.get("notes", []) or [])
+        enriched["notes"] = build_notes(notes)
+
+        related_tests = list(enriched.get("related_tests", []) or [])
+        related_tests.extend(ctx.get("related_tests", []) or [])
+        enriched["related_tests"] = build_notes(related_tests)
+        break
+
+    return enriched
 
 
 def choose_candidate(contexts):
@@ -234,6 +274,7 @@ def choose_candidate(contexts):
     fix_context = contexts["fix_context"]
     test_gap = contexts["test_gap"]
     cto_payload = contexts["cto"]
+    tf_context = contexts["test_failure_context"]
 
     classified_items = classification_payload.get("fix_contexts", []) or []
     class_map = classification_map(classification_payload)
@@ -241,10 +282,13 @@ def choose_candidate(contexts):
 
     runtime_fail_safe = []
     runtime_fail_review = []
+    lint_safe = []
     safe_candidates = []
     review_candidates = []
 
-    for item in classified_items:
+    for raw_item in classified_items:
+        item = enrich_from_test_failure_context(raw_item, tf_context)
+
         target_file = normalize_path(item.get("target_file", ""))
         if not target_file:
             continue
@@ -268,6 +312,9 @@ def choose_candidate(contexts):
             elif is_auto_fix_review(item):
                 runtime_fail_review.append((runtime_score, item, cto_item))
 
+        if is_lint_failure(item) and is_runtime_target(target_file) and is_auto_fix_safe(item):
+            lint_safe.append((runtime_score, item, cto_item))
+
         if is_auto_fix_safe(item):
             safe_candidates.append((general_score, item, cto_item))
         elif is_auto_fix_review(item):
@@ -282,6 +329,11 @@ def choose_candidate(contexts):
         runtime_fail_review.sort(key=lambda x: x[0])
         _, item, cto_item = runtime_fail_review[0]
         return candidate_from_classified_item(item, cto_item, "runtime_failure_review_fix")
+
+    if lint_safe:
+        lint_safe.sort(key=lambda x: x[0])
+        _, item, cto_item = lint_safe[0]
+        return candidate_from_classified_item(item, cto_item, "runtime_lint_safe_fix")
 
     if safe_candidates:
         safe_candidates.sort(key=lambda x: x[0])
