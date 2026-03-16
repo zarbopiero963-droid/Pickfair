@@ -112,6 +112,7 @@ def main() -> int:
         failures = None
 
     executed_targets = targeted_tests.get("targets", []) or []
+    executed_count = int((targeted_tests.get("summary", {}) or {}).get("executed_count", 0) or 0)
 
     review = {
         "review_verdict": "reject",
@@ -137,7 +138,7 @@ def main() -> int:
         if is_contract_file(target) and issue_type == "missing_public_contract":
             review["contract_restored"] = True
 
-        if failures == 0:
+        if failures == 0 and executed_count > 0:
             review["review_verdict"] = "approve"
             review["summary"] = "Patch verified and targeted tests passed."
             review["reasons"] = [
@@ -168,14 +169,14 @@ def main() -> int:
         review["logic_preserved"] = classification in {"AUTO_FIX_SAFE", "AUTO_FIX_REVIEW"}
         review["contract_restored"] = bool(is_contract_file(target) and issue_type == "missing_public_contract")
 
-        if is_runtime_python(target) and failures == 0:
+        if is_runtime_python(target) and failures == 0 and executed_count > 0:
             review["review_verdict"] = "approve"
             review["summary"] = "Runtime patch was review-level but targeted tests passed."
             review["reasons"] = [
                 f"Target runtime file: {target}",
                 "Review-level patch promoted because targeted tests are green.",
             ]
-        elif is_runtime_python(target) and failures is None:
+        elif is_runtime_python(target) and executed_count == 0:
             review["review_verdict"] = "review"
             review["summary"] = "Runtime patch changed code, but there is no targeted test evidence yet."
             review["reasons"] = [
