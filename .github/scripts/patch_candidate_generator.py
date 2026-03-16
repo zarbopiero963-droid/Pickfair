@@ -47,6 +47,17 @@ def normalize_path(path_str: str) -> str:
     return raw.lstrip("./")
 
 
+def repo_exists(rel_path: str) -> bool:
+    rel = normalize_path(rel_path)
+    if not rel:
+        return False
+    return (ROOT / rel).exists()
+
+
+def is_python(path_str: str) -> bool:
+    return normalize_path(path_str).lower().endswith(".py")
+
+
 def is_runtime_python(path_str: str) -> bool:
     rel = normalize_path(path_str).lower()
     return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
@@ -74,6 +85,15 @@ def is_github_script(path_str: str) -> bool:
     return normalize_path(path_str).lower().startswith(".github/scripts/")
 
 
+def is_contract_like_target(path_str: str) -> bool:
+    rel = normalize_path(path_str)
+    return rel in {
+        "auto_updater.py",
+        "executor_manager.py",
+        "tests/fixtures/system_payloads.py",
+    }
+
+
 def unique_keep(items, limit: int | None = None) -> list[str]:
     out = []
     seen = set()
@@ -91,12 +111,13 @@ def unique_keep(items, limit: int | None = None) -> list[str]:
 def build_notes(*groups) -> list[str]:
     return unique_keep(
         [str(item).strip() for group in groups for item in (group or []) if str(item).strip()],
-        16,
+        18,
     )
 
 
 def cto_priority_map(cto_payload: dict) -> dict:
     result = {}
+
     for item in cto_payload.get("repair_order", []) or []:
         key = normalize_path(item.get("file", "") or item.get("target_file", ""))
         if key and key not in result:
@@ -107,6 +128,7 @@ def cto_priority_map(cto_payload: dict) -> dict:
             key = normalize_path(item.get("file", "") or item.get("target_file", ""))
             if key and key not in result:
                 result[key] = item
+
     return result
 
 
@@ -129,14 +151,40 @@ def test_failure_context_map(test_failure_ctx: dict) -> dict:
     return result
 
 
-def ci_failure_map(ci_payload: dict) -> dict:
+def ci_failure_map() -> dict:
+    payload = read_json(AUDIT_OUT / "ci_failure_context.json")
+    if not payload:
+        payload = read_json(AUDIT_OUT / "ci_failures.json")
+
     result = {}
-    for item in ci_payload.get("ci_failures", []) or []:
+    for item in payload.get("ci_failures", []) or []:
         key = normalize_path(item.get("target_file", ""))
         if not key:
             continue
         result.setdefault(key, []).append(item)
     return result
+
+
+def ci_issue_counts(ci_map: dict) -> dict[str, int]:
+    counts = {
+        "missing_public_contract": 0,
+        "runtime_failure": 0,
+        "lint_failure": 0,
+        "test_failure": 0,
+        "ci_failure": 0,
+        "missing_nominal_test": 0,
+    }
+    for items in ci_map.values():
+        for item in items:
+            issue_type = str(item.get("issue_type", "")).strip()
+            if issue_type in counts:
+                counts[issue_type] += 1
+    return counts
+
+
+def has_real_runtime_or_lint_pressure(ci_map: dict) -> bool:
+    counts = ci_issue_counts(ci_map)
+    return (counts.get("runtime_failure", 0) + counts.get("lint_failure", 0)) > 0
 
 
 def detect_strategy(target_file: str, issue_type: str, classification: str) -> str:
@@ -145,13 +193,13 @@ def detect_strategy(target_file: str, issue_type: str, classification: str) -> s
     if issue_type == "missing_public_contract":
         return "compatibility_contract_fix"
     if issue_type == "runtime_failure":
-        return "runtime_failure_review_fix"
+        return "runtime_failure_safe_fix" if classification == "AUTO_FIX_SAFE" else "runtime_failure_review_fix"
     if issue_type == "lint_failure":
         return "runtime_lint_safe_fix" if is_runtime_python(target_file) else "python_lint_safe_fix"
     if issue_type == "missing_nominal_test":
         return "generate_nominal_test"
     if issue_type == "test_failure":
-        return "reviewable_test_fix" if classification != "AUTO_FIX_SAFE" else "safe_test_fix"
+        return "safe_test_fix" if classification == "AUTO_FIX_SAFE" else "reviewable_test_fix"
     if issue_type == "ci_failure":
         return "runtime_ci_fix" if is_runtime_python(target_file) else "reviewable_ci_fix"
     return "reviewable_fix"
@@ -172,7 +220,7 @@ def derive_related_tests(item: dict, tf_ctx_map: dict) -> list[str]:
             f"tests/guardrails/test_{stem}.py",
         ]
         for guess in guesses:
-            if (ROOT / guess).exists():
+            if repo_exists(guess):
                 tests.append(guess)
 
     if target.startswith("tests/") and target.endswith(".py"):
@@ -200,11 +248,13 @@ def derive_related_source(item: dict, tf_ctx_map: dict) -> str:
 def derive_required_symbols(item: dict, repo_diag_symbols: dict) -> list[str]:
     target = normalize_path(item.get("target_file", ""))
     symbols = list(item.get("required_symbols", []) or [])
+
     if not symbols:
         for sym in repo_diag_symbols.get(target, [])[:4]:
             name = str(sym.get("symbol", "")).strip()
             if name:
                 symbols.append(name)
+
     return unique_keep(symbols, 6)
 
 
@@ -262,11 +312,13 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
         intents.append("target_is_generated_test")
     if is_guardrail_test(target_file):
         intents.append("target_is_guardrail_test")
+    if is_contract_like_target(target_file):
+        intents.append("target_is_contract_like")
 
-    return unique_keep(intents, 16)
+    return unique_keep(intents, 18)
 
 
-def score_item(item: dict, cto_item: dict, ci_map: dict) -> tuple:
+def score_item(item: dict, cto_item: dict, ci_map: dict, prefer_runtime: bool) -> tuple:
     target = normalize_path(item.get("target_file", ""))
     issue_type = str(item.get("issue_type", "")).strip()
     classification = str(item.get("classification", "")).strip()
@@ -278,9 +330,9 @@ def score_item(item: dict, cto_item: dict, ci_map: dict) -> tuple:
         "missing_public_contract": 0,
         "runtime_failure": 1,
         "lint_failure": 2,
-        "missing_nominal_test": 3,
-        "test_failure": 4,
-        "ci_failure": 5,
+        "test_failure": 3,
+        "ci_failure": 4,
+        "missing_nominal_test": 5,
         "contract_test_failure": 6,
         "generic": 9,
     }
@@ -290,23 +342,35 @@ def score_item(item: dict, cto_item: dict, ci_map: dict) -> tuple:
         "HUMAN_ONLY": 9,
     }
 
-    target_kind_rank = 7
-    if is_runtime_python(target):
+    target_kind_rank = 9
+    if is_contract_like_target(target):
         target_kind_rank = 0
-    elif is_generated_test(target):
+    elif is_runtime_python(target):
         target_kind_rank = 1
-    elif is_test_python(target) and not is_guardrail_test(target):
-        target_kind_rank = 2
+    elif is_test_python(target) and not is_guardrail_test(target) and not is_generated_test(target):
+        target_kind_rank = 4
     elif is_guardrail_test(target):
-        target_kind_rank = 3
+        target_kind_rank = 7
+    elif is_generated_test(target):
+        target_kind_rank = 8
 
     ci_hits = len(ci_map.get(target, []))
+
+    # penalità forte per generated tests quando ci sono runtime/lint reali
+    generated_penalty = 0
+    if prefer_runtime and is_generated_test(target):
+        generated_penalty = 50
+
+    # premio forte ai runtime veri quando il CI ha pressione runtime/lint
+    runtime_bonus = -20 if (prefer_runtime and is_runtime_python(target)) else 0
 
     return (
         priority_rank.get(cto_priority, 9),
         issue_rank.get(issue_type, 99),
         class_rank.get(classification, 99),
         target_kind_rank,
+        generated_penalty,
+        runtime_bonus,
         -ci_hits,
         target,
     )
@@ -319,11 +383,13 @@ def choose_from_classified_items(
     tf_ctx_map: dict,
     ci_map: dict,
 ) -> dict | None:
+    prefer_runtime = has_real_runtime_or_lint_pressure(ci_map)
     ranked = []
 
     for item in classification_payload.get("fix_contexts", []) or []:
         target = normalize_path(item.get("target_file", ""))
         classification = str(item.get("classification", "")).strip()
+        issue_type = str(item.get("issue_type", "")).strip()
 
         if not target:
             continue
@@ -334,8 +400,12 @@ def choose_from_classified_items(
         if is_hft_test(target):
             continue
 
+        # Se ci sono failure runtime/lint reali, non vogliamo partire da generated tests
+        if prefer_runtime and issue_type == "missing_nominal_test" and is_generated_test(target):
+            continue
+
         cto_item = cto_map.get(target) or cto_map.get(normalize_path(item.get("related_source_file", ""))) or {}
-        ranked.append((score_item(item, cto_item, ci_map), item, cto_item))
+        ranked.append((score_item(item, cto_item, ci_map, prefer_runtime), item, cto_item))
 
     if not ranked:
         return None
@@ -357,13 +427,14 @@ def choose_from_classified_items(
         best_item.get("notes", []) or [],
         best_item.get("classification_reasons", []) or [],
         cto_item.get("reasons", []) if cto_item else [],
-        [x.get("signal", "") for x in ci_items[:3]],
+        [x.get("signal", "") for x in ci_items[:4]],
         [
             f"strategy={strategy}",
             f"issue_type={issue_type}",
             f"classification={classification}",
             f"target_file={target_file}",
             f"related_source_file={related_source_file}" if related_source_file else "",
+            f"runtime_or_lint_pressure={prefer_runtime}",
         ],
     )
 
@@ -382,7 +453,11 @@ def choose_from_classified_items(
     }
 
 
-def choose_generated_test_candidate(test_gap: dict, cto_map: dict) -> dict | None:
+def choose_generated_test_candidate(test_gap: dict, cto_map: dict, ci_map: dict) -> dict | None:
+    # fallback solo se NON esistono runtime/lint reali
+    if has_real_runtime_or_lint_pressure(ci_map):
+        return None
+
     generated = test_gap.get("generated_tests", []) or []
     if not generated:
         return None
@@ -414,6 +489,7 @@ def choose_generated_test_candidate(test_gap: dict, cto_map: dict) -> dict | Non
             [
                 "generated nominal test from diagnostics",
                 f"source_file={source_file}" if source_file else "",
+                "fallback path used because no runtime/lint pressure was detected",
             ],
             cto_item.get("reasons", []) if cto_item else [],
         ),
@@ -479,14 +555,13 @@ def main() -> int:
         "repo_diag": read_json(AUDIT_OUT / "repo_diagnostics_context.json"),
         "test_gap": read_json(AUDIT_OUT / "test_gap_generation_report.json"),
         "cto": read_json(AUDIT_OUT / "ai_cto_layer.json"),
-        "ci_failure": read_json(AUDIT_OUT / "ci_failures.json"),
         "test_failure_context": read_json(AUDIT_OUT / "test_failure_context.json"),
     }
 
     cto_map = cto_priority_map(contexts["cto"])
     repo_diag_symbols = repo_diag_symbol_map(contexts["repo_diag"])
     tf_ctx_map = test_failure_context_map(contexts["test_failure_context"])
-    ci_map = ci_failure_map(contexts["ci_failure"])
+    ci_map = ci_failure_map()
 
     candidate = choose_from_classified_items(
         contexts["classification"],
@@ -497,7 +572,7 @@ def main() -> int:
     )
 
     if not candidate:
-        candidate = choose_generated_test_candidate(contexts["test_gap"], cto_map)
+        candidate = choose_generated_test_candidate(contexts["test_gap"], cto_map, ci_map)
 
     if not candidate:
         result = {
