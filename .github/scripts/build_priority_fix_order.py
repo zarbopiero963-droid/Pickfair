@@ -26,209 +26,251 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def normalize_contracts(raw_contracts):
-    normalized = []
-
-    for item in raw_contracts or []:
-        if isinstance(item, dict):
-            file = item.get("file", "sconosciuto")
-            symbol = item.get("symbol", item.get("title", "sconosciuto"))
-            normalized.append((file, symbol))
-        elif isinstance(item, (list, tuple)) and len(item) >= 2:
-            normalized.append((str(item[0]), str(item[1])))
-        elif isinstance(item, str):
-            normalized.append((item, "symbol"))
-    return normalized
+def write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def normalize_ranking(raw_ranking):
-    normalized = []
-
-    for item in raw_ranking or []:
-        if isinstance(item, dict):
-            file = item.get("file", "sconosciuto")
-            score = item.get("score", "?")
-            normalized.append((file, score))
-        elif isinstance(item, (list, tuple)) and len(item) >= 2:
-            normalized.append((str(item[0]), item[1]))
-        elif isinstance(item, str):
-            normalized.append((item, "?"))
-    return normalized
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
 
-def group_fixes(contracts, ai_reasoning):
-    p0 = []
-    p1 = []
-    p2 = []
+def issue_rank(issue_type: str) -> int:
+    rank = {
+        "missing_public_contract": 0,
+        "contract_test_failure": 1,
+        "runtime_failure": 2,
+        "lint_failure": 3,
+        "test_failure": 4,
+        "missing_nominal_test": 5,
+        "ci_failure": 6,
+        "generic": 9,
+    }
+    return rank.get(str(issue_type or "").strip(), 99)
 
-    seen = set()
 
-    for file, symbol in contracts:
-        key = (file, symbol)
-        if key in seen:
+def priority_rank(priority: str) -> int:
+    return {"P0": 0, "P1": 1, "P2": 2}.get(str(priority or "").strip().upper(), 9)
+
+
+def classify_smell(item: dict) -> str:
+    issue_type = str(item.get("issue_type", "")).strip()
+    target_file = normalize_path(item.get("target_file", ""))
+
+    if issue_type in {"runtime_failure", "lint_failure", "test_failure"}:
+        return "active_failure"
+    if issue_type in {"missing_public_contract", "contract_test_failure"}:
+        return "contract_risk"
+    if issue_type == "missing_nominal_test":
+        return "coverage_gap"
+    if target_file.startswith("tests/"):
+        return "test_area"
+    return "generic"
+
+
+def collect_priorities(fix_context: dict, cto_layer: dict) -> list[dict]:
+    cto_map = {}
+    for item in cto_layer.get("repair_order", []) or []:
+        file_path = normalize_path(item.get("file", ""))
+        if file_path and file_path not in cto_map:
+            cto_map[file_path] = item
+
+    items = []
+    for item in fix_context.get("fix_contexts", []) or []:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
             continue
-        seen.add(key)
 
-        p0.append({
-            "title": f"Ripristinare simbolo pubblico {symbol}",
-            "file": file,
-            "why": f"I test si aspettano {symbol} dal modulo {file}.",
-            "tests": [],
-        })
+        related_source_file = normalize_path(item.get("related_source_file", ""))
+        issue_type = str(item.get("issue_type", "")).strip() or "generic"
+        priority = str(item.get("priority", "")).strip().upper() or "P2"
+        cto = cto_map.get(target_file) or cto_map.get(related_source_file) or {}
 
-    for item in ai_reasoning.get("fix_suggestions", []):
-        title = item.get("title", "Fix suggestion")
-        files = item.get("files", [])
-        change = item.get("change", "")
-        risk = item.get("risk", "unknown")
+        items.append(
+            {
+                "target_file": target_file,
+                "related_source_file": related_source_file,
+                "priority": priority,
+                "issue_type": issue_type,
+                "classification": str(item.get("classification", "")).strip(),
+                "cto_priority": str(cto.get("priority", "")).strip(),
+                "cto_kind": str(cto.get("kind", "")).strip(),
+                "related_tests": item.get("related_tests", []) or [],
+                "notes": item.get("notes", []) or [],
+                "smell": classify_smell(item),
+            }
+        )
 
-        entry = {
-            "title": title,
-            "files": files,
-            "change": change,
-            "risk": risk,
-        }
-
-        if risk == "low":
-            p1.append(entry)
-        else:
-            p2.append(entry)
-
-    return p0, p1, p2
+    items.sort(
+        key=lambda x: (
+            priority_rank(x.get("priority", "")),
+            issue_rank(x.get("issue_type", "")),
+            0 if str(x.get("classification", "")).strip() == "AUTO_FIX_SAFE" else 1,
+            normalize_path(x.get("target_file", "")),
+        )
+    )
+    return items
 
 
-def collect_targeted_tests(ai_reasoning):
-    tests = []
+def extract_targets_by_priority(items: list[dict], wanted_priority: str) -> list[str]:
+    out = []
     seen = set()
+    for item in items:
+        if str(item.get("priority", "")).strip().upper() != wanted_priority:
+            continue
+        target = normalize_path(item.get("target_file", ""))
+        if target and target not in seen:
+            seen.add(target)
+            out.append(target)
+    return out
 
-    for block in ai_reasoning.get("targeted_tests", []):
-        for test in block.get("tests", []):
-            if test not in seen:
+
+def extract_tests_to_run(items: list[dict]) -> list[str]:
+    out = []
+    seen = set()
+    for item in items:
+        for test in item.get("related_tests", []) or []:
+            test = normalize_path(test)
+            if test and test not in seen:
                 seen.add(test)
-                tests.append(test)
+                out.append(test)
+    return out[:12]
 
-    return tests
+
+def extract_fragile_modules(items: list[dict]) -> list[str]:
+    out = []
+    seen = set()
+    for item in items:
+        target = normalize_path(item.get("target_file", ""))
+        if not target or target.startswith("tests/") or target.startswith(".github/"):
+            continue
+        if target in seen:
+            continue
+        seen.add(target)
+        out.append(target)
+    return out[:10]
 
 
-def build_report(audit_machine, ai_reasoning):
-    contracts = normalize_contracts(audit_machine.get("contracts", []))
-    ranking = normalize_ranking(audit_machine.get("ranking", []))
-    smells = audit_machine.get("smells", {})
+def extract_smells(items: list[dict]) -> list[str]:
+    out = []
+    seen = set()
+    for item in items:
+        smell = str(item.get("smell", "")).strip()
+        if smell and smell not in seen:
+            seen.add(smell)
+            out.append(smell)
+    return out[:8]
 
-    p0, p1, p2 = group_fixes(contracts, ai_reasoning)
-    targeted_tests = collect_targeted_tests(ai_reasoning)
+
+def build_markdown(items: list[dict]) -> str:
+    p0_targets = extract_targets_by_priority(items, "P0")
+    p1_targets = extract_targets_by_priority(items, "P1")
+    p2_targets = extract_targets_by_priority(items, "P2")
+    tests_to_run = extract_tests_to_run(items)
+    fragile_modules = extract_fragile_modules(items)
+    smells = extract_smells(items)
 
     lines = []
-
     lines.append("Priority Fix Order")
-    lines.append("")
     lines.append("Sì. Questo file ordina i fix nel modo più utile per sbloccare la CI senza fare modifiche inutili.")
-    lines.append("")
     lines.append("Strategia consigliata")
-    lines.append("")
     lines.append("1. Chiudere prima i blocker di contratto pubblico.")
     lines.append("2. Rilanciare solo i test direttamente collegati.")
     lines.append("3. Solo dopo passare ai moduli fragili e agli smells.")
     lines.append("")
 
     lines.append("P0 — da sistemare subito")
-    if p0:
-        for idx, item in enumerate(p0, start=1):
-            lines.append(f"{idx}. {item['title']}")
-            lines.append(f"   - file: {item['file']}")
-            lines.append(f"   - motivo: {item['why']}")
+    if p0_targets:
+        for item in p0_targets:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessun P0 rilevato.")
-    lines.append("")
 
     lines.append("P1 — fix consigliati subito dopo i P0")
-    if p1:
-        for idx, item in enumerate(p1, start=1):
-            lines.append(f"{idx}. {item['title']}")
-            files = item.get("files", [])
-            if files:
-                lines.append(f"   - file: {', '.join(files)}")
-            lines.append(f"   - modifica: {item.get('change', '')}")
-            lines.append(f"   - rischio: {item.get('risk', 'unknown')}")
+    if p1_targets:
+        for item in p1_targets:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessun P1 suggerito.")
-    lines.append("")
 
     lines.append("P2 — da verificare dopo che la CI riparte")
-    if p2:
-        for idx, item in enumerate(p2, start=1):
-            lines.append(f"{idx}. {item['title']}")
-            files = item.get("files", [])
-            if files:
-                lines.append(f"   - file: {', '.join(files)}")
-            lines.append(f"   - modifica: {item.get('change', '')}")
-            lines.append(f"   - rischio: {item.get('risk', 'unknown')}")
+    if p2_targets:
+        for item in p2_targets:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessun P2 suggerito.")
-    lines.append("")
 
     lines.append("Test da rilanciare prima")
-    if targeted_tests:
-        for test in targeted_tests:
-            lines.append(f"- {test}")
+    if tests_to_run:
+        for item in tests_to_run:
+            lines.append(f"- {item}")
     else:
-        lines.append("- Nessun targeted test suggerito.")
-    lines.append("")
+        lines.append("- Nessun test mirato disponibile.")
 
     lines.append("Top moduli fragili da controllare dopo i blocker")
-    if ranking:
-        for file, score in ranking[:10]:
-            lines.append(f"- {file} (score {score})")
+    if fragile_modules:
+        for item in fragile_modules:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessun modulo in ranking.")
-    lines.append("")
 
     lines.append("Smells principali")
     if smells:
-        for key, value in smells.items():
-            lines.append(f"- {key}: {value}")
+        for item in smells:
+            lines.append(f"- {item}")
     else:
         lines.append("- Nessuno.")
-    lines.append("")
 
     lines.append("Ordine operativo consigliato")
-    lines.append("")
-    if contracts:
-        unique_files = []
-        seen_files = set()
-        for file, _symbol in contracts:
-            if file not in seen_files:
-                seen_files.add(file)
-                unique_files.append(file)
-
-        for idx, file in enumerate(unique_files, start=1):
-            lines.append(f"{idx}. sistemare {file}")
+    if p0_targets:
+        for idx, item in enumerate(p0_targets[:5], start=1):
+            lines.append(f"{idx}. {item}")
+    elif p1_targets:
+        for idx, item in enumerate(p1_targets[:5], start=1):
+            lines.append(f"{idx}. {item}")
     else:
         lines.append("1. nessun blocker contrattuale immediato")
-    lines.append("")
 
     lines.append("Verdetto finale")
-    if contracts:
-        lines.append(
-            "La mossa corretta è chiudere prima i simboli pubblici mancanti. Tutto il resto viene dopo."
-        )
+    if p0_targets:
+        lines.append("Esistono blocker reali: va sistemato prima il gruppo P0.")
     else:
-        lines.append(
-            "Non emergono blocker contrattuali immediati; puoi passare ai fix sui moduli fragili."
-        )
-    lines.append("")
+        lines.append("Non emergono blocker contrattuali immediati; puoi passare ai fix sui moduli fragili.")
 
     return "\n".join(lines)
 
 
-def main():
-    audit_machine = read_json(AUDIT_OUT / "audit_machine.json")
-    ai_reasoning = read_json(AUDIT_OUT / "ai_reasoning.json")
+def main() -> int:
+    fix_context = read_json(AUDIT_OUT / "fix_context.json")
+    cto_layer = read_json(AUDIT_OUT / "ai_cto_layer.json")
 
-    report = build_report(audit_machine, ai_reasoning)
-    write_text(AUDIT_OUT / "priority_fix_order.md", report)
+    items = collect_priorities(fix_context, cto_layer)
 
-    print(report)
+    payload = {
+        "items": items,
+        "summary": {
+            "P0_count": len(extract_targets_by_priority(items, "P0")),
+            "P1_count": len(extract_targets_by_priority(items, "P1")),
+            "P2_count": len(extract_targets_by_priority(items, "P2")),
+            "tests_to_run_count": len(extract_tests_to_run(items)),
+        },
+    }
+
+    md = build_markdown(items)
+
+    write_json(AUDIT_OUT / "priority_fix_order.json", payload)
+    write_text(AUDIT_OUT / "priority_fix_order.md", md)
+
+    print(md)
     return 0
 
 
