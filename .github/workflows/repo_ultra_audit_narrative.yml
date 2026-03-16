@@ -1,23 +1,16 @@
 name: Repo Ultra Audit Narrative
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
   pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
-  actions: read
   pull-requests: write
-  issues: write
-
-concurrency:
-  group: repo-ultra-audit-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  actions: read
 
 jobs:
   ultra-audit:
@@ -35,59 +28,43 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
       - name: Install dependencies
         shell: bash
         run: |
-          set +e
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-          fi
-          pip install pytest requests telethon customtkinter ruff
-          set -e
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest ruff requests telethon customtkinter
 
-      - name: Prepare output folders
+      - name: Create folders
         run: |
           mkdir -p audit_out
           mkdir -p audit_raw
           mkdir -p audit_raw/external_ci_logs
           mkdir -p tests/generated
 
-      - name: Verify scripts exist
+      - name: Verify required scripts
+        shell: bash
         run: |
           test -f .github/scripts/repo_ultra_audit_narrative.py
-          test -f .github/scripts/extract_failing_tests.py
-          test -f .github/scripts/ai_reasoning_layer.py
-          test -f .github/scripts/build_priority_fix_order.py
+          test -f .github/scripts/load_repo_diagnostics.py
+          test -f .github/scripts/ci_failure_aggregator.py
+          test -f .github/scripts/issue_classifier.py
           test -f .github/scripts/build_test_failure_context.py
           test -f .github/scripts/build_fix_context.py
-          test -f .github/scripts/workflow_signal_aggregator.py
-          test -f .github/scripts/patch_candidate_generator.py
-          test -f .github/scripts/patch_verifier.py
-          test -f .github/scripts/apply_patch_candidate.py
-          test -f .github/scripts/post_patch_review.py
-          test -f .github/scripts/build_merge_summary.py
-          test -f .github/scripts/build_pr_comment.py
-          test -f .github/scripts/ai_repair_loop.py
-          test -f .github/scripts/run_targeted_tests.py
-          test -f .github/scripts/repair_orchestrator.py
-          test -f .github/scripts/merge_controller.py
-          test -f .github/scripts/repair_memory.py
-          test -f .github/scripts/issue_classifier.py
-          test -f .github/scripts/ci_failure_aggregator.py
-          test -f .github/scripts/load_repo_diagnostics.py
-          test -f .github/scripts/test_gap_generator.py
-          test -f .github/scripts/final_pr_gate.py
           test -f .github/scripts/ai_cto_layer.py
-          test -f .github/scripts/generate_repo_autopsy.py
-          test -f .github/scripts/generate_repo_api_report_v4.py
-          test -f .github/scripts/generate_repo_fix_backlog.py
-          echo "Scripts found."
+          test -f .github/scripts/build_priority_fix_order.py
+          test -f .github/scripts/patch_candidate_generator.py
+          test -f .github/scripts/apply_patch_candidate.py
+          test -f .github/scripts/patch_verifier.py
+          test -f .github/scripts/run_targeted_tests.py
+          test -f .github/scripts/post_patch_review.py
+          test -f .github/scripts/merge_controller.py
+          test -f .github/scripts/ai_repair_loop.py
+          test -f .github/scripts/repair_orchestrator.py
+          test -f .github/scripts/final_pr_gate.py
+          test -f .github/scripts/test_gap_generator.py
+          echo "All required scripts found."
 
       - name: Detect workflow mode
         id: mode
@@ -95,656 +72,140 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "workflow_mode=pr_validation" >> "$GITHUB_OUTPUT"
-            echo "Workflow mode: pr_validation"
           else
             echo "workflow_mode=full_repair" >> "$GITHUB_OUTPUT"
-            echo "Workflow mode: full_repair"
           fi
+          echo "Workflow mode: $(cat "$GITHUB_OUTPUT" | tail -n 1 | cut -d= -f2)"
 
-      - name: Load AI Governance Docs
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p audit_raw
-          if [ -f docs/REPO_RADIOGRAPHY.md ]; then
-            cat docs/REPO_RADIOGRAPHY.md > audit_raw/ai_governance_context.md
-          else
-            : > audit_raw/ai_governance_context.md
-          fi
-          echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
-          if [ -f docs/AI_RULEBOOK.md ]; then
-            cat docs/AI_RULEBOOK.md >> audit_raw/ai_governance_context.md
-          fi
-          echo -e "\n\n---\n\n" >> audit_raw/ai_governance_context.md
-          if [ -f docs/AI_AGENT_PROTOCOL.md ]; then
-            cat docs/AI_AGENT_PROTOCOL.md >> audit_raw/ai_governance_context.md
-          fi
+      # -----------------------------
+      # REPO RADIOGRAPHY
+      # -----------------------------
 
-      - name: Show AI governance context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ AI GOVERNANCE CONTEXT ====================="
-          if [ -f audit_raw/ai_governance_context.md ]; then
-            head -c 4000 audit_raw/ai_governance_context.md || true
-            echo ""
-          else
-            echo "ai_governance_context.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Build PR validation fallback state
-        if: steps.mode.outputs.workflow_mode == 'pr_validation'
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          out = Path("audit_out")
-          out.mkdir(parents=True, exist_ok=True)
-
-          state = {
-              "final_status": "pr_validation_mode",
-              "repo_materially_greener": False,
-              "repo_fully_green": False,
-              "continuation_recommended": False,
-              "next_action": "validate_existing_pr_only",
-              "cycles": [],
-          }
-
-          report = "\n".join([
-              "AI Repair Loop Report",
-              "",
-              "Final status: pr_validation_mode",
-              "Max cycles: 0",
-              "Repo materially greener: NO",
-              "Repo fully green: NO",
-              "Continuation recommended: NO",
-              "Next action: validate_existing_pr_only",
-              "",
-              "This run was triggered by pull_request.",
-              "Repair loop intentionally skipped to avoid generating a second patch on top of an existing AI patch PR.",
-              "",
-          ])
-
-          (out / "ai_repair_loop_state.json").write_text(
-              json.dumps(state, indent=2, ensure_ascii=False),
-              encoding="utf-8",
-          )
-          (out / "ai_repair_loop_report.md").write_text(report, encoding="utf-8")
-          print(report)
-          PY
-
-      - name: Discover existing AI PR
-        if: always()
-        id: existing_ai_pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          output_path = Path(os.environ["GITHUB_OUTPUT"])
-
-          result = subprocess.run(
-              [
-                  "gh", "pr", "list",
-                  "--state", "open",
-                  "--search", "AI Repair Patch in:title",
-                  "--json", "number,headRefName,state"
-              ],
-              capture_output=True,
-              text=True,
-          )
-
-          number = ""
-          state = ""
-          head = ""
-
-          if result.returncode == 0:
-              try:
-                  items = json.loads(result.stdout or "[]")
-              except Exception:
-                  items = []
-
-              if items:
-                  first = items[0]
-                  number = str(first.get("number", "")).strip()
-                  state = str(first.get("state", "")).strip().lower()
-                  head = str(first.get("headRefName", "")).strip()
-
-          with output_path.open("a", encoding="utf-8") as f:
-              f.write(f"number={number}\n")
-              f.write(f"state={state}\n")
-              f.write(f"head={head}\n")
-
-          print(f"Existing AI PR number: {number or 'none'}")
-          print(f"Existing AI PR state: {state or 'none'}")
-          print(f"Existing AI PR head: {head or 'none'}")
-          PY
-
-      - name: Run deterministic repo audit
-        if: always()
+      - name: Repo ultra audit narrative
+        continue-on-error: true
         run: |
           python .github/scripts/repo_ultra_audit_narrative.py
-        continue-on-error: true
-
-      - name: Extract failing tests
-        if: always()
-        run: |
-          python .github/scripts/extract_failing_tests.py
-        continue-on-error: true
-
-      - name: AI reasoning layer
-        if: always()
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
-          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
-          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
-        run: |
-          python .github/scripts/ai_reasoning_layer.py
-        continue-on-error: true
-
-      - name: Build priority fix order
-        if: always()
-        run: |
-          python .github/scripts/build_priority_fix_order.py
-        continue-on-error: true
-
-      - name: Generate repository diagnostics reports
-        if: always()
-        shell: bash
-        run: |
-          python .github/scripts/generate_repo_autopsy.py
-          python .github/scripts/generate_repo_api_report_v4.py
-          python .github/scripts/generate_repo_fix_backlog.py
-        continue-on-error: true
-
-      - name: Show generated repository diagnostics reports
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ GENERATED REPO DIAGNOSTICS ================"
-          find audit_out -maxdepth 1 -type f \
-            \( -name "repo_api_report_v4.json" \
-            -o -name "repo_autopsy_summary.json" \
-            -o -name "repo_autopsy.json" \
-            -o -name "repo_fix_backlog.json" \
-            -o -name "repo_fix_backlog_pretty.md" \) \
-            | sort || true
-          echo "============================================================"
-
-      - name: Collect recent failed external CI logs into audit_raw
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          CURRENT_WORKFLOW: Repo Ultra Audit Narrative
-          CURRENT_BRANCH: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          out_dir = Path("audit_raw/external_ci_logs")
-          out_dir.mkdir(parents=True, exist_ok=True)
-
-          repo = os.environ["GH_REPO"]
-          current_workflow = os.environ["CURRENT_WORKFLOW"]
-          current_branch = os.environ["CURRENT_BRANCH"]
-
-          wanted = {
-              "Pickfair Ultra CI Pipeline",
-              "Pickfair CI Pipeline",
-              "AI Guardrails",
-              "Full Test & Coverage Gate",
-              "Full Test Suite",
-              "tests.yml",
-              "run_tests.yml",
-              "Repo Update Engine ULTRA",
-          }
-
-          cmd = [
-              "gh", "run", "list",
-              "--repo", repo,
-              "--branch", current_branch,
-              "--limit", "30",
-              "--json", "databaseId,name,conclusion,status,headBranch"
-          ]
-          result = subprocess.run(cmd, capture_output=True, text=True)
-
-          if result.returncode != 0:
-              print("Unable to query workflow runs.")
-              print(result.stderr)
-              raise SystemExit(0)
-
-          try:
-              runs = json.loads(result.stdout or "[]")
-          except Exception:
-              runs = []
-
-          selected = []
-          for run in runs:
-              name = str(run.get("name", "")).strip()
-              conclusion = str(run.get("conclusion", "")).strip().lower()
-
-              if not name or name == current_workflow:
-                  continue
-              if name not in wanted:
-                  continue
-              if conclusion not in {"failure", "cancelled", "startup_failure", "timed_out", "action_required"}:
-                  continue
-
-              selected.append(run)
-
-          selected = selected[:8]
-
-          print(f"Selected failed external CI runs: {len(selected)}")
-
-          for run in selected:
-              run_id = str(run.get("databaseId", "")).strip()
-              run_name = str(run.get("name", "")).strip()
-              safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_name).strip("_")
-              log_path = out_dir / f"{safe_name}_{run_id}.log"
-
-              cmd = [
-                  "gh", "run", "view", run_id,
-                  "--repo", repo,
-                  "--log"
-              ]
-              view = subprocess.run(cmd, capture_output=True, text=True)
-
-              if view.returncode != 0:
-                  fallback = (
-                      f"Workflow: {run_name}\n"
-                      f"Run ID: {run_id}\n"
-                      f"Conclusion: {run.get('conclusion')}\n"
-                      f"Status: {run.get('status')}\n"
-                      f"Unable to fetch full logs.\n"
-                      f"stderr:\n{view.stderr}\n"
-                  )
-                  log_path.write_text(fallback, encoding="utf-8")
-                  continue
-
-              content = (
-                  f"Workflow: {run_name}\n"
-                  f"Run ID: {run_id}\n"
-                  f"Conclusion: {run.get('conclusion')}\n"
-                  f"Status: {run.get('status')}\n\n"
-                  f"{view.stdout}"
-              )
-              log_path.write_text(content, encoding="utf-8")
-
-          print("External CI log collection completed.")
-          PY
-
-      - name: Show external CI log files
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ EXTERNAL CI LOG FILES ====================="
-          if [ -d audit_raw/external_ci_logs ]; then
-            find audit_raw/external_ci_logs -maxdepth 1 -type f | sort || true
-          else
-            echo "No external CI log directory."
-          fi
-          echo "============================================================"
-
-      - name: Build CI failure context
-        if: always()
-        run: |
-          python .github/scripts/ci_failure_aggregator.py
-        continue-on-error: true
-
-      - name: Show CI failure context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ CI FAILURE CONTEXT ========================"
-          if [ -f audit_out/ci_failure_context.json ]; then
-            cat audit_out/ci_failure_context.json
-          else
-            echo "ci_failure_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Rebuild test failure context after CI ingestion
-        if: always()
-        run: |
-          python .github/scripts/build_test_failure_context.py
-        continue-on-error: true
-
-      - name: Rebuild fix context after CI ingestion
-        if: always()
-        run: |
-          python .github/scripts/build_fix_context.py
-        continue-on-error: true
-
-      - name: Show rebuilt fix context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ REBUILT FIX CONTEXT ======================="
-          if [ -f audit_out/fix_context.json ]; then
-            cat audit_out/fix_context.json
-          else
-            echo "fix_context.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Run issue classifier
-        if: always()
-        run: |
-          python .github/scripts/issue_classifier.py
-        continue-on-error: true
-
-      - name: Show issue classification
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ ISSUE CLASSIFICATION ======================"
-          if [ -f audit_out/issue_classification.json ]; then
-            cat audit_out/issue_classification.json
-          else
-            echo "issue_classification.json not found"
-          fi
-          echo "============================================================"
 
       - name: Load repo diagnostics
-        if: always()
+        continue-on-error: true
         run: |
           python .github/scripts/load_repo_diagnostics.py
+
+      # -----------------------------
+      # CI FAILURE ANALYSIS
+      # -----------------------------
+
+      - name: Aggregate CI failures
         continue-on-error: true
-
-      - name: Show repo diagnostics context
-        if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ REPO DIAGNOSTICS CONTEXT =================="
-          if [ -f audit_out/repo_diagnostics_context.json ]; then
-            cat audit_out/repo_diagnostics_context.json
-          else
-            echo "repo_diagnostics_context.json not found"
-          fi
-          echo "============================================================"
+          python .github/scripts/ci_failure_aggregator.py
 
-      - name: Run AI CTO layer
-        if: always()
+      - name: Build failure context
+        continue-on-error: true
+        run: |
+          python .github/scripts/build_test_failure_context.py
+
+      - name: Rebuild fix context
+        continue-on-error: true
+        run: |
+          python .github/scripts/build_fix_context.py
+
+      - name: Classify issues
+        continue-on-error: true
+        run: |
+          python .github/scripts/issue_classifier.py
+
+      # -----------------------------
+      # CTO PRIORITY LAYER
+      # -----------------------------
+
+      - name: AI CTO layer
+        continue-on-error: true
         run: |
           python .github/scripts/ai_cto_layer.py
+
+      - name: Build priority fix order
         continue-on-error: true
-
-      - name: Show AI CTO layer output
-        if: always()
-        shell: bash
         run: |
-          echo ""
-          echo "================ AI CTO LAYER =============================="
-          if [ -f audit_out/ai_cto_layer.json ]; then
-            cat audit_out/ai_cto_layer.json
-          else
-            echo "ai_cto_layer.json not found"
-          fi
-          echo "============================================================"
+          python .github/scripts/build_priority_fix_order.py
 
-      - name: Generate missing nominal tests from diagnostics
-        if: always()
+      # -----------------------------
+      # TEST GAP GENERATION
+      # -----------------------------
+
+      - name: Generate missing tests
+        continue-on-error: true
         run: |
           python .github/scripts/test_gap_generator.py
-        continue-on-error: true
 
-      - name: Show generated nominal tests report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ TEST GAP GENERATION REPORT ================"
-          if [ -f audit_out/test_gap_generation_report.json ]; then
-            cat audit_out/test_gap_generation_report.json
-          else
-            echo "test_gap_generation_report.json not found"
-          fi
-          echo "============================================================"
-
-      - name: Build global workflow context
-        if: always()
-        run: |
-          python .github/scripts/workflow_signal_aggregator.py
-        continue-on-error: true
-
-      - name: Show global workflow context
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ GLOBAL WORKFLOW CONTEXT ==================="
-          if [ -f audit_out/global_workflow_context.md ]; then
-            cat audit_out/global_workflow_context.md
-          else
-            echo "global_workflow_context.md not found"
-          fi
-          echo "============================================================"
+      # -----------------------------
+      # PATCH GENERATION
+      # -----------------------------
 
       - name: Generate patch candidate
-        if: always()
+        continue-on-error: true
         run: |
           python .github/scripts/patch_candidate_generator.py
-        continue-on-error: true
-
-      - name: Show patch candidate
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH CANDIDATE ==========================="
-          if [ -f audit_out/patch_candidate.md ]; then
-            cat audit_out/patch_candidate.md
-          else
-            echo "patch_candidate.md not found"
-          fi
-          echo "============================================================"
 
       - name: Apply patch candidate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
+        continue-on-error: true
         run: |
           python .github/scripts/apply_patch_candidate.py
+
+      - name: Verify patch
         continue-on-error: true
-
-      - name: Show patch apply report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH APPLY REPORT ========================"
-          if [ -f audit_out/patch_apply_report.md ]; then
-            cat audit_out/patch_apply_report.md
-          else
-            echo "patch_apply_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Run patch verifier
-        if: always()
         run: |
           python .github/scripts/patch_verifier.py
-        continue-on-error: true
 
-      - name: Show patch verification
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PATCH VERIFICATION ========================"
-          if [ -f audit_out/patch_verification.md ]; then
-            cat audit_out/patch_verification.md
-          else
-            echo "patch_verification.md not found"
-          fi
-          echo "============================================================"
+      # -----------------------------
+      # TARGETED TESTS
+      # -----------------------------
 
       - name: Run targeted tests
-        if: always()
+        continue-on-error: true
         run: |
           python .github/scripts/run_targeted_tests.py
+
+      - name: Post patch review
         continue-on-error: true
-
-      - name: Show targeted test results
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ TARGETED TEST RESULTS ====================="
-          if [ -f audit_out/targeted_test_results.md ]; then
-            cat audit_out/targeted_test_results.md
-          else
-            echo "targeted_test_results.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Run post patch review
-        if: always()
         run: |
           python .github/scripts/post_patch_review.py
+
+      # -----------------------------
+      # MERGE DECISION
+      # -----------------------------
+
+      - name: Merge controller
         continue-on-error: true
-
-      - name: Show post patch review
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ POST PATCH REVIEW ========================="
-          if [ -f audit_out/post_patch_review.md ]; then
-            cat audit_out/post_patch_review.md
-          else
-            echo "post_patch_review.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Run merge controller
-        if: always()
         run: |
           python .github/scripts/merge_controller.py
-        continue-on-error: true
 
-      - name: Show merge controller report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ MERGE CONTROLLER =========================="
-          if [ -f audit_out/merge_controller_report.md ]; then
-            cat audit_out/merge_controller_report.md
-          else
-            echo "merge_controller_report.md not found"
-          fi
-          echo "============================================================"
+      # -----------------------------
+      # REPAIR LOOP
+      # -----------------------------
 
-      - name: Run AI repair loop
+      - name: AI repair loop
         if: steps.mode.outputs.workflow_mode == 'full_repair'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL_TRIAGE: openai/gpt-5.4
-          OPENROUTER_MODEL_REVIEW: openai/gpt-5.4
-          OPENROUTER_MODEL_PATCH: openai/gpt-5.3-codex
-          OPENROUTER_MODEL_CHEAP: qwen/qwen3-coder-next
-          OPENROUTER_MODEL_HUGE_CONTEXT: google/gemini-3.1-pro-preview
+        continue-on-error: true
         run: |
           python .github/scripts/ai_repair_loop.py
+
+      - name: Repair orchestrator
+        id: orchestrator
         continue-on-error: true
-
-      - name: Show repair loop report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ AI REPAIR LOOP REPORT ====================="
-          if [ -f audit_out/ai_repair_loop_report.md ]; then
-            cat audit_out/ai_repair_loop_report.md
-          else
-            echo "ai_repair_loop_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Run repair orchestrator
-        if: always()
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF: ${{ github.ref }}
-          EXISTING_AI_PR_NUMBER: ${{ steps.existing_ai_pr.outputs.number }}
-          EXISTING_AI_PR_STATE: ${{ steps.existing_ai_pr.outputs.state }}
-          EXISTING_AI_PR_HEAD: ${{ steps.existing_ai_pr.outputs.head }}
+          EXISTING_AI_PR_NUMBER: ""
+          EXISTING_AI_PR_STATE: ""
+          EXISTING_AI_PR_HEAD: ""
         run: |
           python .github/scripts/repair_orchestrator.py
-        continue-on-error: true
 
-      - name: Show repair orchestrator report
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ REPAIR ORCHESTRATOR ======================="
-          if [ -f audit_out/repair_orchestrator_report.md ]; then
-            cat audit_out/repair_orchestrator_report.md
-          else
-            echo "repair_orchestrator_report.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Build merge summary
-        if: always()
-        run: |
-          python .github/scripts/build_merge_summary.py
-        continue-on-error: true
-
-      - name: Show merge summary
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ MERGE SUMMARY ============================="
-          if [ -f audit_out/merge_summary.md ]; then
-            cat audit_out/merge_summary.md
-          else
-            echo "merge_summary.md not found"
-          fi
-          echo "============================================================"
-
-      - name: Build PR comment files
-        if: always()
-        run: |
-          python .github/scripts/build_pr_comment.py
-        continue-on-error: true
-
-      - name: Show PR comment preview
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ PR COMMENT PREVIEW ========================"
-          if [ -f audit_out/pr_comment.md ]; then
-            cat audit_out/pr_comment.md
-          else
-            echo "pr_comment.md not found"
-          fi
-          echo "============================================================"
+      # -----------------------------
+      # FINAL GATE
+      # -----------------------------
 
       - name: Final PR gate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
@@ -764,6 +225,10 @@ jobs:
           echo "real_progress=${{ steps.pr_gate.outputs.real_progress }}"
           echo "============================================================"
 
+      # -----------------------------
+      # CREATE PR
+      # -----------------------------
+
       - name: Create AI repair PR
         if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.allow_pr == 'true'
         uses: peter-evans/create-pull-request@v6
@@ -780,6 +245,10 @@ jobs:
             tests/**/*.py
             .github/scripts/**/*.py
 
+      # -----------------------------
+      # AUTO MERGE
+      # -----------------------------
+
       - name: Enable auto merge
         if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.auto_merge == 'true'
         run: |
@@ -787,11 +256,55 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts
+      # -----------------------------
+      # DEBUG OUTPUTS
+      # -----------------------------
+
+      - name: Show important audit outputs
+        if: always()
+        shell: bash
+        run: |
+          echo ""
+          echo "================ IMPORTANT OUTPUTS ========================="
+          for f in \
+            audit_out/repo_ultra_audit_narrative.md \
+            audit_out/repo_diagnostics_context.json \
+            audit_out/ci_failures.json \
+            audit_out/test_failure_context.json \
+            audit_out/fix_context.json \
+            audit_out/issue_classification.json \
+            audit_out/ai_cto_layer.json \
+            audit_out/priority_fix_order.md \
+            audit_out/test_gap_generation_report.json \
+            audit_out/patch_candidate.md \
+            audit_out/patch_apply_report.md \
+            audit_out/patch_verification.md \
+            audit_out/targeted_test_results.json \
+            audit_out/post_patch_review.md \
+            audit_out/merge_controller_report.md \
+            audit_out/ai_repair_loop_report.md \
+            audit_out/repair_orchestrator_report.md \
+            audit_out/merge_controller_state.json \
+            audit_out/ai_repair_loop_state.json \
+            audit_out/repair_orchestrator_state.json
+          do
+            if [ -f "$f" ]; then
+              echo "--- $f ---"
+              cat "$f" || true
+              echo ""
+            fi
+          done
+          echo "============================================================"
+
+      # -----------------------------
+      # SAVE ARTIFACT
+      # -----------------------------
+
+      - name: Upload audit artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: repo-ultra-audit-${{ github.run_id }}
+          name: repo-ultra-audit
           path: |
             audit_out/**
             audit_raw/**
