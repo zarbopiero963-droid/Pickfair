@@ -35,7 +35,16 @@ def write_text(path: Path, text: str) -> None:
 
 
 def normalize_path(path_str: str) -> str:
-    return str(path_str or "").strip().replace("\\", "/")
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+    except Exception:
+        pass
+    return raw.lstrip("./")
 
 
 def is_human_only_target(target_file: str, classification: str) -> bool:
@@ -50,6 +59,19 @@ def is_human_only_target(target_file: str, classification: str) -> bool:
         return True
 
     return False
+
+
+def is_runtime_python(path_str: str) -> bool:
+    rel = normalize_path(path_str).lower()
+    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
+
+
+def is_generated_test(path_str: str) -> bool:
+    return normalize_path(path_str).lower().startswith("tests/generated/")
+
+
+def is_guardrail_test(path_str: str) -> bool:
+    return normalize_path(path_str).lower().startswith("tests/guardrails/")
 
 
 def get_primary_target(issue_classification: dict, patch_candidate: dict) -> tuple[str, str]:
@@ -153,6 +175,7 @@ def main() -> int:
     issue_classification = read_json(AUDIT_OUT / "issue_classification.json")
     repair_loop_state = read_json(AUDIT_OUT / "ai_repair_loop_state.json")
     repair_orchestrator_state = read_json(AUDIT_OUT / "repair_orchestrator_state.json")
+    targeted_tests = read_json(AUDIT_OUT / "targeted_test_results.json")
 
     verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower()
     review_verdict = str(post_patch_review.get("review_verdict", "")).strip().lower()
@@ -175,6 +198,7 @@ def main() -> int:
     fix_type = str(repair_orchestrator_state.get("fix_type", "")).strip()
 
     touched_files = patch_apply_report.get("applied_targets", []) or patch_apply_report.get("target_files", []) or []
+    touched_files = [normalize_path(x) for x in touched_files if normalize_path(x)]
     if not touched_files:
         candidate = patch_candidate.get("patch_candidate") or {}
         candidate_target = normalize_path(candidate.get("target_file", ""))
@@ -191,6 +215,11 @@ def main() -> int:
     if verifier_verdict in {"approve", "weak-approve"} and review_verdict == "reject":
         verifier_consistent = False
 
+    executed_count = int((targeted_tests.get("summary", {}) or {}).get("executed_count", 0) or 0)
+    failure_count = targeted_tests.get("failure_count")
+    if not isinstance(failure_count, int):
+        failure_count = None
+
     reviewable = False
     auto_merge_safe = False
     decision = "BLOCK"
@@ -199,17 +228,17 @@ def main() -> int:
     should_wait_existing_pr = False
     should_open_or_update_pr = False
 
-    # 1. Repo già verde: nessuna PR necessaria.
+    candidate = patch_candidate.get("patch_candidate") or {}
+    issue_type = str(candidate.get("issue_type", "")).strip()
+
     if repo_fully_green or orchestrator_action == "stop_green" or loop_next_action == "repository_green_stop":
         decision = "BLOCK"
         reason = "repository_fully_green"
 
-    # 2. Target esclusi dall'auto-fix.
     elif human_only_target:
         decision = "BLOCK"
         reason = "human_only_target"
 
-    # 3. Nessun cambiamento realmente committabile.
     elif not real_committable_change:
         decision = "BLOCK"
         if not applied:
@@ -223,12 +252,10 @@ def main() -> int:
             else:
                 reason = "no_real_committable_change"
 
-    # 4. Nessuna patch reviewable.
     elif verifier_verdict == "reject" and review_verdict == "reject":
         decision = "BLOCK"
         reason = "patch_not_reviewable"
 
-    # 5. Patch approve/approve: apribile e potenzialmente mergeabile.
     elif verifier_verdict == "approve" and review_verdict == "approve":
         decision = "MERGE_READY"
         reason = "approved_patch"
@@ -239,11 +266,12 @@ def main() -> int:
             and minimal_change
             and logic_preserved
             and verifier_consistent
+            and not is_guardrail_test(primary_target)
+            and (failure_count in (0, None))
         )
         should_merge = auto_merge_safe
         should_open_or_update_pr = True
 
-    # 6. weak-approve o review positivo: apribile ma non auto-merge.
     elif verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
         decision = "REVIEW_ONLY"
         reason = "reviewable_patch"
@@ -252,7 +280,12 @@ def main() -> int:
         should_merge = False
         should_open_or_update_pr = True
 
-    # 7. C'è già una PR AI aperta e il sistema vuole aggiornarla.
+        if is_runtime_python(primary_target) and issue_type in {"runtime_failure", "lint_failure"}:
+            if executed_count == 0 and minimal_change and logic_preserved:
+                reason = "reviewable_runtime_patch"
+            elif failure_count == 0 and executed_count > 0:
+                reason = "reviewable_runtime_patch_with_green_tests"
+
     elif existing_ai_pr_number and orchestrator_action == "update_existing_ai_pr":
         if real_committable_change and verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
             decision = "REVIEW_ONLY"
@@ -263,7 +296,6 @@ def main() -> int:
             decision = "BLOCK"
             reason = "existing_pr_but_patch_not_committable"
 
-    # 8. Caso conservativo finale.
     else:
         decision = "BLOCK"
         if verifier_verdict == "reject" or review_verdict == "reject":
