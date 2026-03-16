@@ -112,10 +112,20 @@ def classification_map(classification_payload: dict) -> dict:
 
 def cto_priority_map(cto_payload: dict) -> dict:
     result = {}
-    for item in cto_payload.get("repair_order", []) or []:
-        target = normalize_path(item.get("file", ""))
-        if target and target not in result:
-            result[target] = item
+    repair_order = cto_payload.get("repair_order", []) or []
+
+    for item in repair_order:
+        file_key = normalize_path(item.get("file", "") or item.get("target_file", ""))
+        if file_key and file_key not in result:
+            result[file_key] = item
+
+    cto_priority = cto_payload.get("cto_priority", {}) or {}
+    for bucket_name in ("P0", "P1", "P2"):
+        for item in cto_priority.get(bucket_name, []) or []:
+            file_key = normalize_path(item.get("file", "") or item.get("target_file", ""))
+            if file_key and file_key not in result:
+                result[file_key] = item
+
     return result
 
 
@@ -138,10 +148,21 @@ def test_failure_context_map(test_failure_ctx: dict) -> dict:
     return result
 
 
+def ci_failure_map(ci_failure_ctx: dict) -> dict:
+    result = {}
+    items = ci_failure_ctx.get("ci_failures", []) or []
+    for item in items:
+        target = normalize_path(item.get("target_file", ""))
+        if not target:
+            continue
+        result.setdefault(target, []).append(item)
+    return result
+
+
 def build_notes(*groups) -> list[str]:
     return unique_keep(
         [str(item).strip() for group in groups for item in (group or []) if str(item).strip()],
-        12,
+        14,
     )
 
 
@@ -157,7 +178,6 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
                 "avoid_logic_redesign",
             ]
         )
-
     elif issue_type == "runtime_failure":
         intents.extend(
             [
@@ -166,7 +186,6 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
                 "avoid_large_refactor",
             ]
         )
-
     elif issue_type == "lint_failure":
         intents.extend(
             [
@@ -175,7 +194,6 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
                 "avoid_behavior_changes",
             ]
         )
-
     elif issue_type == "test_failure":
         intents.extend(
             [
@@ -184,15 +202,13 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
                 "avoid_relaxing_assertions_without_reason",
             ]
         )
-
     elif issue_type == "missing_nominal_test":
         intents.extend(
             [
                 "generate_nominal_test",
-                "avoid_mock-heavy_or_shallow_test",
+                "avoid_mock_heavy_or_shallow_test",
             ]
         )
-
     elif issue_type == "ci_failure":
         intents.extend(
             [
@@ -200,7 +216,6 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
                 "require_local_repro_or_clear_targeted_context",
             ]
         )
-
     else:
         intents.append("manual_review_first")
 
@@ -220,7 +235,7 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
     if is_contract_like_target(target_file):
         intents.append("target_is_contract_like")
 
-    return unique_keep(intents, 12)
+    return unique_keep(intents, 16)
 
 
 def derive_related_source(item: dict, tf_ctx_map: dict) -> str:
@@ -261,7 +276,7 @@ def derive_related_tests(item: dict, tf_ctx_map: dict) -> list[str]:
     if target.startswith("tests/") and target.endswith(".py"):
         tests.append(target)
 
-    return unique_keep([normalize_path(x) for x in tests if normalize_path(x)], 6)
+    return unique_keep([normalize_path(x) for x in tests if normalize_path(x)], 8)
 
 
 def derive_required_symbols(item: dict, repo_diag_symbols: dict) -> list[str]:
@@ -269,39 +284,79 @@ def derive_required_symbols(item: dict, repo_diag_symbols: dict) -> list[str]:
     symbols = list(item.get("required_symbols", []) or [])
 
     if not symbols and target in repo_diag_symbols:
-        for sym in repo_diag_symbols[target][:3]:
+        for sym in repo_diag_symbols[target][:4]:
             name = str(sym.get("symbol", "")).strip()
             if name:
                 symbols.append(name)
 
-    return unique_keep(symbols, 4)
+    return unique_keep(symbols, 6)
 
 
-def build_candidate(item: dict, cto_item: dict, repo_diag_symbols: dict, tf_ctx_map: dict, strategy: str) -> dict:
+def detect_strategy(target_file: str, issue_type: str, classification: str) -> str:
+    target_file = normalize_path(target_file)
+
+    if issue_type == "missing_public_contract":
+        return "compatibility_contract_fix"
+    if issue_type == "runtime_failure":
+        if classification == "AUTO_FIX_SAFE":
+            return "runtime_failure_safe_fix"
+        return "runtime_failure_review_fix"
+    if issue_type == "lint_failure":
+        if is_runtime_python(target_file):
+            return "runtime_lint_safe_fix"
+        return "python_lint_safe_fix"
+    if issue_type == "missing_nominal_test":
+        return "generate_nominal_test"
+    if issue_type == "test_failure":
+        if classification == "AUTO_FIX_SAFE":
+            return "safe_test_fix"
+        return "reviewable_test_fix"
+    if issue_type == "ci_failure":
+        if is_runtime_python(target_file):
+            return "runtime_ci_fix"
+        return "reviewable_ci_fix"
+    return "reviewable_fix"
+
+
+def build_candidate(
+    item: dict,
+    cto_item: dict,
+    repo_diag_symbols: dict,
+    tf_ctx_map: dict,
+    ci_map: dict,
+) -> dict:
     target_file = normalize_path(item.get("target_file", ""))
     issue_type = str(item.get("issue_type", "")).strip()
     classification = str(item.get("classification", "")).strip()
+    strategy = detect_strategy(target_file, issue_type, classification)
 
     related_source_file = derive_related_source(item, tf_ctx_map)
     related_tests = derive_related_tests(item, tf_ctx_map)
     required_symbols = derive_required_symbols(item, repo_diag_symbols)
+    ci_items = ci_map.get(target_file, []) or ci_map.get(related_source_file, []) or []
 
     notes = build_notes(
         item.get("notes", []) or [],
         item.get("classification_reasons", []) or [],
         cto_item.get("reasons", []) if cto_item else [],
+        [ci.get("signal", "") for ci in ci_items[:3]],
         [
             f"strategy={strategy}",
             f"issue_type={issue_type}",
             f"classification={classification}",
             f"target_file={target_file}",
+            f"related_source_file={related_source_file}" if related_source_file else "",
         ],
     )
 
-    cto_priority = str(cto_item.get("priority", "")).strip() if cto_item else ""
-    cto_kind = str(cto_item.get("kind", "")).strip() if cto_item else ""
+    cto_priority = str(
+        cto_item.get("priority", "") or cto_item.get("cto_priority", "")
+    ).strip()
+    cto_kind = str(
+        cto_item.get("kind", "") or cto_item.get("issue_type", "")
+    ).strip()
 
-    candidate = {
+    return {
         "strategy": strategy,
         "target_file": target_file,
         "related_source_file": related_source_file,
@@ -314,14 +369,16 @@ def build_candidate(item: dict, cto_item: dict, repo_diag_symbols: dict, tf_ctx_
         "patch_intents": build_patch_intents(target_file, issue_type, classification),
         "notes": notes,
     }
-    return candidate
 
 
-def score_item(item: dict, cto_item: dict) -> tuple:
+def score_item(item: dict, cto_item: dict, ci_map: dict) -> tuple:
     target = normalize_path(item.get("target_file", ""))
     issue_type = str(item.get("issue_type", "")).strip()
     classification = str(item.get("classification", "")).strip()
-    cto_priority = str(cto_item.get("priority", "P2")).strip().upper()
+    priority = str(item.get("priority", "")).strip().upper()
+    cto_priority = str(
+        cto_item.get("priority", "") or cto_item.get("cto_priority", "") or priority or "P2"
+    ).strip().upper()
 
     priority_rank = {"P0": 0, "P1": 1, "P2": 2}
     issue_rank = {
@@ -332,6 +389,7 @@ def score_item(item: dict, cto_item: dict) -> tuple:
         "test_failure": 4,
         "ci_failure": 5,
         "contract_test_failure": 6,
+        "generic": 9,
     }
     class_rank = {
         "AUTO_FIX_SAFE": 0,
@@ -339,7 +397,7 @@ def score_item(item: dict, cto_item: dict) -> tuple:
         "HUMAN_ONLY": 9,
     }
 
-    target_kind_rank = 5
+    target_kind_rank = 6
     if is_contract_like_target(target):
         target_kind_rank = 0
     elif is_runtime_python(target):
@@ -351,28 +409,28 @@ def score_item(item: dict, cto_item: dict) -> tuple:
     elif is_guardrail_test(target):
         target_kind_rank = 4
 
+    ci_hits = len(ci_map.get(target, []))
+
     return (
         priority_rank.get(cto_priority, 3),
         issue_rank.get(issue_type, 99),
         class_rank.get(classification, 99),
         target_kind_rank,
+        -ci_hits,
         target,
     )
 
 
-def choose_candidate(contexts) -> dict | None:
-    classification_payload = contexts["classification"]
-    test_gap = contexts["test_gap"]
-    repo_diag = contexts["repo_diag"]
-    cto_payload = contexts["cto"]
-    tf_ctx = contexts["test_failure_context"]
-
+def choose_from_classified_items(
+    classification_payload: dict,
+    cto_map: dict,
+    repo_diag_symbols: dict,
+    tf_ctx_map: dict,
+    ci_map: dict,
+) -> dict | None:
     classified_items = classification_payload.get("fix_contexts", []) or []
-    cto_map = cto_priority_map(cto_payload)
-    repo_diag_symbols = repo_diag_symbol_map(repo_diag)
-    tf_ctx_map = test_failure_context_map(tf_ctx)
 
-    filtered = []
+    ranked = []
     for item in classified_items:
         target = normalize_path(item.get("target_file", ""))
         classification = str(item.get("classification", "")).strip()
@@ -386,69 +444,53 @@ def choose_candidate(contexts) -> dict | None:
         if is_hft_test(target):
             continue
 
-        cto_item = cto_map.get(target, {})
-        filtered.append((score_item(item, cto_item), item, cto_item))
+        cto_item = cto_map.get(target) or cto_map.get(normalize_path(item.get("related_source_file", ""))) or {}
+        ranked.append((score_item(item, cto_item, ci_map), item, cto_item))
 
-    if filtered:
-        filtered.sort(key=lambda x: x[0])
+    if not ranked:
+        return None
 
-        _, best_item, cto_item = filtered[0]
-        issue_type = str(best_item.get("issue_type", "")).strip()
-        classification = str(best_item.get("classification", "")).strip()
-        target = normalize_path(best_item.get("target_file", ""))
+    ranked.sort(key=lambda x: x[0])
+    _, best_item, cto_item = ranked[0]
+    return build_candidate(best_item, cto_item, repo_diag_symbols, tf_ctx_map, ci_map)
 
-        if issue_type == "missing_public_contract":
-            strategy = "compatibility_contract_fix"
-        elif issue_type == "runtime_failure" and classification == "AUTO_FIX_SAFE":
-            strategy = "runtime_failure_safe_fix"
-        elif issue_type == "runtime_failure":
-            strategy = "runtime_failure_review_fix"
-        elif issue_type == "lint_failure":
-            strategy = "runtime_lint_safe_fix" if is_runtime_python(target) else "python_lint_safe_fix"
-        elif issue_type == "missing_nominal_test":
-            strategy = "generate_nominal_test"
-        elif issue_type == "test_failure":
-            strategy = "safe_test_fix" if classification == "AUTO_FIX_SAFE" else "reviewable_test_fix"
-        elif issue_type == "ci_failure":
-            strategy = "reviewable_ci_fix"
-        else:
-            strategy = "reviewable_fix"
 
-        return build_candidate(best_item, cto_item, repo_diag_symbols, tf_ctx_map, strategy)
-
+def choose_generated_test_candidate(test_gap: dict, cto_map: dict) -> dict | None:
     generated = test_gap.get("generated_tests", []) or []
-    if generated:
-        picked = generated[0]
-        source_file = normalize_path(picked.get("source_file", ""))
-        generated_test_file = normalize_path(picked.get("generated_test_file", ""))
-        if generated_test_file:
-            cto_item = cto_map.get(source_file, {})
-            return {
-                "strategy": "generate_nominal_test",
-                "target_file": generated_test_file,
-                "related_source_file": source_file,
-                "issue_type": "missing_nominal_test",
-                "classification": "AUTO_FIX_SAFE",
-                "cto_priority": str(cto_item.get("priority", "")).strip(),
-                "cto_kind": str(cto_item.get("kind", "")).strip(),
-                "required_symbols": [],
-                "related_tests": [generated_test_file],
-                "patch_intents": [
-                    "generate_nominal_test",
-                    "avoid_mock-heavy_or_shallow_test",
-                    "safe_autofix_allowed",
-                    "target_is_generated_test",
-                ],
-                "notes": build_notes(
-                    [
-                        "generated nominal test from diagnostics",
-                        f"source_file={source_file}" if source_file else "",
-                    ],
-                    cto_item.get("reasons", []) if cto_item else [],
-                ),
-            }
+    if not generated:
+        return None
 
-    return None
+    picked = generated[0]
+    source_file = normalize_path(picked.get("source_file", ""))
+    generated_test_file = normalize_path(picked.get("generated_test_file", ""))
+    if not generated_test_file:
+        return None
+
+    cto_item = cto_map.get(source_file, {})
+    return {
+        "strategy": "generate_nominal_test",
+        "target_file": generated_test_file,
+        "related_source_file": source_file,
+        "issue_type": "missing_nominal_test",
+        "classification": "AUTO_FIX_SAFE",
+        "cto_priority": str(cto_item.get("priority", "")).strip(),
+        "cto_kind": str(cto_item.get("kind", "")).strip(),
+        "required_symbols": [],
+        "related_tests": [generated_test_file],
+        "patch_intents": [
+            "generate_nominal_test",
+            "avoid_mock_heavy_or_shallow_test",
+            "safe_autofix_allowed",
+            "target_is_generated_test",
+        ],
+        "notes": build_notes(
+            [
+                "generated nominal test from diagnostics",
+                f"source_file={source_file}" if source_file else "",
+            ],
+            cto_item.get("reasons", []) if cto_item else [],
+        ),
+    }
 
 
 def render_markdown(result: dict) -> str:
@@ -509,13 +551,26 @@ def main() -> int:
         "classification": read_json(AUDIT_OUT / "issue_classification.json"),
         "repo_diag": read_json(AUDIT_OUT / "repo_diagnostics_context.json"),
         "test_gap": read_json(AUDIT_OUT / "test_gap_generation_report.json"),
-        "fix_context": read_json(AUDIT_OUT / "fix_context.json"),
         "cto": read_json(AUDIT_OUT / "ai_cto_layer.json"),
-        "ci_failure": read_json(AUDIT_OUT / "ci_failure_context.json"),
+        "ci_failure": read_json(AUDIT_OUT / "ci_failures.json"),
         "test_failure_context": read_json(AUDIT_OUT / "test_failure_context.json"),
     }
 
-    candidate = choose_candidate(contexts)
+    cto_map = cto_priority_map(contexts["cto"])
+    repo_diag_symbols = repo_diag_symbol_map(contexts["repo_diag"])
+    tf_ctx_map = test_failure_context_map(contexts["test_failure_context"])
+    ci_map = ci_failure_map(contexts["ci_failure"])
+
+    candidate = choose_from_classified_items(
+        contexts["classification"],
+        cto_map,
+        repo_diag_symbols,
+        tf_ctx_map,
+        ci_map,
+    )
+
+    if not candidate:
+        candidate = choose_generated_test_candidate(contexts["test_gap"], cto_map)
 
     if not candidate:
         result = {
