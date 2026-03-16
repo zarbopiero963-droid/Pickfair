@@ -49,9 +49,10 @@ def normalize_path(path_str: str) -> str:
 
 
 def repo_file_exists(rel_path: str) -> bool:
-    if not rel_path:
+    rel = normalize_path(rel_path)
+    if not rel:
         return False
-    path = ROOT / rel_path
+    path = ROOT / rel
     return path.exists() and path.is_file()
 
 
@@ -138,12 +139,17 @@ def append_contract_shims(rel_path: str, required_symbols: list[str]) -> list[st
         if not symbol:
             continue
 
-        if f"def {symbol}(" in content or f"class {symbol}(" in content or f"{symbol} =" in content or f"{symbol}=" in content:
+        if (
+            f"def {symbol}(" in content
+            or f"class {symbol}(" in content
+            or f"{symbol} =" in content
+            or f"{symbol}=" in content
+        ):
             details.append(f"required symbol already present: {symbol}")
             continue
 
         if symbol.isupper():
-            additions.append(f'{symbol} = {{}}\n')
+            additions.append(f"{symbol} = {{}}\n")
             details.append(f"added uppercase compatibility symbol: {symbol}")
         else:
             additions.append(
@@ -180,7 +186,11 @@ def apply_generated_test(target_file: str) -> tuple[bool, str, list[str], list[s
     return True, "Generated nominal test file exists and is ready for PR.", details, changed
 
 
-def apply_runtime_python_fix(target_file: str, related_source_file: str, required_symbols: list[str]) -> tuple[bool, str, list[str], list[str]]:
+def apply_runtime_python_fix(
+    target_file: str,
+    related_source_file: str,
+    required_symbols: list[str],
+) -> tuple[bool, str, list[str], list[str]]:
     details = []
     candidate_paths = [target_file]
     if related_source_file and related_source_file != target_file:
