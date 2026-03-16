@@ -289,10 +289,13 @@ def detect_improvement(
         and logic_preserved
         and verifier_verdict in {"approve", "weak-approve", "review"}
         and review_verdict in {"approve", "weak-approve", "review"}
-        and target_exec_after == 0
+        and (
+            (target_exec_after > 0 and isinstance(target_after, int) and target_after == 0)
+            or target_exec_after == 0
+        )
     ):
         reasons.append(
-            "Runtime patch produced a real diff with conservative review acceptance, even without targeted test coverage."
+            "Runtime patch produced a real diff with acceptable review outcome."
         )
 
     if reasons:
@@ -468,8 +471,10 @@ def main():
             ".github/scripts/run_targeted_tests.py",
         ]
 
+        setup_failed = False
         for script in setup_scripts:
             if not run_script(script):
+                setup_failed = True
                 info["stop_reason"] = "setup_failed"
                 info["p0_before"] = count_p0()
                 info["p0_after"] = count_p0()
@@ -499,7 +504,7 @@ def main():
                 final_status = "setup_failed"
                 break
 
-        if final_status == "setup_failed":
+        if setup_failed:
             break
 
         info["p0_before"] = count_p0()
