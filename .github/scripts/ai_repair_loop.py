@@ -96,6 +96,8 @@ def targeted_executed_count() -> int:
 
 def ci_failure_count() -> int:
     data = read_json(AUDIT_OUT / "ci_failure_context.json")
+    if not data:
+        data = read_json(AUDIT_OUT / "ci_failures.json")
     return len(data.get("ci_failures", []))
 
 
@@ -108,9 +110,9 @@ def cto_priority_summary() -> dict:
     data = read_json(AUDIT_OUT / "ai_cto_layer.json")
     summary = data.get("summary", {}) or {}
     return {
-        "P0": int(summary.get("P0", 0) or 0),
-        "P1": int(summary.get("P1", 0) or 0),
-        "P2": int(summary.get("P2", 0) or 0),
+        "P0": int(summary.get("P0", summary.get("P0_count", 0)) or 0),
+        "P1": int(summary.get("P1", summary.get("P1_count", 0)) or 0),
+        "P2": int(summary.get("P2", summary.get("P2_count", 0)) or 0),
     }
 
 
@@ -137,6 +139,9 @@ def patch_target_files() -> list[str]:
     candidate = data.get("patch_candidate") or {}
     files = []
 
+    if not isinstance(candidate, dict):
+        return files
+
     target = str(candidate.get("target_file", "")).strip()
     related = str(candidate.get("related_source_file", "")).strip()
 
@@ -151,18 +156,24 @@ def patch_target_files() -> list[str]:
 def patch_strategy() -> str:
     data = read_json(AUDIT_OUT / "patch_candidate.json")
     candidate = data.get("patch_candidate") or {}
+    if not isinstance(candidate, dict):
+        return ""
     return str(candidate.get("strategy", "")).strip()
 
 
 def patch_issue_type() -> str:
     data = read_json(AUDIT_OUT / "patch_candidate.json")
     candidate = data.get("patch_candidate") or {}
+    if not isinstance(candidate, dict):
+        return ""
     return str(candidate.get("issue_type", "")).strip()
 
 
 def patch_classification() -> str:
     data = read_json(AUDIT_OUT / "patch_candidate.json")
     candidate = data.get("patch_candidate") or {}
+    if not isinstance(candidate, dict):
+        return ""
     return str(candidate.get("classification", "")).strip()
 
 
@@ -728,7 +739,6 @@ def main():
     report = build_report(cycles, final_status, greener, fully_green)
 
     write_text(AUDIT_OUT / "ai_repair_loop_report.md", report)
-
     write_json(
         AUDIT_OUT / "ai_repair_loop_state.json",
         {
