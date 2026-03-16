@@ -88,6 +88,12 @@ def targeted_failures():
     return None
 
 
+def targeted_executed_count() -> int:
+    data = read_json(AUDIT_OUT / "targeted_test_results.json")
+    summary = data.get("summary", {}) or {}
+    return int(summary.get("executed_count", 0) or 0)
+
+
 def ci_failure_count() -> int:
     data = read_json(AUDIT_OUT / "ci_failure_context.json")
     return len(data.get("ci_failures", []))
@@ -177,6 +183,8 @@ def detect_improvement(
     fail_after,
     target_before,
     target_after,
+    target_exec_before,
+    target_exec_after,
     ci_before,
     ci_after,
     generated_before,
@@ -195,10 +203,11 @@ def detect_improvement(
     reasons = []
 
     if isinstance(target_before, int) and isinstance(target_after, int):
-        if target_after < target_before:
-            reasons.append(f"Targeted failures reduced from {target_before} to {target_after}.")
-        elif target_after > target_before:
-            return False, f"Targeted failures worsened from {target_before} to {target_after}."
+        if target_exec_after > 0:
+            if target_after < target_before:
+                reasons.append(f"Targeted failures reduced from {target_before} to {target_after}.")
+            elif target_after > target_before:
+                return False, f"Targeted failures worsened from {target_before} to {target_after}."
 
     if isinstance(fail_before, int) and isinstance(fail_after, int):
         if fail_after < fail_before:
@@ -230,7 +239,11 @@ def detect_improvement(
         "tests/fixtures/system_payloads.py",
     }
 
-    touched_contract_files = any(f in contract_like_files for f in (target_files or []))
+    touched_contract_files = any(str(f) in contract_like_files for f in (target_files or []))
+    touched_runtime_files = any(
+        str(f).endswith(".py") and not str(f).startswith("tests/") and not str(f).startswith(".github/")
+        for f in (target_files or [])
+    )
 
     if (
         applied
@@ -268,6 +281,19 @@ def detect_improvement(
         and logic_preserved
     ):
         reasons.append("Safe classified fix accepted with minimal change and logic preserved.")
+
+    if (
+        applied
+        and touched_runtime_files
+        and minimal_change
+        and logic_preserved
+        and verifier_verdict in {"approve", "weak-approve", "review"}
+        and review_verdict in {"approve", "weak-approve", "review"}
+        and target_exec_after == 0
+    ):
+        reasons.append(
+            "Runtime patch produced a real diff with conservative review acceptance, even without targeted test coverage."
+        )
 
     if reasons:
         return True, " | ".join(reasons)
@@ -374,6 +400,8 @@ def build_report(cycles: list[dict], final_status: str, greener: bool, fully_gre
         lines.append(f"- failing_tests_after: {cycle['fail_after']}")
         lines.append(f"- targeted_before: {cycle['target_before']}")
         lines.append(f"- targeted_after: {cycle['target_after']}")
+        lines.append(f"- targeted_executed_before: {cycle['target_exec_before']}")
+        lines.append(f"- targeted_executed_after: {cycle['target_exec_after']}")
         lines.append(f"- ci_failures_before: {cycle['ci_before']}")
         lines.append(f"- ci_failures_after: {cycle['ci_after']}")
         lines.append(f"- generated_tests_before: {cycle['generated_before']}")
@@ -449,6 +477,8 @@ def main():
                 info["fail_after"] = failing_tests()
                 info["target_before"] = targeted_failures()
                 info["target_after"] = targeted_failures()
+                info["target_exec_before"] = targeted_executed_count()
+                info["target_exec_after"] = targeted_executed_count()
                 info["ci_before"] = ci_failure_count()
                 info["ci_after"] = ci_failure_count()
                 info["generated_before"] = generated_test_count()
@@ -475,6 +505,7 @@ def main():
         info["p0_before"] = count_p0()
         info["fail_before"] = failing_tests()
         info["target_before"] = targeted_failures()
+        info["target_exec_before"] = targeted_executed_count()
         info["ci_before"] = ci_failure_count()
         info["generated_before"] = generated_test_count()
         info["cto_before"] = cto_priority_summary()
@@ -488,6 +519,7 @@ def main():
             info["p0_after"] = 0
             info["fail_after"] = 0
             info["target_after"] = info["target_before"]
+            info["target_exec_after"] = info["target_exec_before"]
             info["ci_after"] = 0
             info["generated_after"] = info["generated_before"]
             info["cto_after"] = info["cto_before"]
@@ -511,6 +543,7 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["target_exec_after"] = targeted_executed_count()
             info["ci_after"] = ci_failure_count()
             info["generated_after"] = generated_test_count()
             info["cto_after"] = cto_priority_summary()
@@ -538,6 +571,7 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["target_exec_after"] = targeted_executed_count()
             info["ci_after"] = ci_failure_count()
             info["generated_after"] = generated_test_count()
             info["cto_after"] = cto_priority_summary()
@@ -557,6 +591,7 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["target_exec_after"] = targeted_executed_count()
             info["ci_after"] = ci_failure_count()
             info["generated_after"] = generated_test_count()
             info["cto_after"] = cto_priority_summary()
@@ -576,6 +611,7 @@ def main():
             info["p0_after"] = count_p0()
             info["fail_after"] = failing_tests()
             info["target_after"] = targeted_failures()
+            info["target_exec_after"] = targeted_executed_count()
             info["ci_after"] = ci_failure_count()
             info["generated_after"] = generated_test_count()
             info["cto_after"] = cto_priority_summary()
@@ -593,6 +629,7 @@ def main():
         info["p0_after"] = count_p0()
         info["fail_after"] = failing_tests()
         info["target_after"] = targeted_failures()
+        info["target_exec_after"] = targeted_executed_count()
         info["ci_after"] = ci_failure_count()
         info["generated_after"] = generated_test_count()
         info["cto_after"] = cto_priority_summary()
@@ -625,6 +662,8 @@ def main():
             fail_after=info["fail_after"],
             target_before=info["target_before"],
             target_after=info["target_after"],
+            target_exec_before=info["target_exec_before"],
+            target_exec_after=info["target_exec_after"],
             ci_before=info["ci_before"],
             ci_after=info["ci_after"],
             generated_before=info["generated_before"],
