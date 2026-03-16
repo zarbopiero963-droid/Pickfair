@@ -106,13 +106,15 @@ def main() -> int:
     issue_type = str(apply_report.get("issue_type") or candidate.get("issue_type") or "").strip()
     classification = str(apply_report.get("classification") or candidate.get("classification") or "").strip()
     applied = bool(apply_report.get("applied", False))
+    applied_targets = [normalize_path(x) for x in (apply_report.get("applied_targets", []) or []) if normalize_path(x)]
 
     failures = targeted_tests.get("failure_count")
     if not isinstance(failures, int):
         failures = None
 
+    summary = targeted_tests.get("summary", {}) or {}
     executed_targets = targeted_tests.get("targets", []) or []
-    executed_count = int((targeted_tests.get("summary", {}) or {}).get("executed_count", 0) or 0)
+    executed_count = int(summary.get("executed_count", 0) or 0)
 
     review = {
         "review_verdict": "reject",
@@ -146,6 +148,7 @@ def main() -> int:
                 f"Patch strategy: {strategy or 'unknown'}",
                 f"Target file: {target or 'unknown'}",
                 f"Executed targeted tests: {len(executed_targets)}",
+                f"Applied targets: {', '.join(applied_targets) if applied_targets else 'none'}",
             ]
         elif failures is None and is_runtime_python(target):
             review["review_verdict"] = "weak-approve"
@@ -155,13 +158,21 @@ def main() -> int:
                 f"Target runtime file: {target or 'unknown'}",
                 "No targeted runtime tests available; keeping conservative weak-approve.",
             ]
+        elif failures == 0 and executed_count == 0 and is_generated_test(target):
+            review["review_verdict"] = "approve"
+            review["summary"] = "Generated test patch is acceptable even without additional targeted execution."
+            review["reasons"] = [
+                f"Patch verifier verdict: {verdict}",
+                f"Generated test target: {target or 'unknown'}",
+            ]
         else:
             review["review_verdict"] = "weak-approve"
-            review["summary"] = "Patch acceptable but targeted tests still show failures."
+            review["summary"] = "Patch acceptable but targeted test evidence is incomplete."
             review["reasons"] = [
                 f"Patch verifier verdict: {verdict}",
                 f"Target file: {target or 'unknown'}",
                 f"Targeted test failures: {failures}",
+                f"Executed targeted tests: {executed_count}",
             ]
 
     elif verdict == "review":
@@ -175,8 +186,9 @@ def main() -> int:
             review["reasons"] = [
                 f"Target runtime file: {target}",
                 "Review-level patch promoted because targeted tests are green.",
+                f"Applied targets: {', '.join(applied_targets) if applied_targets else 'none'}",
             ]
-        elif is_runtime_python(target) and executed_count == 0:
+        elif is_runtime_python(target) and executed_count == 0 and review["minimal_change"] and review["logic_preserved"]:
             review["review_verdict"] = "review"
             review["summary"] = "Runtime patch changed code, but there is no targeted test evidence yet."
             review["reasons"] = [
@@ -190,6 +202,13 @@ def main() -> int:
             review["reasons"] = [
                 "Guardrail tests are sensitive by design.",
                 f"Target file: {target or 'unknown'}",
+            ]
+        elif is_generated_test(target):
+            review["review_verdict"] = "weak-approve"
+            review["summary"] = "Generated test patch is acceptable but remains reviewable."
+            review["reasons"] = [
+                f"Generated test target: {target or 'unknown'}",
+                "Keeping weak-approve because generated tests should still be inspected.",
             ]
         else:
             review["review_verdict"] = "review"
