@@ -84,6 +84,7 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set +e
           gh run list --limit 20 --json databaseId,name,conclusion \
@@ -177,7 +178,6 @@ jobs:
         continue-on-error: true
         run: python .github/scripts/repair_orchestrator.py
 
-      # ✅ FIX IMPORTANTE QUI
       - name: Final PR gate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
         id: pr_gate
@@ -186,6 +186,7 @@ jobs:
 
       - name: Show final gate decision
         if: always()
+        shell: bash
         run: |
           echo "allow_pr=${{ steps.pr_gate.outputs.allow_pr }}"
           echo "auto_merge=${{ steps.pr_gate.outputs.auto_merge }}"
@@ -204,9 +205,14 @@ jobs:
             Reason: ${{ steps.pr_gate.outputs.reason }}
           branch: ai-repair
           add-paths: |
+            tests
+            .github/scripts
+            ai
+            core
+            controllers
+            ui
+            app_modules
             *.py
-            tests/**/*.py
-            .github/scripts/**/*.py
 
       - name: Enable auto merge
         if: steps.pr_gate.outputs.auto_merge == 'true'
