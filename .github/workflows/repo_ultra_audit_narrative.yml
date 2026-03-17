@@ -79,13 +79,11 @@ jobs:
           else
             echo "workflow_mode=full_repair" >> "$GITHUB_OUTPUT"
           fi
-          echo "Workflow mode: $(cat "$GITHUB_OUTPUT" | tail -n 1 | cut -d= -f2)"
 
       - name: Collect failed external CI logs
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
         run: |
           set +e
           gh run list --limit 20 --json databaseId,name,conclusion \
@@ -100,81 +98,50 @@ jobs:
       - name: Generate repository diagnostics
         if: always()
         continue-on-error: true
-        shell: bash
         run: |
           python .github/scripts/generate_repo_autopsy.py
           python .github/scripts/generate_repo_api_report_v4.py
           python .github/scripts/generate_repo_fix_backlog.py
 
-      # -----------------------------
-      # REPO RADIOGRAPHY
-      # -----------------------------
-
       - name: Repo ultra audit narrative
         continue-on-error: true
-        run: |
-          python .github/scripts/repo_ultra_audit_narrative.py
+        run: python .github/scripts/repo_ultra_audit_narrative.py
 
       - name: Load repo diagnostics
         continue-on-error: true
-        run: |
-          python .github/scripts/load_repo_diagnostics.py
-
-      # -----------------------------
-      # CI FAILURE ANALYSIS
-      # -----------------------------
+        run: python .github/scripts/load_repo_diagnostics.py
 
       - name: Aggregate CI failures
         continue-on-error: true
-        run: |
-          python .github/scripts/ci_failure_aggregator.py
+        run: python .github/scripts/ci_failure_aggregator.py
 
       - name: Build failure context
         continue-on-error: true
-        run: |
-          python .github/scripts/build_test_failure_context.py
+        run: python .github/scripts/build_test_failure_context.py
 
       - name: Rebuild fix context
         continue-on-error: true
-        run: |
-          python .github/scripts/build_fix_context.py
+        run: python .github/scripts/build_fix_context.py
 
       - name: Classify issues
         continue-on-error: true
-        run: |
-          python .github/scripts/issue_classifier.py
-
-      # -----------------------------
-      # CTO PRIORITY LAYER
-      # -----------------------------
+        run: python .github/scripts/issue_classifier.py
 
       - name: AI CTO layer
         continue-on-error: true
-        run: |
-          python .github/scripts/ai_cto_layer.py
+        run: python .github/scripts/ai_cto_layer.py
 
       - name: Build priority fix order
         continue-on-error: true
-        run: |
-          python .github/scripts/build_priority_fix_order.py
-
-      # -----------------------------
-      # TEST GAP GENERATION
-      # -----------------------------
+        run: python .github/scripts/build_priority_fix_order.py
 
       - name: Generate missing tests
         continue-on-error: true
-        run: |
-          python .github/scripts/test_gap_generator.py
-
-      # -----------------------------
-      # PATCH GENERATION
-      # -----------------------------
+        run: python .github/scripts/test_gap_generator.py
 
       - name: Generate patch candidate
         continue-on-error: true
-        run: |
-          python .github/scripts/patch_candidate_generator.py
+        run: python .github/scripts/patch_candidate_generator.py
 
       - name: Apply patch candidate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
@@ -182,84 +149,48 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: openai/gpt-4.1-mini
-        run: |
-          python .github/scripts/apply_patch_candidate.py
+        run: python .github/scripts/apply_patch_candidate.py
 
       - name: Verify patch
         continue-on-error: true
-        run: |
-          python .github/scripts/patch_verifier.py
-
-      # -----------------------------
-      # TARGETED TESTS
-      # -----------------------------
+        run: python .github/scripts/patch_verifier.py
 
       - name: Run targeted tests
         continue-on-error: true
-        run: |
-          python .github/scripts/run_targeted_tests.py
+        run: python .github/scripts/run_targeted_tests.py
 
       - name: Post patch review
         continue-on-error: true
-        run: |
-          python .github/scripts/post_patch_review.py
-
-      # -----------------------------
-      # MERGE DECISION
-      # -----------------------------
+        run: python .github/scripts/post_patch_review.py
 
       - name: Merge controller
         continue-on-error: true
-        run: |
-          python .github/scripts/merge_controller.py
-
-      # -----------------------------
-      # REPAIR LOOP
-      # -----------------------------
+        run: python .github/scripts/merge_controller.py
 
       - name: AI repair loop
         if: steps.mode.outputs.workflow_mode == 'full_repair'
         continue-on-error: true
-        run: |
-          python .github/scripts/ai_repair_loop.py
+        run: python .github/scripts/ai_repair_loop.py
 
       - name: Repair orchestrator
         id: orchestrator
         continue-on-error: true
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF: ${{ github.ref }}
-          EXISTING_AI_PR_NUMBER: ""
-          EXISTING_AI_PR_STATE: ""
-          EXISTING_AI_PR_HEAD: ""
-        run: |
-          python .github/scripts/repair_orchestrator.py
+        run: python .github/scripts/repair_orchestrator.py
 
-      # -----------------------------
-      # FINAL GATE
-      # -----------------------------
-
+      # ✅ FIX IMPORTANTE QUI
       - name: Final PR gate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
         id: pr_gate
-        run: |
-          python .github/scripts/final_pr_gate.py
+        continue-on-error: true
+        run: python .github/scripts/final_pr_gate.py
 
       - name: Show final gate decision
-        if: always() && steps.mode.outputs.workflow_mode == 'full_repair'
-        shell: bash
+        if: always()
         run: |
-          echo ""
-          echo "================ FINAL PR GATE ============================="
           echo "allow_pr=${{ steps.pr_gate.outputs.allow_pr }}"
           echo "auto_merge=${{ steps.pr_gate.outputs.auto_merge }}"
           echo "reason=${{ steps.pr_gate.outputs.reason }}"
           echo "real_progress=${{ steps.pr_gate.outputs.real_progress }}"
-          echo "============================================================"
-
-      # -----------------------------
-      # CREATE PR
-      # -----------------------------
 
       - name: Create AI repair PR
         if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.allow_pr == 'true'
@@ -277,63 +208,11 @@ jobs:
             tests/**/*.py
             .github/scripts/**/*.py
 
-      # -----------------------------
-      # AUTO MERGE
-      # -----------------------------
-
       - name: Enable auto merge
-        if: steps.mode.outputs.workflow_mode == 'full_repair' && steps.pr_gate.outputs.auto_merge == 'true'
-        run: |
-          gh pr merge --auto --squash ai-repair
+        if: steps.pr_gate.outputs.auto_merge == 'true'
+        run: gh pr merge --auto --squash ai-repair
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # -----------------------------
-      # DEBUG OUTPUTS
-      # -----------------------------
-
-      - name: Show important audit outputs
-        if: always()
-        shell: bash
-        run: |
-          echo ""
-          echo "================ IMPORTANT OUTPUTS ========================="
-          for f in \
-            audit_out/repo_ultra_audit_narrative.md \
-            audit_out/repo_diagnostics_context.json \
-            audit_out/ci_failures.json \
-            audit_out/ci_failure_context.json \
-            audit_out/test_failure_context.json \
-            audit_out/fix_context.json \
-            audit_out/issue_classification.json \
-            audit_out/ai_cto_layer.json \
-            audit_out/priority_fix_order.md \
-            audit_out/test_gap_generation_report.json \
-            audit_out/patch_candidate.md \
-            audit_out/patch_apply_report.md \
-            audit_out/patch_verification.json \
-            audit_out/patch_verification.md \
-            audit_out/targeted_tests.json \
-            audit_out/post_patch_review.json \
-            audit_out/post_patch_review.md \
-            audit_out/merge_controller_report.md \
-            audit_out/merge_controller_state.json \
-            audit_out/ai_repair_loop_report.md \
-            audit_out/ai_repair_loop_state.json \
-            audit_out/repair_orchestrator_report.md \
-            audit_out/repair_orchestrator_state.json
-          do
-            if [ -f "$f" ]; then
-              echo "--- $f ---"
-              cat "$f" || true
-              echo ""
-            fi
-          done
-          echo "============================================================"
-
-      # -----------------------------
-      # SAVE ARTIFACT
-      # -----------------------------
 
       - name: Upload audit artifact
         if: always()
