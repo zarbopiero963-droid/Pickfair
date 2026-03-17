@@ -55,6 +55,7 @@ jobs:
           test -f .github/scripts/ai_cto_layer.py
           test -f .github/scripts/build_priority_fix_order.py
           test -f .github/scripts/patch_candidate_generator.py
+          test -f .github/scripts/llm_patch_engine.py
           test -f .github/scripts/apply_patch_candidate.py
           test -f .github/scripts/patch_verifier.py
           test -f .github/scripts/run_targeted_tests.py
@@ -178,6 +179,9 @@ jobs:
       - name: Apply patch candidate
         if: steps.mode.outputs.workflow_mode == 'full_repair'
         continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: openai/gpt-4.1-mini
         run: |
           python .github/scripts/apply_patch_candidate.py
 
@@ -308,8 +312,10 @@ jobs:
             audit_out/patch_candidate.md \
             audit_out/patch_apply_report.md \
             audit_out/patch_verification.json \
+            audit_out/patch_verification.md \
             audit_out/targeted_tests.json \
             audit_out/post_patch_review.json \
+            audit_out/post_patch_review.md \
             audit_out/merge_controller_report.md \
             audit_out/merge_controller_state.json \
             audit_out/ai_repair_loop_report.md \
