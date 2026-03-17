@@ -166,6 +166,16 @@ def has_real_runtime_or_lint_pressure(ci_map: dict) -> bool:
     return (counts["runtime_failure"] + counts["lint_failure"]) > 0
 
 
+def has_non_guardrail_runtime_candidates(ci_map: dict) -> bool:
+    for target, items in ci_map.items():
+        if not is_runtime_python(target):
+            continue
+        for item in items:
+            if str(item.get("issue_type", "")).strip() in {"runtime_failure", "lint_failure", "ci_failure"}:
+                return True
+    return False
+
+
 def detect_strategy(target_file: str, issue_type: str, classification: str) -> str:
     target_file = normalize_path(target_file)
 
@@ -285,6 +295,8 @@ def build_patch_intents(target_file: str, issue_type: str, classification: str) 
         intents.append("target_is_runtime_python")
     if is_generated_test(target_file):
         intents.append("target_is_generated_test")
+    if is_guardrail_test(target_file):
+        intents.append("target_is_guardrail_test")
 
     return unique_keep(intents, 18)
 
@@ -314,12 +326,21 @@ def score_item(item: dict, cto_item: dict, ci_map: dict, prefer_runtime: bool) -
     elif is_test_python(target) and not is_generated_test(target) and not is_guardrail_test(target):
         target_kind_rank = 4
     elif is_guardrail_test(target):
-        target_kind_rank = 7
-    elif is_generated_test(target):
         target_kind_rank = 8
+    elif is_generated_test(target):
+        target_kind_rank = 9
 
     ci_hits = len(ci_map.get(target, []))
     generated_penalty = 50 if (prefer_runtime and is_generated_test(target)) else 0
+
+    # guardrail tests molto penalizzati se esistono target runtime reali
+    guardrail_penalty = 0
+    if is_guardrail_test(target):
+        if prefer_runtime or has_non_guardrail_runtime_candidates(ci_map):
+            guardrail_penalty = 60
+        else:
+            guardrail_penalty = 20
+
     runtime_bonus = -20 if (prefer_runtime and is_runtime_python(target)) else 0
 
     return (
@@ -328,6 +349,7 @@ def score_item(item: dict, cto_item: dict, ci_map: dict, prefer_runtime: bool) -
         class_rank.get(classification, 99),
         target_kind_rank,
         generated_penalty,
+        guardrail_penalty,
         runtime_bonus,
         -ci_hits,
         target,
@@ -359,9 +381,24 @@ def choose_from_classified_items(
             continue
         if prefer_runtime and issue_type == "missing_nominal_test" and is_generated_test(target):
             continue
+        if prefer_runtime and is_guardrail_test(target):
+            # guardrail test saltato del tutto se esistono runtime/lint reali
+            continue
 
         cto_item = cto_map.get(target) or cto_map.get(normalize_path(item.get("related_source_file", ""))) or {}
         ranked.append((score_item(item, cto_item, ci_map, prefer_runtime), item, cto_item))
+
+    if not ranked:
+        # fallback: se non c'è altro, consenti anche guardrail
+        for item in load_issue_items(classification_payload):
+            target = normalize_path(item.get("target_file", ""))
+            classification = str(item.get("classification", "")).strip()
+            if not target or classification == "HUMAN_ONLY":
+                continue
+            if is_github_script(target) or is_hft_test(target):
+                continue
+            cto_item = cto_map.get(target) or {}
+            ranked.append((score_item(item, cto_item, ci_map, False), item, cto_item))
 
     if not ranked:
         return None
@@ -519,4 +556,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main()) 
+    raise SystemExit(main())
