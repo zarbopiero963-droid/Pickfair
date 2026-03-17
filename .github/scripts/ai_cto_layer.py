@@ -26,8 +26,22 @@ def write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def normalize_path(path: str) -> str:
-    return str(path or "").replace("\\", "/").lstrip("./").strip()
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw
+
+
+def classify_priority(issue_type: str) -> str:
+    issue_type = str(issue_type or "").strip()
+    if issue_type in {"missing_public_contract", "runtime_failure", "lint_failure"}:
+        return "P0"
+    if issue_type in {"test_failure", "ci_failure", "contract_test_failure"}:
+        return "P1"
+    return "P2"
 
 
 def collect_ci_failures():
@@ -52,16 +66,6 @@ def collect_api_report():
     )
 
 
-def classify_priority(issue_type: str) -> str:
-    issue_type = str(issue_type or "").strip()
-
-    if issue_type in {"missing_public_contract", "runtime_failure", "lint_failure"}:
-        return "P0"
-    if issue_type in {"test_failure", "ci_failure", "contract_test_failure"}:
-        return "P1"
-    return "P2"
-
-
 def build_ci_items(ci_failures):
     out = []
     for f in ci_failures:
@@ -70,11 +74,9 @@ def build_ci_items(ci_failures):
         if not target_file:
             continue
 
-        priority = classify_priority(issue_type)
-        reasons = []
         signal = str(f.get("signal", "")).strip()
         error_type = str(f.get("error_type", "")).strip()
-
+        reasons = []
         if signal:
             reasons.append(signal)
         if error_type:
@@ -84,7 +86,7 @@ def build_ci_items(ci_failures):
             {
                 "file": target_file,
                 "target_file": target_file,
-                "priority": priority,
+                "priority": classify_priority(issue_type),
                 "source": "ci_failure",
                 "kind": issue_type,
                 "issue_type": issue_type,
@@ -108,9 +110,9 @@ def build_backlog_items(backlog):
         priority = str(b.get("priority", "")).strip().upper() or "P2"
         kind = str(b.get("kind", "") or b.get("type", "")).strip() or "backlog_item"
 
-        reasons = []
         description = str(b.get("description", "")).strip()
         title = str(b.get("title", "")).strip()
+        reasons = []
         if description:
             reasons.append(description)
         if title:
@@ -144,10 +146,9 @@ def build_api_items(api_issues):
         symbol = str(a.get("symbol", "")).strip()
         kind = str(a.get("kind", "") or a.get("issue", "")).strip() or "api_gap"
         issue_type = "missing_nominal_test" if symbol else "ci_failure"
-        priority = "P2" if issue_type == "missing_nominal_test" else "P2"
 
-        reasons = []
         detail = str(a.get("detail", "")).strip()
+        reasons = []
         if symbol:
             reasons.append(f"missing nominal test for symbol={symbol}")
         if detail:
@@ -157,7 +158,7 @@ def build_api_items(api_issues):
             {
                 "file": target_file,
                 "target_file": target_file,
-                "priority": priority,
+                "priority": "P2",
                 "source": "api_report",
                 "kind": kind,
                 "issue_type": issue_type,
@@ -181,6 +182,7 @@ def dedupe_items(items):
         "test_failure": 3,
         "ci_failure": 4,
         "missing_nominal_test": 5,
+        "contract_test_failure": 6,
     }
 
     for item in items:
@@ -197,7 +199,6 @@ def dedupe_items(items):
             continue
 
         current = merged[key]
-
         new_priority = str(item.get("priority", "")).strip().upper()
         cur_priority = str(current.get("priority", "")).strip().upper()
         new_issue = str(item.get("issue_type", "")).strip()
@@ -233,6 +234,7 @@ def build_repair_order(items):
         "test_failure": 3,
         "ci_failure": 4,
         "missing_nominal_test": 5,
+        "contract_test_failure": 6,
     }
 
     items.sort(
