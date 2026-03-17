@@ -23,6 +23,19 @@ def write_text(path, text):
     Path(path).write_text(text, encoding="utf-8")
 
 
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw
+
+
+def is_guardrail_test(path_str: str) -> bool:
+    return normalize_path(path_str).lower().startswith("tests/guardrails/")
+
+
 def build_report(data):
     lines = []
     lines.append("Merge Controller")
@@ -57,10 +70,15 @@ def main():
     patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json").get("patch_candidate", {}) or {}
 
     patch_applied = bool(patch_apply.get("applied", False))
-    changed_files = patch_apply.get("applied_targets", []) or []
+    changed_files = [normalize_path(x) for x in (patch_apply.get("applied_targets", []) or []) if normalize_path(x)]
     verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower()
-    review_verdict = str(post_patch_review.get("verdict", "")).strip().lower()
+    review_verdict = str(
+        post_patch_review.get("review_verdict", post_patch_review.get("final_verdict", ""))
+    ).strip().lower()
+
     tests_success = bool(targeted_tests.get("success", False))
+    target_file = normalize_path(patch_candidate.get("target_file", ""))
+    is_guardrail = is_guardrail_test(target_file)
 
     decision = "BLOCK"
     reason = "unknown"
@@ -72,31 +90,45 @@ def main():
         decision = "BLOCK"
         reason = "patch_not_applied"
 
-    elif verifier_verdict != "accept":
-        decision = "BLOCK"
-        reason = patch_verification.get("reason", "verifier_reject")
-
-    elif review_verdict != "accept":
-        decision = "BLOCK"
-        reason = post_patch_review.get("reason", "review_reject")
-
     elif not changed_files:
         decision = "BLOCK"
         reason = "no_committable_change"
 
-    elif tests_success:
-        decision = "MERGE_READY"
-        reason = "patch_valid_and_tests_passed"
-        should_merge = True
-        should_open_pr = True
-        auto_merge_safe = True
+    elif verifier_verdict == "reject":
+        decision = "BLOCK"
+        reason = patch_verification.get("reason", "verifier_reject")
 
-    else:
+    elif review_verdict == "reject":
+        decision = "BLOCK"
+        reason = post_patch_review.get("summary", "review_reject") or "review_reject"
+
+    elif is_guardrail and review_verdict == "review":
         decision = "REVIEW_ONLY"
-        reason = "patch_valid_but_tests_not_confirmed"
+        reason = "guardrail_test_patch_changed"
         should_merge = False
         should_open_pr = True
         auto_merge_safe = False
+
+    elif review_verdict == "review":
+        decision = "REVIEW_ONLY"
+        reason = "reviewable_patch"
+        should_merge = False
+        should_open_pr = True
+        auto_merge_safe = False
+
+    elif review_verdict in {"approve", "weak-approve"}:
+        if tests_success:
+            decision = "MERGE_READY"
+            reason = "patch_valid_and_tests_passed"
+            should_merge = True
+            should_open_pr = True
+            auto_merge_safe = True
+        else:
+            decision = "REVIEW_ONLY"
+            reason = "patch_valid_but_tests_not_confirmed"
+            should_merge = False
+            should_open_pr = True
+            auto_merge_safe = False
 
     result = {
         "decision": decision,
@@ -109,7 +141,7 @@ def main():
         "post_patch_review_verdict": review_verdict,
         "targeted_tests_success": tests_success,
         "changed_files": changed_files,
-        "target_file": patch_candidate.get("target_file", ""),
+        "target_file": target_file,
         "strategy": patch_candidate.get("strategy", ""),
     }
 
