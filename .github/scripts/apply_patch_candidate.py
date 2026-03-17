@@ -39,13 +39,11 @@ def normalize_path(path_str: str) -> str:
     raw = str(path_str or "").strip().replace("\\", "/")
     if not raw:
         return ""
-    try:
-        p = Path(raw)
-        if p.is_absolute():
-            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
-    except Exception:
-        pass
-    return raw.lstrip("./")
+
+    while raw.startswith("./"):
+        raw = raw[2:]
+
+    return raw
 
 
 def repo_file_exists(rel_path: str) -> bool:
@@ -162,7 +160,10 @@ def append_contract_shims(rel_path: str, required_symbols: list[str]) -> list[st
         changed = True
 
     if changed and additions:
-        abs_path.write_text(content.rstrip() + "\n\n" + "\n".join(additions).rstrip() + "\n", encoding="utf-8")
+        abs_path.write_text(
+            content.rstrip() + "\n\n" + "\n".join(additions).rstrip() + "\n",
+            encoding="utf-8",
+        )
 
     return details
 
@@ -329,7 +330,11 @@ def main() -> int:
     if is_generated_test(target_file) or strategy == "generate_nominal_test":
         ok, summary, details, changed = apply_generated_test(target_file)
     elif is_runtime_python(target_file):
-        ok, summary, details, changed = apply_runtime_python_fix(target_file, related_source_file, required_symbols)
+        ok, summary, details, changed = apply_runtime_python_fix(
+            target_file,
+            related_source_file,
+            required_symbols,
+        )
     elif is_python_file(target_file):
         ok, summary, details, changed = apply_test_python_fix(target_file)
     else:
