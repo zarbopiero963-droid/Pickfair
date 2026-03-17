@@ -307,9 +307,9 @@ jobs:
             audit_out/test_gap_generation_report.json \
             audit_out/patch_candidate.md \
             audit_out/patch_apply_report.md \
-            audit_out/patch_verification.md \
-            audit_out/targeted_test_results.json \
-            audit_out/post_patch_review.md \
+            audit_out/patch_verification.json \
+            audit_out/targeted_tests.json \
+            audit_out/post_patch_review.json \
             audit_out/merge_controller_report.md \
             audit_out/merge_controller_state.json \
             audit_out/ai_repair_loop_report.md \
