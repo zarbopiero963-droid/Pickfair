@@ -109,20 +109,12 @@ def run_cmd(args: list[str]) -> tuple[bool, str]:
         return False, str(e)
 
 
-def try_ruff_fix(rel_path: str) -> list[str]:
-    details = []
-
-    ok, out = run_cmd(["python", "-m", "ruff", "check", rel_path, "--fix"])
-    details.append(f"ruff check --fix: {'ok' if ok else 'failed'}")
-    if out:
-        details.append(out[:3000])
-
-    ok2, out2 = run_cmd(["python", "-m", "ruff", "format", rel_path])
-    details.append(f"ruff format: {'ok' if ok2 else 'failed'}")
-    if out2:
-        details.append(out2[:3000])
-
-    return details
+def file_changed(rel_path: str) -> bool:
+    ok, out = run_cmd(["git", "diff", "--name-only", "--", rel_path])
+    if not ok:
+        return False
+    changed = [x.strip() for x in out.splitlines() if x.strip()]
+    return normalize_path(rel_path) in changed
 
 
 def find_symbol_from_notes(candidate: dict) -> str:
@@ -377,6 +369,22 @@ def add_patch_footer(content: str, issue_type: str) -> tuple[str, bool, list[str
     return candidate, True, [f"added patch footer marker for {issue_type}"]
 
 
+def try_ruff_apply(rel_path: str) -> tuple[bool, list[str]]:
+    details = []
+
+    ok1, out1 = run_cmd(["python", "-m", "ruff", "check", rel_path, "--fix"])
+    details.append(f"ruff check --fix: {'ok' if ok1 else 'failed'}")
+    if out1:
+        details.append(out1[:3000])
+
+    ok2, out2 = run_cmd(["python", "-m", "ruff", "format", rel_path])
+    details.append(f"ruff format: {'ok' if ok2 else 'failed'}")
+    if out2:
+        details.append(out2[:3000])
+
+    return file_changed(rel_path), details
+
+
 def safe_write_if_valid(target_file: str, original: str, updated: str) -> bool:
     if updated == original:
         return False
@@ -427,10 +435,19 @@ def apply_runtime_fix(target_file: str, content: str, candidate: dict) -> tuple[
     return current, changed, details
 
 
-def apply_lint_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]:
+def apply_lint_fix(
+    target_file: str,
+    content: str,
+    candidate: dict,
+) -> tuple[str, bool, list[str], bool]:
+    changed_by_ruff, ruff_details = try_ruff_apply(target_file)
+    if changed_by_ruff:
+        new_content = read_file(target_file)
+        return new_content, True, ruff_details, True
+
     current = content
     changed = False
-    details = []
+    details = list(ruff_details)
 
     current2, c2, d2 = mechanical_lint_cleanup(current, candidate)
     if c2:
@@ -445,7 +462,7 @@ def apply_lint_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]
             changed = True
             details.extend(d2)
 
-    return current, changed, details
+    return current, changed, details, False
 
 
 def apply_test_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]:
@@ -470,11 +487,14 @@ def apply_test_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]
     return current, changed, details
 
 
-def apply_ci_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]:
+def apply_ci_fix(content: str, candidate: dict, target_file: str) -> tuple[str, bool, list[str]]:
     notes = "\n".join(str(x) for x in (candidate.get("notes", []) or []))
     if any(tok in notes for tok in ["ruff", "F401", "F841"]):
-        return apply_lint_fix(content, candidate)
-    return apply_runtime_fix(candidate.get("target_file", ""), content, candidate)
+        updated, changed, details, already_written = apply_lint_fix(target_file, content, candidate)
+        if already_written:
+            return read_file(target_file), True, details
+        return updated, changed, details
+    return apply_runtime_fix(target_file, content, candidate)
 
 
 def try_llm_fix(target_file: str, original: str, candidate: dict) -> tuple[str, bool, list[str]]:
@@ -482,7 +502,7 @@ def try_llm_fix(target_file: str, original: str, candidate: dict) -> tuple[str, 
     model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini").strip()
 
     if not api_key:
-        return original, False, ["LLM disabled (no API key)"]
+        return original, False, ["LLM disabled (no API key: OPENROUTER_API_KEY missing or empty)"]
 
     result = generate_ai_patch(
         target_file=target_file,
@@ -524,20 +544,34 @@ def apply_patch(candidate: dict) -> dict:
     updated = original
     changed = False
     details = []
+    llm_details = []
 
     if issue_type == "runtime_failure":
         updated, changed, details = apply_runtime_fix(target_file, original, candidate)
+
     elif issue_type == "lint_failure":
-        updated, changed, details = apply_lint_fix(original, candidate)
+        updated, changed, details, already_written = apply_lint_fix(target_file, original, candidate)
+        if changed and already_written:
+            return {
+                "applied": True,
+                "reason": "patch_applied_local",
+                "applied_targets": [target_file],
+                "details": details,
+                "target_file": target_file,
+                "issue_type": issue_type,
+            }
+
     elif issue_type == "test_failure":
         updated, changed, details = apply_test_fix(original, candidate)
+
     elif issue_type == "ci_failure":
-        updated, changed, details = apply_ci_fix(original, candidate)
+        updated, changed, details = apply_ci_fix(original, candidate, target_file)
+
     else:
         updated, changed, details = add_patch_footer(original, issue_type or "generic_fix")
 
     if changed and safe_write_if_valid(target_file, original, updated):
-        ruff_details = try_ruff_fix(target_file)
+        ruff_details = try_ruff_apply(target_file)[1]
         return {
             "applied": True,
             "reason": "patch_applied_local",
@@ -549,7 +583,7 @@ def apply_patch(candidate: dict) -> dict:
 
     llm_updated, llm_changed, llm_details = try_llm_fix(target_file, original, candidate)
     if llm_changed and safe_write_if_valid(target_file, original, llm_updated):
-        ruff_details = try_ruff_fix(target_file)
+        ruff_details = try_ruff_apply(target_file)[1]
         return {
             "applied": True,
             "reason": "patch_applied_llm",
@@ -563,7 +597,7 @@ def apply_patch(candidate: dict) -> dict:
         "applied": False,
         "reason": "no_effect",
         "applied_targets": [],
-        "details": details + llm_details if "llm_details" in locals() else details or ["patch produced no valid code change"],
+        "details": details + llm_details if llm_details else details or ["patch produced no valid code change"],
         "target_file": target_file,
         "issue_type": issue_type,
     }
