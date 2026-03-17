@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import os
 from pathlib import Path
 
 AUDIT_OUT = Path("audit_out")
@@ -59,11 +60,6 @@ def main() -> int:
     merge_state = read_json(AUDIT_OUT / "merge_controller_state.json")
     patch_apply = read_json(AUDIT_OUT / "patch_apply_report.json")
 
-    existing_ai_pr_number = ""
-    existing_ai_pr_state = ""
-    existing_ai_pr_head = ""
-
-    import os
     existing_ai_pr_number = os.environ.get("EXISTING_AI_PR_NUMBER", "").strip()
     existing_ai_pr_state = os.environ.get("EXISTING_AI_PR_STATE", "").strip()
     existing_ai_pr_head = os.environ.get("EXISTING_AI_PR_HEAD", "").strip()
@@ -86,11 +82,15 @@ def main() -> int:
             action = "open_new_ai_pr"
             reason = "progress_ready_no_open_pr"
 
-    elif real_progress and loop_final_status == "partial_progress":
+    elif real_progress and loop_final_status in {"partial_progress", "review_only_ready_for_pr"}:
+        action = "open_new_ai_pr"
+        reason = "real_progress_review_only"
+
+    elif real_progress:
         action = "repair_attempt_no_pr"
         reason = "progress_detected_but_not_pr_ready"
 
-    elif loop_final_status in {"no_progress", "candidate_generation_failed", "no_candidate"}:
+    elif loop_final_status in {"no_progress", "candidate_generation_failed", "no_candidate", "repeated_target_no_progress"}:
         action = "manual_review"
         reason = loop_final_status or "no_progress"
 
