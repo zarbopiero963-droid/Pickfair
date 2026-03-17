@@ -33,27 +33,22 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def run_script(script_rel: str, extra_env: dict | None = None) -> tuple[bool, str]:
-    env = None
-    if extra_env:
-        import os
-        env = dict(os.environ)
-        env.update(extra_env)
-
+def run_script(script_rel: str) -> tuple[bool, str]:
     result = subprocess.run(
         ["python", script_rel],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
-        env=env,
     )
     output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
     return result.returncode == 0, output
 
 
 def normalize_path(path_str: str) -> str:
-    raw = str(path_str or "").replace("\\", "/").strip()
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
     while raw.startswith("./"):
         raw = raw[2:]
     return raw
@@ -124,7 +119,6 @@ def build_report(state: dict) -> str:
     lines.append(f"Ready for PR: {'YES' if state.get('ready_for_pr') else 'NO'}")
     lines.append(f"Next action: {state.get('next_action', '')}")
     lines.append("")
-
     for item in state.get("passes", []) or []:
         lines.append(f"Pass {item.get('pass_no')}")
         lines.append(f"- target_file: {item.get('target_file', '')}")
@@ -137,8 +131,8 @@ def build_report(state: dict) -> str:
         lines.append(f"- review_verdict: {item.get('review_verdict', '')}")
         lines.append(f"- merge_decision: {item.get('merge_decision', '')}")
         lines.append(f"- merge_reason: {item.get('merge_reason', '')}")
-        lines.append(f"- ci_failures_before: {item.get('ci_before')}")
-        lines.append(f"- ci_failures_after: {item.get('ci_after')}")
+        lines.append(f"- ci_before: {item.get('ci_before')}")
+        lines.append(f"- ci_after: {item.get('ci_after')}")
         lines.append(f"- progress: {item.get('progress')}")
         lines.append(f"- stop_reason: {item.get('stop_reason', '')}")
         lines.append("")
@@ -159,6 +153,7 @@ def main() -> int:
         ok, _ = run_script(".github/scripts/patch_candidate_generator.py")
         if not ok:
             final_status = "candidate_generation_failed"
+            next_action = "manual_review"
             break
 
         candidate = load_candidate()
@@ -166,10 +161,12 @@ def main() -> int:
 
         if not candidate or not target_file:
             final_status = "no_candidate"
+            next_action = "manual_review"
             break
 
         if target_file in attempted_targets:
             final_status = "repeated_target_no_progress"
+            next_action = "manual_review"
             break
 
         attempted_targets.add(target_file)
@@ -188,8 +185,7 @@ def main() -> int:
         stop_reason = ""
 
         if snap["applied"] and snap["changed_files"]:
-            if snap["verify_verdict"] in {"approve", "weak-approve", "review"}:
-                progress = True
+            progress = True
 
         if ci_after < ci_before:
             progress = True
@@ -203,17 +199,34 @@ def main() -> int:
         if snap["merge_decision"] == "MERGE_READY":
             ready_for_pr = True
             stop_reason = "merge_ready"
+            final_status = "ready_for_pr"
+            next_action = "open_pr"
+
         elif snap["merge_decision"] == "REVIEW_ONLY":
             ready_for_pr = True
             stop_reason = "review_only_but_pr_allowed"
+            final_status = "review_only_ready_for_pr"
+            next_action = "open_pr"
+
         elif not snap["applied"]:
             stop_reason = snap["apply_reason"] or "patch_not_applied"
+            final_status = "no_progress"
+            next_action = "manual_review"
+
         elif snap["verify_verdict"] == "reject":
             stop_reason = "verifier_reject"
+            final_status = "no_progress"
+            next_action = "manual_review"
+
         elif snap["review_verdict"] == "reject":
             stop_reason = "review_reject"
+            final_status = "no_progress"
+            next_action = "manual_review"
+
         else:
             stop_reason = "no_progress"
+            final_status = "no_progress"
+            next_action = "manual_review"
 
         passes.append(
             {
@@ -237,20 +250,10 @@ def main() -> int:
         )
 
         if ready_for_pr:
-            final_status = "ready_for_pr"
-            next_action = "open_pr"
             break
 
         if not progress:
-            final_status = "no_progress"
-            next_action = "manual_review"
             break
-
-        final_status = "partial_progress"
-        next_action = "retry_next_target"
-
-    if final_status == "partial_progress" and not ready_for_pr:
-        next_action = "manual_review"
 
     state = {
         "final_status": final_status,
