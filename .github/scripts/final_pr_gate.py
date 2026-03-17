@@ -26,6 +26,8 @@ def main():
     merge_state = read_json(AUDIT_OUT / "merge_controller_state.json")
     patch_apply = read_json(AUDIT_OUT / "patch_apply_report.json")
     patch_review = read_json(AUDIT_OUT / "post_patch_review.json")
+    orchestrator = read_json(AUDIT_OUT / "repair_orchestrator_state.json")
+    loop_state = read_json(AUDIT_OUT / "ai_repair_loop_state.json")
 
     decision = str(merge_state.get("decision", "")).strip().upper()
     merge_reason = str(merge_state.get("reason", "")).strip() or "unknown"
@@ -33,7 +35,15 @@ def main():
     should_open_pr = bool(merge_state.get("should_open_pr", False))
     auto_merge_safe = bool(merge_state.get("auto_merge_safe", False))
     patch_applied = bool(patch_apply.get("applied", False))
-    review_verdict = str(patch_review.get("verdict", "")).strip().lower()
+    changed_files = patch_apply.get("applied_targets", []) or []
+    review_verdict = str(
+        patch_review.get("review_verdict", patch_review.get("final_verdict", ""))
+    ).strip().lower()
+
+    orchestrator_action = str(orchestrator.get("action", "")).strip()
+    orchestrator_reason = str(orchestrator.get("reason", "")).strip()
+    loop_real_progress = bool(loop_state.get("real_progress", False))
+    loop_ready_for_pr = bool(loop_state.get("ready_for_pr", False))
 
     allow_pr = False
     auto_merge = False
@@ -48,6 +58,12 @@ def main():
         real_progress = False
         reason = "patch_not_applied"
 
+    elif not changed_files:
+        allow_pr = False
+        auto_merge = False
+        real_progress = False
+        reason = "no_committable_change"
+
     elif decision == "MERGE_READY" and should_open_pr:
         allow_pr = True
         auto_merge = bool(should_merge and auto_merge_safe)
@@ -60,7 +76,19 @@ def main():
         real_progress = True
         reason = merge_reason or "review_only"
 
-    elif review_verdict == "accept" and patch_applied:
+    elif orchestrator_action in {"open_new_ai_pr", "update_existing_ai_pr"}:
+        allow_pr = True
+        auto_merge = False
+        real_progress = True
+        reason = orchestrator_reason or merge_reason or "orchestrator_open_pr"
+
+    elif loop_ready_for_pr or (loop_real_progress and review_verdict == "review"):
+        allow_pr = True
+        auto_merge = False
+        real_progress = True
+        reason = merge_reason or "review_progress_open_pr"
+
+    elif review_verdict in {"approve", "weak-approve"} and patch_applied:
         allow_pr = True
         auto_merge = False
         real_progress = True
