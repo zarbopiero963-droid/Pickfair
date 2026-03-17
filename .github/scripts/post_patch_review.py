@@ -32,7 +32,9 @@ def write_text(path: Path, text: str) -> None:
 
 
 def normalize_path(path_str: str) -> str:
-    raw = str(path_str or "").replace("\\", "/").strip()
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
     while raw.startswith("./"):
         raw = raw[2:]
     return raw
@@ -63,9 +65,9 @@ def is_contract_like_target(path_str: str) -> bool:
 def extract_test_success(targeted_tests: dict) -> tuple[bool, int, int]:
     if "success" in targeted_tests:
         success = bool(targeted_tests.get("success", False))
-        tests_run = targeted_tests.get("tests_run", []) or []
+        tests_run = targeted_tests.get("tests_run", targeted_tests.get("targets", [])) or []
         executed_count = len(tests_run)
-        failure_count = 0 if success else 1
+        failure_count = 0 if success else (1 if executed_count > 0 else 0)
         return success, executed_count, failure_count
 
     summary = targeted_tests.get("summary", {}) or {}
@@ -171,10 +173,13 @@ def main() -> int:
 
         elif issue_type == "test_failure":
             logic_preserved = True
+
             if is_guardrail_test(target_file):
                 review_verdict = "review"
-                summary = "Guardrail test patch requires review."
+                summary = "Guardrail test patch changed and should open review-only PR."
                 reasons.append("Guardrail tests are sensitive by design.")
+                reasons.append("Real diff detected on guardrail test; promote to review-only, not reject.")
+
             else:
                 if executed_count > 0 and tests_success:
                     review_verdict = "approve"
