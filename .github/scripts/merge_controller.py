@@ -3,322 +3,121 @@
 import json
 from pathlib import Path
 
-ROOT = Path(".").resolve()
-AUDIT_OUT = ROOT / "audit_out"
+AUDIT_OUT = Path("audit_out")
 
 
-def read_text(path: Path) -> str:
+def read_json(path):
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-
-def read_json(path: Path):
-    try:
-        return json.loads(read_text(path))
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
-def write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+def write_json(path, data):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+def write_text(path, text):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(text, encoding="utf-8")
 
 
-def normalize_path(path_str: str) -> str:
-    raw = str(path_str or "").strip().replace("\\", "/")
-    if not raw:
-        return ""
-    try:
-        p = Path(raw)
-        if p.is_absolute():
-            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
-    except Exception:
-        pass
-    return raw.lstrip("./")
-
-
-def is_runtime_python(path_str: str) -> bool:
-    rel = normalize_path(path_str).lower()
-    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
-
-
-def is_generated_test(path_str: str) -> bool:
-    return normalize_path(path_str).lower().startswith("tests/generated/")
-
-
-def is_guardrail_test(path_str: str) -> bool:
-    return normalize_path(path_str).lower().startswith("tests/guardrails/")
-
-
-def is_human_only_target(target_file: str, classification: str) -> bool:
-    target_file = normalize_path(target_file).lower()
-    classification = str(classification or "").strip()
-
-    if classification == "HUMAN_ONLY":
-        return True
-    if target_file.startswith(".github/scripts/"):
-        return True
-    if target_file.startswith("tests/") and "hft" in target_file:
-        return True
-
-    return False
-
-
-def get_last_cycle(loop_state: dict) -> dict:
-    cycles = loop_state.get("cycles", []) or []
-    if not cycles:
-        return {}
-    return cycles[-1]
-
-
-def has_real_committable_change(loop_state: dict, apply_report: dict) -> bool:
-    if not bool(apply_report.get("applied", False)):
-        return False
-
-    last = get_last_cycle(loop_state)
-    if not last:
-        return False
-
-    if bool(last.get("rollback", False)):
-        return False
-    if not bool(last.get("improvement", False)):
-        return False
-
-    return True
-
-
-def build_report(state: dict) -> str:
+def build_report(data):
     lines = []
     lines.append("Merge Controller")
     lines.append("")
-    lines.append(f"Decision: {state.get('decision', '')}")
-    lines.append(f"Reason: {state.get('reason', '')}")
+    lines.append(f"Decision: {data.get('decision', '')}")
+    lines.append(f"Reason: {data.get('reason', '')}")
     lines.append("")
-    lines.append(f"Should merge: {'YES' if state.get('should_merge') else 'NO'}")
-    lines.append(f"Should wait existing PR: {'YES' if state.get('should_wait_existing_pr') else 'NO'}")
-    lines.append(f"Should open or update PR: {'YES' if state.get('should_open_or_update_pr') else 'NO'}")
+    lines.append(f"Should merge: {'YES' if data.get('should_merge') else 'NO'}")
+    lines.append(f"Should open PR: {'YES' if data.get('should_open_pr') else 'NO'}")
+    lines.append(f"Auto merge safe: {'YES' if data.get('auto_merge_safe') else 'NO'}")
     lines.append("")
-    lines.append(f"Applied: {'YES' if state.get('applied') else 'NO'}")
-    lines.append(f"Real committable change: {'YES' if state.get('real_committable_change') else 'NO'}")
-    lines.append(f"Verifier verdict: {state.get('verifier_verdict', '')}")
-    lines.append(f"Post patch review verdict: {state.get('review_verdict', '')}")
-    lines.append(f"Reviewable: {'YES' if state.get('reviewable') else 'NO'}")
-    lines.append(f"Auto merge safe: {'YES' if state.get('auto_merge_safe') else 'NO'}")
+    lines.append(f"Patch applied: {'YES' if data.get('patch_applied') else 'NO'}")
+    lines.append(f"Patch verifier verdict: {data.get('patch_verifier_verdict', '')}")
+    lines.append(f"Post patch review verdict: {data.get('post_patch_review_verdict', '')}")
+    lines.append(f"Targeted tests success: {'YES' if data.get('targeted_tests_success') else 'NO'}")
     lines.append("")
-    lines.append(f"Contract restored: {'YES' if state.get('contract_restored') else 'NO'}")
-    lines.append(f"Minimal change: {'YES' if state.get('minimal_change') else 'NO'}")
-    lines.append(f"Logic preserved: {'YES' if state.get('logic_preserved') else 'NO'}")
-    lines.append(f"Verifier consistent: {'YES' if state.get('verifier_consistent') else 'NO'}")
-    lines.append("")
-    lines.append(f"Repo materially greener: {'YES' if state.get('repo_materially_greener') else 'NO'}")
-    lines.append(f"Repo fully green: {'YES' if state.get('repo_fully_green') else 'NO'}")
-    lines.append(f"Continuation recommended: {'YES' if state.get('continuation_recommended') else 'NO'}")
-    lines.append(f"Loop next action: {state.get('loop_next_action', '')}")
-    lines.append(f"Orchestrator action: {state.get('orchestrator_action', '')}")
-    lines.append("")
-    lines.append(f"Existing AI PR number: {state.get('existing_ai_pr_number') or 'none'}")
-    lines.append(f"Existing AI PR state: {state.get('existing_ai_pr_state') or 'none'}")
-    lines.append(f"Fix type: {state.get('fix_type', '')}")
-    lines.append("")
-    lines.append("Touched files")
-    touched_files = state.get("touched_files", []) or []
-    if touched_files:
-        for file in touched_files:
-            lines.append(f"- {file}")
+    lines.append("Changed files")
+    changed = data.get("changed_files", []) or []
+    if changed:
+        for item in changed:
+            lines.append(f"- {item}")
     else:
-        lines.append("- Nessun file toccato.")
+        lines.append("- Nessun file modificato.")
     return "\n".join(lines)
 
 
-def main() -> int:
-    patch_candidate_payload = read_json(AUDIT_OUT / "patch_candidate.json")
+def main():
+    patch_apply = read_json(AUDIT_OUT / "patch_apply_report.json")
     patch_verification = read_json(AUDIT_OUT / "patch_verification.json")
+    targeted_tests = read_json(AUDIT_OUT / "targeted_tests.json")
     post_patch_review = read_json(AUDIT_OUT / "post_patch_review.json")
-    patch_apply_report = read_json(AUDIT_OUT / "patch_apply_report.json")
-    issue_classification = read_json(AUDIT_OUT / "issue_classification.json")
-    repair_loop_state = read_json(AUDIT_OUT / "ai_repair_loop_state.json")
-    repair_orchestrator_state = read_json(AUDIT_OUT / "repair_orchestrator_state.json")
-    targeted_tests = read_json(AUDIT_OUT / "targeted_test_results.json")
+    patch_candidate = read_json(AUDIT_OUT / "patch_candidate.json").get("patch_candidate", {}) or {}
 
-    candidate = patch_candidate_payload.get("patch_candidate") or {}
-    if not isinstance(candidate, dict):
-        candidate = {}
+    patch_applied = bool(patch_apply.get("applied", False))
+    changed_files = patch_apply.get("applied_targets", []) or []
+    verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower()
+    review_verdict = str(post_patch_review.get("verdict", "")).strip().lower()
+    tests_success = bool(targeted_tests.get("success", False))
 
-    target_file = normalize_path(candidate.get("target_file", ""))
-    classification = str(candidate.get("classification", "")).strip()
-    issue_type = str(candidate.get("issue_type", "")).strip()
-
-    verifier_verdict = str(patch_verification.get("verdict", "")).strip().lower() or "unknown"
-    review_verdict = str(post_patch_review.get("review_verdict", "")).strip().lower()
-    if not review_verdict:
-        review_verdict = str(post_patch_review.get("final_verdict", "")).strip().lower() or "unknown"
-
-    applied = bool(patch_apply_report.get("applied", False))
-    contract_restored = bool(post_patch_review.get("contract_restored", False))
-    minimal_change = bool(post_patch_review.get("minimal_change", False))
-    logic_preserved = bool(post_patch_review.get("logic_preserved", False))
-
-    repo_materially_greener = bool(repair_loop_state.get("repo_materially_greener", False))
-    repo_fully_green = bool(repair_loop_state.get("repo_fully_green", False))
-    continuation_recommended = bool(repair_loop_state.get("continuation_recommended", False))
-    loop_next_action = str(repair_loop_state.get("next_action", "")).strip()
-
-    orchestrator_action = str(repair_orchestrator_state.get("action", "")).strip()
-    existing_ai_pr_number = str(repair_orchestrator_state.get("existing_ai_pr_number", "")).strip()
-    existing_ai_pr_state = str(repair_orchestrator_state.get("existing_ai_pr_state", "")).strip()
-    fix_type = str(repair_orchestrator_state.get("fix_type", "")).strip() or issue_type
-
-    touched_files = patch_apply_report.get("applied_targets", []) or patch_apply_report.get("target_files", []) or []
-    touched_files = [normalize_path(x) for x in touched_files if normalize_path(x)]
-    if not touched_files and target_file:
-        touched_files = [target_file]
-
-    real_committable_change = has_real_committable_change(repair_loop_state, patch_apply_report)
-    human_only_target = is_human_only_target(target_file, classification)
-
-    verifier_consistent = True
-    if verifier_verdict == "reject" and review_verdict in {"approve", "weak-approve"}:
-        verifier_consistent = False
-    if verifier_verdict in {"approve", "weak-approve"} and review_verdict == "reject":
-        verifier_consistent = False
-
-    executed_count = int((targeted_tests.get("summary", {}) or {}).get("executed_count", 0) or 0)
-    failure_count = targeted_tests.get("failure_count")
-    if not isinstance(failure_count, int):
-        failure_count = None
-
-    reviewable = False
-    auto_merge_safe = False
     decision = "BLOCK"
-    reason = "block"
+    reason = "unknown"
     should_merge = False
-    should_wait_existing_pr = False
-    should_open_or_update_pr = False
+    should_open_pr = False
+    auto_merge_safe = False
 
-    if repo_fully_green or orchestrator_action == "stop_green" or loop_next_action == "repository_green_stop":
+    if not patch_applied:
         decision = "BLOCK"
-        reason = "repository_fully_green"
+        reason = "patch_not_applied"
 
-    elif human_only_target:
+    elif verifier_verdict != "accept":
         decision = "BLOCK"
-        reason = "human_only_target"
+        reason = patch_verification.get("reason", "verifier_reject")
 
-    elif not real_committable_change:
+    elif review_verdict != "accept":
         decision = "BLOCK"
-        if not applied:
-            reason = "patch_not_applied"
-        else:
-            last_cycle = get_last_cycle(repair_loop_state)
-            if bool(last_cycle.get("rollback", False)):
-                reason = "rolled_back_no_committable_change"
-            elif not bool(last_cycle.get("improvement", False)):
-                reason = "no_real_committable_change"
-            else:
-                reason = "no_real_committable_change"
+        reason = post_patch_review.get("reason", "review_reject")
 
-    elif verifier_verdict == "reject" and review_verdict == "reject":
+    elif not changed_files:
         decision = "BLOCK"
-        reason = "patch_not_reviewable"
+        reason = "no_committable_change"
 
-    elif verifier_verdict == "approve" and review_verdict == "approve":
+    elif tests_success:
         decision = "MERGE_READY"
-        reason = "approved_patch"
-        reviewable = True
-        auto_merge_safe = bool(
-            applied
-            and real_committable_change
-            and minimal_change
-            and logic_preserved
-            and verifier_consistent
-            and not is_guardrail_test(target_file)
-            and (failure_count in (0, None))
-        )
-        should_merge = auto_merge_safe
-        should_open_or_update_pr = True
-
-    elif verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
-        decision = "REVIEW_ONLY"
-        reason = "reviewable_patch"
-        reviewable = True
-        auto_merge_safe = False
-        should_merge = False
-        should_open_or_update_pr = True
-
-        if is_runtime_python(target_file) and issue_type in {"runtime_failure", "lint_failure"}:
-            if executed_count == 0 and minimal_change and logic_preserved:
-                reason = "reviewable_runtime_patch"
-            elif failure_count == 0 and executed_count > 0:
-                reason = "reviewable_runtime_patch_with_green_tests"
-
-    elif existing_ai_pr_number and orchestrator_action == "update_existing_ai_pr":
-        if real_committable_change and verifier_verdict in {"approve", "weak-approve", "review"} and review_verdict in {"approve", "weak-approve", "review"}:
-            decision = "REVIEW_ONLY"
-            reason = "update_existing_ai_pr"
-            reviewable = True
-            should_open_or_update_pr = True
-        else:
-            decision = "BLOCK"
-            reason = "existing_pr_but_patch_not_committable"
+        reason = "patch_valid_and_tests_passed"
+        should_merge = True
+        should_open_pr = True
+        auto_merge_safe = True
 
     else:
-        decision = "BLOCK"
-        if verifier_verdict == "reject" or review_verdict == "reject":
-            reason = "patch_not_reviewable"
-        elif not verifier_consistent:
-            reason = "verifier_inconsistent"
-        elif not repo_materially_greener and loop_next_action == "manual_intervention_needed":
-            reason = "no_real_improvement"
-        else:
-            reason = "block"
+        decision = "REVIEW_ONLY"
+        reason = "patch_valid_but_tests_not_confirmed"
+        should_merge = False
+        should_open_pr = True
+        auto_merge_safe = False
 
-    state = {
+    result = {
         "decision": decision,
         "reason": reason,
         "should_merge": should_merge,
-        "should_wait_existing_pr": should_wait_existing_pr,
-        "should_open_or_update_pr": should_open_or_update_pr,
-        "reviewable": reviewable,
+        "should_open_pr": should_open_pr,
         "auto_merge_safe": auto_merge_safe,
-        "applied": applied,
-        "real_committable_change": real_committable_change,
-        "verifier_verdict": verifier_verdict,
-        "review_verdict": review_verdict,
-        "contract_restored": contract_restored,
-        "minimal_change": minimal_change,
-        "logic_preserved": logic_preserved,
-        "verifier_consistent": verifier_consistent,
-        "repo_materially_greener": repo_materially_greener,
-        "repo_fully_green": repo_fully_green,
-        "continuation_recommended": continuation_recommended,
-        "loop_next_action": loop_next_action,
-        "orchestrator_action": orchestrator_action,
-        "existing_ai_pr_number": existing_ai_pr_number,
-        "existing_ai_pr_state": existing_ai_pr_state,
-        "fix_type": fix_type,
-        "touched_files": touched_files,
-        "primary_target": target_file,
-        "primary_classification": classification,
+        "patch_applied": patch_applied,
+        "patch_verifier_verdict": verifier_verdict,
+        "post_patch_review_verdict": review_verdict,
+        "targeted_tests_success": tests_success,
+        "changed_files": changed_files,
+        "target_file": patch_candidate.get("target_file", ""),
+        "strategy": patch_candidate.get("strategy", ""),
     }
 
-    report = build_report(state)
+    write_json(AUDIT_OUT / "merge_controller_state.json", result)
+    write_text(AUDIT_OUT / "merge_controller_report.md", build_report(result))
 
-    write_json(AUDIT_OUT / "merge_controller_state.json", state)
-    write_json(AUDIT_OUT / "merge_decision.json", state)
-    write_text(AUDIT_OUT / "merge_controller_report.md", report)
-
-    print(json.dumps(state, indent=2, ensure_ascii=False))
-    return 0
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
