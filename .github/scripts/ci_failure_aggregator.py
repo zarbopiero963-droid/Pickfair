@@ -13,7 +13,7 @@ MAX_FAILURES = 300
 PYTHON_FILE_RE = re.compile(r"([A-Za-z0-9_./-]+\.py):(\d+)(?::(\d+))?")
 TEST_FILE_RE = re.compile(r"(tests/[A-Za-z0-9_./-]+\.py)")
 TRACEBACK_FILE_RE = re.compile(r'File "([^"]+\.py)", line (\d+)')
-CANNOT_IMPORT_RE = re.compile(r"cannot import name ['\"]?([A-Za-z0-9_]+)['\"]?", re.I)
+FAILED_TEST_RE = re.compile(r"(tests/[A-Za-z0-9_./-]+\.py::[A-Za-z0-9_./-]+)\s+FAILED", re.I)
 
 
 def read_text(path: Path) -> str:
@@ -32,14 +32,16 @@ def normalize_path(path_str: str) -> str:
     raw = str(path_str or "").strip().replace("\\", "/")
     if not raw:
         return ""
-    return raw.lstrip("./")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw
 
 
 def relative_log_path(path: Path) -> str:
     try:
-        return normalize_path(str(path.relative_to(ROOT)))
+        return normalize_path(path.relative_to(ROOT))
     except Exception:
-        return normalize_path(str(path))
+        return normalize_path(path)
 
 
 def should_ignore_line(line: str) -> bool:
@@ -47,111 +49,87 @@ def should_ignore_line(line: str) -> bool:
     if not low:
         return True
 
-    ok_prefixes = (
+    ignored_prefixes = (
         "[ok]",
         "ok ",
-        "ok:",
-        "passed ",
-        "collected ",
-        "platform ",
-        "rootdir:",
-        "plugins:",
-        "cache hit",
-        "cache restored",
-        "restored cache",
-        "using python",
-        "set up job",
-        "post setup",
-        "post checkout",
-        "cleanup",
-        "checkout repository",
-        "setup python",
-        "install dependencies",
-        "create folders",
-        "verify required scripts",
-    )
-    if low.startswith(ok_prefixes):
-        return True
-
-    success_markers = (
-        "successfully installed",
-        "requirement already satisfied",
-        "all required scripts found",
-        "workflow mode:",
-        "collecting",
-        "downloading",
-        "installing collected packages",
-        "preparing metadata",
-        "building wheel",
-        "built wheel",
-        "uploaded bytes",
-        "artifact name is valid",
-        "root directory input is valid",
-        "finalizing artifact upload",
-        "has been successfully uploaded",
-    )
-    if any(marker in low for marker in success_markers):
-        return True
-
-    noisy_markers = (
-        "::debug::",
-        "temporarily overriding home=",
-        "adding repository directory to the temporary git global config as a safe directory",
-        "/usr/bin/git config",
-        "/usr/bin/git version",
-        "copying '/home/runner/.gitconfig'",
+        "run ",
+        "shell:",
+        "env:",
         "pythonlocation:",
         "python_root_dir:",
+        "python2_root_dir:",
+        "python3_root_dir:",
         "ld_library_path:",
         "pkg_config_path:",
+        "rootdir:",
+        "plugins:",
+        "platform ",
+        "collecting ",
+        "collected ",
+        "requirement already satisfied",
+        "installing collected packages",
+        "successfully installed",
+        "downloading ",
+        "using cached ",
+        "workflow mode:",
+        "all required scripts found.",
+        "beginning upload",
+        "uploaded bytes",
+        "finalizing artifact upload",
+        "artifact ",
+        "copying ",
+        "temporarily overriding home=",
+        "/usr/bin/git config",
+        "/usr/bin/git version",
     )
-    if any(marker in low for marker in noisy_markers):
+    if low.startswith(ignored_prefixes):
+        return True
+
+    ignored_contains = (
+        "functions",
+        "seconds",
+        "━━━━━━━━",
+        "========",
+        "warning: running pip",
+        "notice:",
+    )
+    if any(x in low for x in ignored_contains):
+        return True
+
+    if low.startswith("./tests/") and " failed" not in low and " error" not in low:
         return True
 
     return False
 
 
 def detect_target_file(line: str) -> str:
-    m = PYTHON_FILE_RE.search(line)
-    if m:
-        return normalize_path(m.group(1))
-
     m = TRACEBACK_FILE_RE.search(line)
     if m:
         return normalize_path(m.group(1))
+
+    m = FAILED_TEST_RE.search(line)
+    if m:
+        return normalize_path(m.group(1).split("::")[0])
 
     m = TEST_FILE_RE.search(line)
     if m:
         return normalize_path(m.group(1))
 
-    m = CANNOT_IMPORT_RE.search(line)
+    m = PYTHON_FILE_RE.search(line)
     if m:
-        symbol = m.group(1)
-        symbol_map = {
-            "ExecutorManager": "executor_manager.py",
-            "AutoUpdater": "auto_updater.py",
-            "SYSTEM_PAYLOAD": "tests/fixtures/system_payloads.py",
-        }
-        if symbol in symbol_map:
-            return symbol_map[symbol]
+        return normalize_path(m.group(1))
 
     return ""
 
 
-def detect_error_type_and_issue_type(line: str, target_file: str) -> tuple[str, str]:
+def classify_line(line: str, target_file: str) -> tuple[str, str]:
     low = line.lower()
     target_low = target_file.lower()
 
-    if "ruff" in low or "f401" in low or "f841" in low or "e9" in low or "undefined name" in low:
+    if "ruff" in low or "f401" in low or "f841" in low or "e999" in low or "undefined name" in low:
         return "python_file_error", "lint_failure"
 
-    if "failed [" in low or (" failed" in low and "tests/" in low):
-        return "pytest_failed", "test_failure"
-
-    if low.startswith("failed ") and "tests/" in low:
-        return "pytest_failed", "test_failure"
-
-    if "assertionerror" in low and target_low.startswith("tests/"):
+    if " failed" in low and "tests/" in low:
         return "pytest_failed", "test_failure"
 
     runtime_markers = (
@@ -164,9 +142,9 @@ def detect_error_type_and_issue_type(line: str, target_file: str) -> tuple[str, 
         "importerror",
         "modulenotfounderror",
         "syntaxerror",
-        "cannot import name",
+        "indentationerror",
     )
-    if any(marker in low for marker in runtime_markers):
+    if any(m in low for m in runtime_markers):
         if target_low.endswith(".py") and not target_low.startswith("tests/"):
             return "traceback_file", "runtime_failure"
         if target_low.startswith("tests/"):
@@ -177,7 +155,7 @@ def detect_error_type_and_issue_type(line: str, target_file: str) -> tuple[str, 
         if "error" in low or "exception" in low:
             return "python_file_error", "runtime_failure"
 
-    if "process completed with exit code" in low or "exit code 1" in low or "exit code 2" in low:
+    if "process completed with exit code" in low:
         return "process_exit", "ci_failure"
 
     if "gh013" in low or "repository rule violations" in low or "failed to push" in low:
@@ -200,45 +178,45 @@ def parse_log(log_path: Path) -> list[dict]:
             continue
 
         target_file = detect_target_file(line)
-
         low = line.lower()
+
         has_failure_signal = any(
-            marker in low
-            for marker in (
+            token in low
+            for token in (
                 "failed",
                 "error",
                 "traceback",
                 "exception",
-                "cannot import name",
-                "process completed with exit code",
-                "gh013",
-                "repository rule violations",
-                "failed to push",
-                "ruff",
-                "f401",
-                "f841",
-                "syntaxerror",
+                "typeerror",
+                "attributeerror",
+                "nameerror",
+                "keyerror",
+                "runtimeerror",
                 "importerror",
                 "modulenotfounderror",
+                "syntaxerror",
+                "f401",
+                "f841",
+                "ruff",
+                "process completed with exit code",
+                "gh013",
+                "failed to push",
             )
         )
 
         if not target_file and not has_failure_signal:
             continue
 
-        error_type, issue_type = detect_error_type_and_issue_type(line, target_file)
+        error_type, issue_type = classify_line(line, target_file)
 
         if issue_type == "ci_failure" and not target_file:
-            # keep only truly meaningful generic CI failures
             if not any(
-                marker in low
-                for marker in (
+                token in low
+                for token in (
                     "process completed with exit code",
                     "gh013",
                     "repository rule violations",
                     "failed to push",
-                    "traceback",
-                    "exception",
                 )
             ):
                 continue
