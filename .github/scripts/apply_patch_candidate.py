@@ -31,8 +31,10 @@ def write_text(path: Path, text: str):
     path.write_text(text, encoding="utf-8")
 
 
-def normalize(path: str) -> str:
-    raw = str(path or "").replace("\\", "/").strip()
+def normalize_path(path_str: str) -> str:
+    raw = str(path_str or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
     while raw.startswith("./"):
         raw = raw[2:]
     return raw
@@ -378,10 +380,8 @@ def add_patch_footer(content: str, issue_type: str) -> tuple[str, bool, list[str
 def safe_write_if_valid(target_file: str, original: str, updated: str) -> bool:
     if updated == original:
         return False
-
     if target_file.endswith(".py") and not safe_parse_python(updated):
         return False
-
     write_file(target_file, updated)
     return True
 
@@ -507,7 +507,7 @@ def try_llm_fix(target_file: str, original: str, candidate: dict) -> tuple[str, 
 
 
 def apply_patch(candidate: dict) -> dict:
-    target_file = normalize(candidate.get("target_file"))
+    target_file = normalize_path(candidate.get("target_file", ""))
     issue_type = str(candidate.get("issue_type", "")).strip()
 
     if not target_file or not file_exists(target_file):
@@ -563,7 +563,7 @@ def apply_patch(candidate: dict) -> dict:
         "applied": False,
         "reason": "no_effect",
         "applied_targets": [],
-        "details": details + llm_details if 'llm_details' in locals() else details or ["patch produced no valid code change"],
+        "details": details + llm_details if "llm_details" in locals() else details or ["patch produced no valid code change"],
         "target_file": target_file,
         "issue_type": issue_type,
     }
