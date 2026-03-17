@@ -8,49 +8,77 @@ ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
 
-def read_json(path):
+def read_json(path: Path):
     try:
-        return json.loads(Path(path).read_text())
-    except:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
         return {}
 
 
-def write_json(path, data):
-    Path(path).write_text(json.dumps(data, indent=2))
+def write_json(path: Path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def run_tests(test_files):
-    if not test_files:
-        return True, "no tests"
+def normalize(path: str) -> str:
+    return str(path or "").replace("\\", "/").strip()
 
-    cmd = ["pytest", "-q"] + test_files
 
-    result = subprocess.run(
-        cmd,
-        cwd=ROOT,
-        capture_output=True,
-        text=True
-    )
+def get_tests_from_candidate(candidate: dict) -> list[str]:
+    tests = candidate.get("related_tests", []) or []
+    return [normalize(t) for t in tests if t]
 
-    return result.returncode == 0, result.stdout + result.stderr
+
+def fallback_tests() -> list[str]:
+    return [
+        "tests/test_auto_updater.py",
+        "tests/test_executor_manager_shutdown.py",
+        "tests/test_executor_manager_parallel.py",
+    ]
+
+
+def run_pytest(targets: list[str]) -> tuple[bool, str]:
+    if not targets:
+        targets = fallback_tests()
+
+    existing = [t for t in targets if (ROOT / t).exists()]
+
+    if not existing:
+        return False, "no_tests_found"
+
+    cmd = ["pytest", "-q"] + existing
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        success = result.returncode == 0
+        output = result.stdout + "\n" + result.stderr
+        return success, output
+    except Exception as e:
+        return False, str(e)
 
 
 def main():
-    candidate = read_json(AUDIT_OUT / "patch_candidate.json").get("patch_candidate", {})
+    candidate_data = read_json(AUDIT_OUT / "patch_candidate.json")
+    candidate = candidate_data.get("patch_candidate", {}) or {}
 
-    tests = candidate.get("related_tests", [])
+    targets = get_tests_from_candidate(candidate)
 
-    success, output = run_tests(tests)
+    success, output = run_pytest(targets)
 
     result = {
-        "tests_run": tests,
         "success": success,
-        "output": output[-2000:]
+        "targets": targets,
+        "output_snippet": output[:2000],
     }
 
     write_json(AUDIT_OUT / "targeted_tests.json", result)
 
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
