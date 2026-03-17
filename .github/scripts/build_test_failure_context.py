@@ -6,10 +6,6 @@ from pathlib import Path
 ROOT = Path(".").resolve()
 AUDIT_OUT = ROOT / "audit_out"
 
-MAX_CONTEXTS = 50
-MAX_RELATED_TESTS = 5
-MAX_NOTES = 6
-
 
 def read_text(path: Path) -> str:
     try:
@@ -34,219 +30,193 @@ def normalize_path(path_str: str) -> str:
     raw = str(path_str or "").strip().replace("\\", "/")
     if not raw:
         return ""
-    try:
-        p = Path(raw)
-        if p.is_absolute():
-            return str(p.resolve().relative_to(ROOT)).replace("\\", "/")
-    except Exception:
-        pass
-    return raw.lstrip("./")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw
 
 
-def unique_keep(items, limit: int) -> list[str]:
-    out = []
-    seen = set()
-    for item in items or []:
-        value = str(item).strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        out.append(value)
-        if len(out) >= limit:
-            break
-    return out
+def repo_exists(rel_path: str) -> bool:
+    rel = normalize_path(rel_path)
+    return bool(rel) and (ROOT / rel).exists()
 
 
-def guess_related_tests_for_runtime(runtime_file: str) -> list[str]:
-    rel = normalize_path(runtime_file)
-    if not rel:
+def is_runtime_python(path_str: str) -> bool:
+    rel = normalize_path(path_str).lower()
+    return rel.endswith(".py") and not rel.startswith("tests/") and not rel.startswith(".github/")
+
+
+def is_test_python(path_str: str) -> bool:
+    rel = normalize_path(path_str).lower()
+    return rel.startswith("tests/") and rel.endswith(".py")
+
+
+def guess_related_tests(source_file: str) -> list[str]:
+    source = normalize_path(source_file)
+    if not is_runtime_python(source):
         return []
 
-    stem = Path(rel).stem
+    stem = Path(source).stem
     guesses = [
         f"tests/test_{stem}.py",
         f"tests/contracts/test_{stem}.py",
         f"tests/guardrails/test_{stem}.py",
     ]
-
-    existing = []
-    for guess in guesses:
-        if (ROOT / guess).exists():
-            existing.append(guess)
-
-    return existing[:MAX_RELATED_TESTS]
+    return [g for g in guesses if repo_exists(g)]
 
 
-def build_from_ci_failures(ci_payload: dict) -> list[dict]:
-    contexts = []
-    failures = ci_payload.get("ci_failures", []) or []
+def guess_related_source(test_file: str) -> str:
+    test_path = normalize_path(test_file)
+    if not is_test_python(test_path):
+        return ""
 
-    for item in failures:
-        target_file = normalize_path(item.get("target_file", ""))
-        if not target_file:
-            continue
+    name = Path(test_path).name
+    stem = Path(name).stem
 
-        issue_type = str(item.get("issue_type", "")).strip()
-        error_type = str(item.get("error_type", "")).strip()
-        source = str(item.get("source", "")).strip()
-        job = str(item.get("job", "")).strip()
-        signal = str(item.get("signal", "")).strip()
-
-        notes = [
-            f"CI failure source: {source}" if source else "",
-            f"CI job: {job}" if job else "",
-            f"Error type: {error_type}" if error_type else "",
-            f"Signal: {signal}" if signal else "",
-            "Questo contesto proviene dai workflow CI reali del repository.",
-        ]
-
-        related_tests = []
-        related_source_file = ""
-
-        if target_file.startswith("tests/"):
-            related_tests = [target_file]
-        elif target_file.endswith(".py") and not target_file.startswith(".github/"):
-            related_source_file = target_file
-            related_tests = guess_related_tests_for_runtime(target_file)
-
-        contexts.append(
-            {
-                "target_file": target_file,
-                "required_symbols": [],
-                "related_tests": unique_keep(related_tests, MAX_RELATED_TESTS),
-                "related_fixtures": [],
-                "related_contracts": [],
-                "notes": unique_keep(notes, MAX_NOTES),
-                "priority": "P0" if issue_type in {"runtime_failure", "lint_failure", "test_failure"} else "P1",
-                "issue_type": issue_type or "ci_failure",
-                "related_source_file": related_source_file,
-            }
+    candidates = []
+    if stem.startswith("test_"):
+        base = stem[5:]
+        candidates.extend(
+            [
+                f"{base}.py",
+                f"ai/{base}.py",
+                f"core/{base}.py",
+                f"controllers/{base}.py",
+                f"ui/{base}.py",
+            ]
         )
 
-    return contexts
+    for candidate in candidates:
+        if repo_exists(candidate):
+            return candidate
+    return ""
 
 
-def build_from_failing_tests(failing_payload: dict) -> list[dict]:
-    contexts = []
-    items = failing_payload.get("failing_tests", []) or []
-
+def unique_keep(items: list[str]) -> list[str]:
+    out = []
+    seen = set()
     for item in items:
-        if isinstance(item, dict):
-            target_file = normalize_path(item.get("target_file", "") or item.get("file", "") or "")
-            test_name = str(item.get("test_name", "") or item.get("name", "") or "").strip()
-        else:
-            target_file = ""
-            test_name = str(item).strip()
-
-        if not target_file and test_name:
-            if "::" in test_name:
-                target_file = normalize_path(test_name.split("::", 1)[0])
-
-        if not target_file:
+        value = normalize_path(item)
+        if not value or value in seen:
             continue
-
-        notes = [
-            "Questo contesto proviene dal deterministic failing test extractor.",
-            f"Failing test: {test_name}" if test_name else "",
-        ]
-
-        contexts.append(
-            {
-                "target_file": target_file,
-                "required_symbols": [],
-                "related_tests": unique_keep([target_file] if target_file.startswith("tests/") else [], MAX_RELATED_TESTS),
-                "related_fixtures": [],
-                "related_contracts": [],
-                "notes": unique_keep(notes, MAX_NOTES),
-                "priority": "P0",
-                "issue_type": "test_failure",
-                "related_source_file": "",
-            }
-        )
-
-    return contexts
-
-
-def merge_contexts(contexts: list[dict]) -> list[dict]:
-    merged = {}
-
-    for item in contexts:
-        target_file = normalize_path(item.get("target_file", ""))
-        if not target_file:
-            continue
-
-        if target_file not in merged:
-            merged[target_file] = {
-                "target_file": target_file,
-                "required_symbols": [],
-                "related_tests": [],
-                "related_fixtures": [],
-                "related_contracts": [],
-                "notes": [],
-                "priority": item.get("priority", "P1"),
-                "issue_type": item.get("issue_type", "ci_failure"),
-                "related_source_file": normalize_path(item.get("related_source_file", "")),
-            }
-
-        dst = merged[target_file]
-
-        if str(item.get("priority", "")).upper() == "P0":
-            dst["priority"] = "P0"
-
-        issue_type = str(item.get("issue_type", "")).strip()
-        if issue_type == "runtime_failure":
-            dst["issue_type"] = "runtime_failure"
-        elif issue_type == "lint_failure" and dst["issue_type"] != "runtime_failure":
-            dst["issue_type"] = "lint_failure"
-        elif issue_type == "test_failure" and dst["issue_type"] not in {"runtime_failure", "lint_failure"}:
-            dst["issue_type"] = "test_failure"
-        elif issue_type == "ci_failure" and not dst["issue_type"]:
-            dst["issue_type"] = "ci_failure"
-
-        if not dst.get("related_source_file") and item.get("related_source_file"):
-            dst["related_source_file"] = normalize_path(item.get("related_source_file", ""))
-
-        for key in ["required_symbols", "related_tests", "related_fixtures", "related_contracts", "notes"]:
-            existing = set(dst.get(key, []))
-            for value in item.get(key, []) or []:
-                value = str(value).strip()
-                if not value or value in existing:
-                    continue
-                dst[key].append(value)
-                existing.add(value)
-
-    results = []
-    for item in merged.values():
-        item["required_symbols"] = unique_keep(item.get("required_symbols", []), 10)
-        item["related_tests"] = unique_keep(item.get("related_tests", []), MAX_RELATED_TESTS)
-        item["related_fixtures"] = unique_keep(item.get("related_fixtures", []), 3)
-        item["related_contracts"] = unique_keep(item.get("related_contracts", []), 3)
-        item["notes"] = unique_keep(item.get("notes", []), MAX_NOTES)
-        results.append(item)
-
-    def score(x: dict):
-        return (
-            0 if str(x.get("priority", "")).upper() == "P0" else 1,
-            0 if str(x.get("issue_type", "")).strip() == "runtime_failure" else 1,
-            0 if str(x.get("issue_type", "")).strip() == "lint_failure" else 1,
-            0 if normalize_path(x.get("target_file", "")).startswith("tests/") else 1,
-            normalize_path(x.get("target_file", "")),
-        )
-
-    results.sort(key=score)
-    return results[:MAX_CONTEXTS]
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def main() -> int:
     ci_payload = read_json(AUDIT_OUT / "ci_failure_context.json")
-    failing_payload = read_json(AUDIT_OUT / "failing_tests.json")
+    if not ci_payload:
+        ci_payload = read_json(AUDIT_OUT / "ci_failures.json")
+
+    fix_payload = read_json(AUDIT_OUT / "fix_context.json")
+    issue_payload = read_json(AUDIT_OUT / "issue_classification.json")
 
     contexts = []
-    contexts.extend(build_from_ci_failures(ci_payload))
-    contexts.extend(build_from_failing_tests(failing_payload))
+    seen = set()
+
+    for item in ci_payload.get("ci_failures", []) or []:
+        target_file = normalize_path(item.get("target_file", ""))
+        issue_type = str(item.get("issue_type", "")).strip()
+        if not target_file:
+            continue
+
+        related_source = ""
+        related_tests = []
+
+        if is_runtime_python(target_file):
+            related_source = target_file
+            related_tests = guess_related_tests(target_file)
+        elif is_test_python(target_file):
+            related_source = guess_related_source(target_file)
+            related_tests = [target_file]
+
+        ctx = {
+            "target_file": target_file,
+            "issue_type": issue_type,
+            "related_source_file": related_source,
+            "related_tests": unique_keep(related_tests),
+            "notes": [str(item.get("signal", "")).strip()] if str(item.get("signal", "")).strip() else [],
+        }
+
+        key = (
+            ctx["target_file"],
+            ctx["issue_type"],
+            ctx["related_source_file"],
+            tuple(ctx["related_tests"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(ctx)
+
+    for item in fix_payload.get("fix_contexts", []) or []:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
+            continue
+
+        ctx = {
+            "target_file": target_file,
+            "issue_type": str(item.get("issue_type", "")).strip(),
+            "related_source_file": normalize_path(item.get("related_source_file", "")),
+            "related_tests": unique_keep(item.get("related_tests", []) or []),
+            "notes": [str(x).strip() for x in (item.get("notes", []) or []) if str(x).strip()],
+        }
+
+        key = (
+            ctx["target_file"],
+            ctx["issue_type"],
+            ctx["related_source_file"],
+            tuple(ctx["related_tests"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(ctx)
+
+    for item in issue_payload.get("issue_classification", []) or issue_payload.get("fix_contexts", []) or []:
+        target_file = normalize_path(item.get("target_file", ""))
+        if not target_file:
+            continue
+
+        related_source = normalize_path(item.get("related_source_file", ""))
+        related_tests = unique_keep(item.get("related_tests", []) or [])
+
+        if not related_source:
+            if is_runtime_python(target_file):
+                related_source = target_file
+            elif is_test_python(target_file):
+                related_source = guess_related_source(target_file)
+
+        if not related_tests:
+            if is_runtime_python(target_file):
+                related_tests = guess_related_tests(target_file)
+            elif is_test_python(target_file):
+                related_tests = [target_file]
+
+        ctx = {
+            "target_file": target_file,
+            "issue_type": str(item.get("issue_type", "")).strip(),
+            "related_source_file": related_source,
+            "related_tests": unique_keep(related_tests),
+            "notes": [str(x).strip() for x in (item.get("notes", []) or []) if str(x).strip()],
+        }
+
+        key = (
+            ctx["target_file"],
+            ctx["issue_type"],
+            ctx["related_source_file"],
+            tuple(ctx["related_tests"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(ctx)
 
     result = {
-        "test_failure_contexts": merge_contexts(contexts),
+        "test_failure_contexts": contexts,
+        "summary": {
+            "count": len(contexts),
+        },
     }
 
     write_json(AUDIT_OUT / "test_failure_context.json", result)
