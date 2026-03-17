@@ -13,7 +13,7 @@ MAX_FAILURES = 300
 PYTHON_FILE_RE = re.compile(r"([A-Za-z0-9_./-]+\.py):(\d+)(?::(\d+))?")
 TEST_FILE_RE = re.compile(r"(tests/[A-Za-z0-9_./-]+\.py)")
 TRACEBACK_FILE_RE = re.compile(r'File "([^"]+\.py)", line (\d+)')
-FAILED_TEST_RE = re.compile(r"(tests/[A-Za-z0-9_./-]+\.py::[A-Za-z0-9_./-]+)\s+FAILED", re.I)
+FAILED_TEST_RE = re.compile(r"(tests/[A-Za-z0-9_./:-]+)\s+FAILED", re.I)
 
 
 def read_text(path: Path) -> str:
@@ -39,9 +39,9 @@ def normalize_path(path_str: str) -> str:
 
 def relative_log_path(path: Path) -> str:
     try:
-        return normalize_path(path.relative_to(ROOT))
+        return normalize_path(str(path.relative_to(ROOT)))
     except Exception:
-        return normalize_path(path)
+        return normalize_path(str(path))
 
 
 def should_ignore_line(line: str) -> bool:
@@ -81,17 +81,35 @@ def should_ignore_line(line: str) -> bool:
         "temporarily overriding home=",
         "/usr/bin/git config",
         "/usr/bin/git version",
+        "set up job",
+        "post setup",
+        "post checkout",
+        "cleanup",
+        "checkout repository",
+        "setup python",
+        "install dependencies",
+        "create folders",
+        "verify required scripts",
     )
     if low.startswith(ignored_prefixes):
         return True
 
+    if " passed [" in low:
+        return True
+    if " run if [ -f " in low:
+        return True
+    if low.startswith("pytest "):
+        return True
+    if "##[group]run if [ -f " in low:
+        return True
+
     ignored_contains = (
-        "functions",
-        "seconds",
-        "━━━━━━━━",
-        "========",
         "warning: running pip",
         "notice:",
+        " functions",
+        "━━━━━━━━",
+        "========",
+        "has been successfully uploaded",
     )
     if any(x in low for x in ignored_contains):
         return True
@@ -129,6 +147,7 @@ def classify_line(line: str, target_file: str) -> tuple[str, str]:
     if "ruff" in low or "f401" in low or "f841" in low or "e999" in low or "undefined name" in low:
         return "python_file_error", "lint_failure"
 
+    # test failure SOLO su veri FAILED
     if " failed" in low and "tests/" in low:
         return "pytest_failed", "test_failure"
 
@@ -161,9 +180,7 @@ def classify_line(line: str, target_file: str) -> tuple[str, str]:
     if "gh013" in low or "repository rule violations" in low or "failed to push" in low:
         return "git_error", "ci_failure"
 
-    if target_low.startswith("tests/"):
-        return "pytest_failed", "test_failure"
-
+    # NON trattare genericamente tests/ come failure
     return "ci_signal", "ci_failure"
 
 
