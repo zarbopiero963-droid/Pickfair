@@ -321,6 +321,8 @@ def smart_guard_in_functions(content: str, candidate: dict) -> tuple[str, bool, 
         ("for x in items:", "for x in (items or []):"),
         (".get(\"patch_candidate\", {})", ".get(\"patch_candidate\") or {}"),
         (".get('patch_candidate', {})", ".get('patch_candidate') or {}"),
+        ("for item in payloads:", "for item in (payloads or []):"),
+        ("for row in rows:", "for row in (rows or []):"),
     ]
 
     for old, new in replacements:
@@ -475,6 +477,35 @@ def apply_ci_fix(content: str, candidate: dict) -> tuple[str, bool, list[str]]:
     return apply_runtime_fix(candidate.get("target_file", ""), content, candidate)
 
 
+def try_llm_fix(target_file: str, original: str, candidate: dict) -> tuple[str, bool, list[str]]:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini").strip()
+
+    if not api_key:
+        return original, False, ["LLM disabled (no API key)"]
+
+    result = generate_ai_patch(
+        target_file=target_file,
+        issue_type=candidate.get("issue_type", ""),
+        notes=candidate.get("notes", []),
+        required_symbols=candidate.get("required_symbols", []),
+        model=model,
+        api_key=api_key,
+    )
+
+    if not result.get("ok"):
+        return original, False, result.get("details", [])
+
+    patched = result.get("patched_content", "")
+    if not patched or patched.strip() == original.strip():
+        return original, False, ["LLM returned no change"]
+
+    if target_file.endswith(".py") and not safe_parse_python(patched):
+        return original, False, ["LLM invalid python"]
+
+    return patched, True, result.get("details", []) + ["LLM patch applied"]
+
+
 def apply_patch(candidate: dict) -> dict:
     target_file = normalize(candidate.get("target_file"))
     issue_type = str(candidate.get("issue_type", "")).strip()
@@ -485,6 +516,8 @@ def apply_patch(candidate: dict) -> dict:
             "reason": "target_missing",
             "applied_targets": [],
             "details": [f"missing target file: {target_file}"],
+            "target_file": target_file,
+            "issue_type": issue_type,
         }
 
     original = read_file(target_file)
@@ -504,18 +537,35 @@ def apply_patch(candidate: dict) -> dict:
         updated, changed, details = add_patch_footer(original, issue_type or "generic_fix")
 
     if changed and safe_write_if_valid(target_file, original, updated):
+        ruff_details = try_ruff_fix(target_file)
         return {
             "applied": True,
-            "reason": "patch_applied",
+            "reason": "patch_applied_local",
             "applied_targets": [target_file],
-            "details": details,
+            "details": details + ruff_details,
+            "target_file": target_file,
+            "issue_type": issue_type,
+        }
+
+    llm_updated, llm_changed, llm_details = try_llm_fix(target_file, original, candidate)
+    if llm_changed and safe_write_if_valid(target_file, original, llm_updated):
+        ruff_details = try_ruff_fix(target_file)
+        return {
+            "applied": True,
+            "reason": "patch_applied_llm",
+            "applied_targets": [target_file],
+            "details": details + llm_details + ruff_details,
+            "target_file": target_file,
+            "issue_type": issue_type,
         }
 
     return {
         "applied": False,
         "reason": "no_effect",
         "applied_targets": [],
-        "details": details or ["patch produced no valid code change"],
+        "details": details + llm_details if 'llm_details' in locals() else details or ["patch produced no valid code change"],
+        "target_file": target_file,
+        "issue_type": issue_type,
     }
 
 
@@ -540,4 +590,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main( dove mettere questo
+    main()
