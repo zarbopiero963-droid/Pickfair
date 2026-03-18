@@ -1,16 +1,19 @@
-from core.event_bus import EventBus
+from event_bus import EventBus
 
 
-def test_unsubscribe_handler():
+def test_unsubscribe_removes_handler():
+
     bus = EventBus()
-    calls = []
+
+    received = []
 
     def handler(payload):
-        calls.append(payload)
+        received.append(payload)
 
-    bus.subscribe("X", handler)
-    bus.unsubscribe("X", handler)
+    bus.subscribe("A", handler)
 
-    bus.publish("X", {"a": 1})
+    bus.unsubscribe("A", handler)
 
-    assert calls == []
+    bus.publish("A", {"x": 1})
+
+    assert received == []
