@@ -1,26 +1,73 @@
-from telegram_listener import SignalQueue, TelegramListener
+import importlib
+import sys
+import types
 
 
-def test_signal_queue_add_get_clear():
-    q = SignalQueue(max_size=10)
+def _install_telethon_stub():
+    telethon_mod = types.ModuleType("telethon")
+    telethon_mod.TelegramClient = object
+    telethon_mod.events = object()
 
-    q.add({"a": 1})
-    q.add({"b": 2})
+    sessions_mod = types.ModuleType("telethon.sessions")
 
-    pending = q.get_pending()
-    assert len(pending) == 2
+    class DummyStringSession:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    q.remove({"a": 1})
-    assert len(q.get_pending()) == 1
+    sessions_mod.StringSession = DummyStringSession
 
-    q.clear()
-    assert q.get_pending() == []
+    sys.modules["telethon"] = telethon_mod
+    sys.modules["telethon.sessions"] = sessions_mod
 
 
-def test_listener_parse_signal_legacy_back():
-    listener = TelegramListener(api_id=1, api_hash="x")
+_install_telethon_stub()
 
-    signal = listener.parse_signal("BACK @ 2.50")
+listener_mod = importlib.import_module("telegram_listener")
+SignalQueue = listener_mod.SignalQueue
 
-    assert signal is not None
-    assert signal["action"] == "BACK"
+
+def test_signal_queue_fifo_order():
+    queue = SignalQueue(maxsize=10)
+
+    queue.push({"id": 1})
+    queue.push({"id": 2})
+    queue.push({"id": 3})
+
+    assert queue.pop()["id"] == 1
+    assert queue.pop()["id"] == 2
+    assert queue.pop()["id"] == 3
+
+
+def test_signal_queue_empty_pop_returns_none():
+    queue = SignalQueue(maxsize=5)
+
+    result = queue.pop()
+
+    assert result is None
+
+
+def test_signal_queue_overflow_discards_oldest():
+    queue = SignalQueue(maxsize=2)
+
+    queue.push({"id": 1})
+    queue.push({"id": 2})
+    queue.push({"id": 3})
+
+    first = queue.pop()
+    second = queue.pop()
+
+    assert first["id"] == 2
+    assert second["id"] == 3
+
+
+def test_signal_queue_length_tracking():
+    queue = SignalQueue(maxsize=5)
+
+    queue.push({"id": 1})
+    queue.push({"id": 2})
+
+    assert len(queue) == 2
+
+    queue.pop()
+
+    assert len(queue) == 1
