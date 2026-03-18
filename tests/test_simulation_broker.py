@@ -102,4 +102,4 @@ def test_simulation_broker_price_ladder_applies_slippage_runtime_logic():
     assert result["status"] == "EXECUTION_COMPLETE"
     assert result["priceRequested"] == 2.0
     assert result["price"] >= 2.0
-    assert len(result["fills"]) >= 1
+    assert len(result["fills"]) >= 1 
