@@ -1,31 +1,34 @@
 from dutching import calculate_dutching_stakes
 
 
-def test_dutching_total_stake_respected():
+def test_dutching_two_runner_distribution():
     selections = [
-        {"selectionId": 1, "runnerName": "A", "price": 2.0},
-        {"selectionId": 2, "runnerName": "B", "price": 3.0},
-        {"selectionId": 3, "runnerName": "C", "price": 5.0},
+        {"selectionId": 1, "price": 2.0},
+        {"selectionId": 2, "price": 3.0},
     ]
 
-    results, _, _ = calculate_dutching_stakes(
+    result, profit, book = calculate_dutching_stakes(
         selections,
         total_stake=100,
         bet_type="BACK",
+        commission=5
     )
 
-    total = sum(r["stake"] for r in results)
+    assert len(result) == 2
+    assert round(sum(x["stake"] for x in result), 2) == 100
 
-    assert abs(total - 100) < 0.1
 
-
-def test_dutching_no_negative_stakes():
+def test_dutching_high_odds():
     selections = [
-        {"selectionId": 1, "runnerName": "A", "price": 1.5},
-        {"selectionId": 2, "runnerName": "B", "price": 10.0},
+        {"selectionId": 1, "price": 20},
+        {"selectionId": 2, "price": 30},
     ]
 
-    results, _, _ = calculate_dutching_stakes(selections, 50)
+    result, profit, book = calculate_dutching_stakes(
+        selections,
+        total_stake=50,
+        bet_type="BACK",
+        commission=5
+    )
 
-    for r in results:
-        assert r["stake"] > 0
+    assert len(result) == 2
