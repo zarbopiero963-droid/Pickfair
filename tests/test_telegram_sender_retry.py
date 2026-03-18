@@ -63,4 +63,4 @@ def test_sender_failure_after_exhausting_retries():
     assert client.entity_calls == 2
     assert client.send_calls == 2
     assert sender._messages_sent == 0
-    assert sender._messages_failed == 1 
+    assert sender._messages_failed == 1
