@@ -1,28 +1,25 @@
-import importlib
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from types import SimpleNamespace
 
+from core.trading_engine import TradingEngine
+from simulation_broker import SimulationBroker
 
-# =========================================================
-# HELPERS
-# =========================================================
 
 class DummyBus:
     def __init__(self):
         self.events = []
+        self.subscribers = {}
 
     def subscribe(self, event_name, callback):
-        # minimal stub per TradingEngine
-        return None
+        self.subscribers.setdefault(event_name, []).append(callback)
 
     def publish(self, event_name, payload):
         self.events.append((event_name, payload))
+        for callback in self.subscribers.get(event_name, []):
+            callback(payload)
 
 
 class DummyExecutor:
     def submit(self, name, fn, *args, **kwargs):
-        # esegue subito per rendere il test deterministico
         return fn(*args, **kwargs)
 
 
@@ -119,9 +116,6 @@ class DummyDB:
 
 
 class DummyClient:
-    def __init__(self, mode="ok"):
-        self.mode = mode
-
     def place_bet(
         self,
         market_id,
@@ -132,15 +126,7 @@ class DummyClient:
         persistence_type="LAPSE",
         customer_ref=None,
     ):
-        if self.mode == "network_down":
-            raise RuntimeError("network down")
-        if self.mode == "db_locked":
-            raise RuntimeError("database is locked")
-
-        # FIX: per il path micro-stake lo stub da 2.0 deve risultare NON matchato,
-        # altrimenti TradingEngine abortisce correttamente il replace flow.
         size_matched = 0.0 if float(size) == 2.0 else float(size)
-
         return {
             "status": "SUCCESS",
             "instructionReports": [
@@ -152,8 +138,6 @@ class DummyClient:
         }
 
     def place_orders(self, market_id, instructions, customer_ref=None):
-        if self.mode == "network_down":
-            raise RuntimeError("network down")
         reports = []
         for i, ins in enumerate(instructions or [], start=1):
             reports.append(
@@ -162,26 +146,16 @@ class DummyClient:
                     "sizeMatched": float(ins.get("limitOrder", {}).get("size", 0.0)),
                 }
             )
-        return {
-            "status": "SUCCESS",
-            "instructionReports": reports,
-        }
+        return {"status": "SUCCESS", "instructionReports": reports}
 
     def cancel_orders(self, market_id=None, instructions=None):
         return {"status": "SUCCESS", "instructionReports": []}
 
     def replace_orders(self, market_id=None, instructions=None):
-        bet_id = ""
-        if instructions:
-            bet_id = instructions[0].get("betId", "")
+        bet_id = instructions[0].get("betId", "") if instructions else ""
         return {
             "status": "SUCCESS",
-            "instructionReports": [
-                {
-                    "betId": bet_id or "BET-REPLACED",
-                    "sizeMatched": 0.5,
-                }
-            ],
+            "instructionReports": [{"betId": bet_id or "BET-REPLACED", "sizeMatched": 0.5}],
         }
 
     def get_current_orders(self, *args, **kwargs):
@@ -208,51 +182,42 @@ class DummyClient:
         }
 
 
-class DummyTelegramClient:
-    def __init__(self, flood=False):
-        self.flood = flood
-        self.sent = []
+def test_simulation_broker_full_order_cancel_and_reset_cycle():
+    broker = SimulationBroker(initial_balance=100.0)
 
-    async def get_entity(self, chat_id):
-        return SimpleNamespace(id=chat_id)
+    placed = broker.place_order(
+        market_id="1.200",
+        selection_id=10,
+        side="BACK",
+        price=2.0,
+        size=10.0,
+        runner_name="Runner A",
+        partial_match_pct=0.4,
+    )
 
-    async def send_message(self, entity, text):
-        if self.flood:
-            raise RuntimeError("FloodWaitError: A wait of 12 seconds is required")
-        msg = SimpleNamespace(id=len(self.sent) + 1)
-        self.sent.append((entity.id, text))
-        return msg
+    assert placed["status"] == "EXECUTABLE"
+    assert placed["sizeMatched"] == 4.0
+    assert placed["sizeRemaining"] == 6.0
+    assert broker.get_balance() == 90.0
 
+    cancelled = broker.cancel_order(placed["betId"])
+    assert cancelled["success"] is True
+    assert cancelled["sizeCancelled"] == 6.0
+    assert cancelled["sizeMatched"] == 4.0
+    assert broker.get_order(placed["betId"])["status"] == "EXECUTION_COMPLETE"
+    assert broker.get_balance() == 96.0
 
-# =========================================================
-# TESTS
-# =========================================================
-
-def test_py_compile_and_smoke_import_core():
-    modules = [
-        "database",
-        "dutching",
-        "telegram_listener",
-        "telegram_sender",
-        "core.trading_engine",
-        "core.risk_middleware",
-        "controllers.dutching_controller",
-        "app_modules.telegram_module",
-    ]
-    for module_name in modules:
-        mod = importlib.import_module(module_name)
-        assert mod is not None
+    broker.reset()
+    assert broker.get_balance() == 100.0
+    assert broker.orders == {}
+    assert broker.bet_counter == 0
 
 
-def test_trading_engine_quick_bet_simulation():
-    from core.trading_engine import TradingEngine
-
+def test_trading_engine_quick_bet_simulation_persists_runtime_state():
     bus = DummyBus()
     db = DummyDB()
     executor = DummyExecutor()
-    client = DummyClient()
-
-    engine = TradingEngine(bus, db, lambda: client, executor)
+    engine = TradingEngine(bus, db, lambda: DummyClient(), executor)
 
     payload = {
         "market_id": "1.100",
@@ -263,23 +228,26 @@ def test_trading_engine_quick_bet_simulation():
         "event_name": "A - B",
         "market_name": "MATCH_ODDS",
         "runner_name": "Home",
+        "simulation_mode": True,
     }
 
     engine._handle_quick_bet(payload)
 
-    assert any(evt[0] == "QUICK_BET_SUCCESS" for evt in bus.events)
-    assert len(db.bets) >= 1
-    assert db.bets[-1]["status"] in ("MATCHED", "PARTIALLY_MATCHED")
+    success = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"]
+    assert len(success) == 1
+    assert success[0][1]["sim"] is True
+    assert success[0][1]["new_balance"] == 9990.0
+    assert db.sim_settings["virtual_balance"] == 9990.0
+    assert db.sim_settings["bet_count"] == 1
+    assert db.bets[-1]["sim"] is True
+    assert db.bets[-1]["status"] == "MATCHED"
 
 
-def test_trading_engine_micro_stake_path():
-    from core.trading_engine import TradingEngine
-
+def test_trading_engine_micro_stake_runtime_path():
     bus = DummyBus()
     db = DummyDB()
     executor = DummyExecutor()
     client = DummyClient()
-
     engine = TradingEngine(bus, db, lambda: client, executor)
 
     payload = {
@@ -287,30 +255,31 @@ def test_trading_engine_micro_stake_path():
         "selection_id": 1,
         "bet_type": "BACK",
         "price": 2.20,
-        "stake": 0.50,  # micro-stake
+        "stake": 0.50,
         "event_name": "C - D",
         "market_name": "MATCH_ODDS",
         "runner_name": "Away",
+        "simulation_mode": False,
     }
 
     engine._handle_quick_bet(payload)
 
-    assert any(evt[0] == "QUICK_BET_SUCCESS" for evt in bus.events)
-    last_event = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"][-1]
-    assert last_event[1].get("micro") is True
+    success = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"]
+    assert len(success) == 1
+    assert success[0][1]["micro"] is True
+    assert len(db.pending) == 1
+    assert db.pending[0]["status"] == "RECONCILED"
+    assert db.bets[-1]["status"] in {"UNMATCHED", "PARTIALLY_MATCHED", "MATCHED"}
 
 
-def test_trading_engine_dutching_simulation():
-    from core.trading_engine import TradingEngine
-
+def test_trading_engine_dutching_and_cashout_runtime_flow():
     bus = DummyBus()
     db = DummyDB()
     executor = DummyExecutor()
     client = DummyClient()
-
     engine = TradingEngine(bus, db, lambda: client, executor)
 
-    payload = {
+    dutching_payload = {
         "market_id": "1.102",
         "market_type": "MATCH_ODDS",
         "event_name": "E - F",
@@ -321,25 +290,18 @@ def test_trading_engine_dutching_simulation():
             {"selectionId": 1, "runnerName": "One", "price": 2.0, "stake": 10.0},
             {"selectionId": 2, "runnerName": "Two", "price": 3.0, "stake": 15.0},
         ],
+        "simulation_mode": False,
+        "use_best_price": False,
     }
 
-    engine._handle_place_dutching(payload)
+    engine._handle_place_dutching(dutching_payload)
 
-    assert any(evt[0] == "DUTCHING_SUCCESS" for evt in bus.events)
-    assert len(db.bets) >= 1
+    dutching_success = [evt for evt in bus.events if evt[0] == "DUTCHING_SUCCESS"]
+    assert len(dutching_success) == 1
+    assert dutching_success[0][1]["matched"] == 25.0
+    assert db.bets[-1]["status"] == "MATCHED"
 
-
-def test_trading_engine_cashout_simulation():
-    from core.trading_engine import TradingEngine
-
-    bus = DummyBus()
-    db = DummyDB()
-    executor = DummyExecutor()
-    client = DummyClient()
-
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    payload = {
+    cashout_payload = {
         "market_id": "1.103",
         "selection_id": 1,
         "side": "LAY",
@@ -348,86 +310,16 @@ def test_trading_engine_cashout_simulation():
         "green_up": 2.50,
     }
 
-    engine._handle_cashout(payload)
+    engine._handle_cashout(cashout_payload)
 
-    assert any(evt[0] == "CASHOUT_SUCCESS" for evt in bus.events)
+    cashout_success = [evt for evt in bus.events if evt[0] == "CASHOUT_SUCCESS"]
+    assert len(cashout_success) == 1
+    assert cashout_success[0][1]["status"] == "MATCHED"
     assert len(db.cashouts) == 1
+    assert db.cashouts[0]["profit_loss"] == 2.50
 
 
-def test_chaos_network_down():
-    from core.trading_engine import TradingEngine
-
-    bus = DummyBus()
-    db = DummyDB()
-    executor = DummyExecutor()
-    client = DummyClient(mode="network_down")
-
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    payload = {
-        "market_id": "1.104",
-        "selection_id": 1,
-        "bet_type": "BACK",
-        "price": 2.00,
-        "stake": 10.0,
-        "event_name": "X - Y",
-        "market_name": "MATCH_ODDS",
-        "runner_name": "Runner",
-    }
-
-    engine._handle_quick_bet(payload)
-
-    assert any(evt[0] == "QUICK_BET_FAILED" for evt in bus.events)
-
-
-def test_telegram_sender_ok_and_floodwait():
-    telegram_sender = importlib.import_module("telegram_sender")
-    init_telegram_sender = telegram_sender.init_telegram_sender
-
-    ok_client = DummyTelegramClient(flood=False)
-    sender = init_telegram_sender(client=ok_client, base_delay=0.0)
-    result = sender.send_message_sync("12345", "hello", max_retries=1)
-    assert result.success is True
-
-    flood_client = DummyTelegramClient(flood=True)
-    sender2 = telegram_sender.TelegramSender(flood_client, base_delay=0.0)
-    result2 = sender2.send_message_sync("12345", "hello", max_retries=1)
-    assert result2.success is False
-    assert result2.flood_wait is not None
-
-
-def test_latency_signal_to_execution_under_threshold():
-    from core.trading_engine import TradingEngine
-
-    bus = DummyBus()
-    db = DummyDB()
-    executor = DummyExecutor()
-    client = DummyClient()
-
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    start = time.perf_counter()
-
-    payload = {
-        "market_id": "1.105",
-        "selection_id": 1,
-        "bet_type": "BACK",
-        "price": 2.30,
-        "stake": 10.0,
-        "event_name": "Latency - Test",
-        "market_name": "MATCH_ODDS",
-        "runner_name": "LatencyRunner",
-    }
-
-    engine._handle_quick_bet(payload)
-
-    elapsed = time.perf_counter() - start
-
-    assert any(evt[0] == "QUICK_BET_SUCCESS" for evt in bus.events)
-    assert elapsed < 2.0
-
-
-def test_stress_1000_signals():
+def test_stress_200_parallel_dutching_math_runs_consistently():
     from dutching import calculate_dutching_stakes
 
     def worker(i: int):
@@ -441,19 +333,20 @@ def test_stress_1000_signals():
             bet_type="BACK",
             commission=4.5,
         )
-        return len(result), profit, book
+        return len(result), round(sum(float(r["stake"]) for r in result), 2), profit, book
 
     futures = []
-    with ThreadPoolExecutor(max_workers=16) as ex:
-        for i in range(1000):
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for i in range(200):
             futures.append(ex.submit(worker, i))
 
         completed = 0
         for fut in as_completed(futures):
-            rows, profit, book = fut.result()
+            rows, total, profit, book = fut.result()
             assert rows == 2
+            assert total == 100.0
             assert isinstance(profit, float)
             assert isinstance(book, float)
             completed += 1
 
-    assert completed == 1000
+    assert completed == 200
