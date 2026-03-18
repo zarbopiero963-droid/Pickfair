@@ -103,6 +103,25 @@ def calculate_dutching_stakes(
     raise ValueError(f"bet_type/side non supportato: {mode}")
 
 
+# ✅ FIX COMPATIBILITÀ LEGACY
+def calculate_dutching(
+    selections: List[Dict],
+    total_stake: float,
+    bet_type: str = "BACK",
+    commission: float = 4.5,
+    side: str = None,
+    **kwargs,
+) -> Tuple[List[Dict], float, float]:
+    return calculate_dutching_stakes(
+        selections=selections,
+        total_stake=total_stake,
+        bet_type=bet_type,
+        commission=commission,
+        side=side,
+        **kwargs,
+    )
+
+
 def _calculate_back_dutching(
     selections: List[Dict],
     total_stake: float,
