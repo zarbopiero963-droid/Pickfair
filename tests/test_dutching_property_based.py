@@ -1,16 +1,23 @@
-import pytest
-
+import random
 from dutching import calculate_dutching_stakes
 
 
-def test_dutching_total_stake():
-    selections = [
-        {"selectionId": 1, "price": 2.0},
-        {"selectionId": 2, "price": 3.0},
-    ]
+def test_dutching_randomized_inputs():
+    for _ in range(100):
 
-    stakes, _, _ = calculate_dutching_stakes(selections, 100, bet_type="BACK")
+        selections = [
+            {"selectionId": i, "price": random.uniform(1.5, 10)}
+            for i in range(3)
+        ]
 
-    total = sum(s["stake"] for s in stakes)
+        result, profit, book = calculate_dutching_stakes(
+            selections,
+            total_stake=100,
+            bet_type="BACK",
+            commission=5
+        )
 
-    assert abs(total - 100) < 0.01
+        total = sum(x["stake"] for x in result)
+
+        assert round(total, 2) == 100
+        assert all(x["stake"] >= 0 for x in result)
