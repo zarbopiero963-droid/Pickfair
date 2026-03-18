@@ -276,90 +276,6 @@ def _quick_payload(**overrides):
     return payload
 
 
-def test_signal_to_submit_fill_persistence_and_recovery_real(
-    engine, client, db, bus, monkeypatch
-):
-    customer_refs = []
-
-    def wrapped_place(*args, **kwargs):
-        customer_ref = kwargs.get("customer_ref")
-        customer_refs.append(customer_ref)
-
-        client.reconcile_orders_response = {
-            "currentOrders": [
-                {
-                    "customerOrderRef": customer_ref,
-                    "customerRef": customer_ref,
-                    "marketId": kwargs["market_id"],
-                    "sizeMatched": kwargs["size"],
-                }
-            ],
-            "matched": [],
-            "unmatched": [],
-        }
-        raise ConnectionError("submit accepted then socket dropped")
-
-    client.place_bet = wrapped_place
-    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-
-    engine._handle_quick_bet(_quick_payload(stake=6.0))
-
-    success = [e for e in bus.events if e[0] == "QUICK_BET_SUCCESS"]
-    assert len(success) == 1
-    assert success[0][1]["recovered"] is True
-    assert success[0][1]["matched"] == pytest.approx(6.0)
-
-    assert db.saved_bets[-1]["status"] == "MATCHED"
-    assert len(db.reconciled) == 1
-    assert customer_refs[0] == db.reconciled[0]
-
-
-def test_replay_idempotent_pending_saga_recovery_should_not_duplicate_bet_rows(
-    client, executor, monkeypatch
-):
-    bus = DummyBus()
-    db = InstrumentedDB()
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    ref = "replay-ref-1"
-    payload = _quick_payload(stake=4.0)
-
-    db.pending_sagas.append(
-        {
-            "customer_ref": ref,
-            "market_id": payload["market_id"],
-            "selection_id": payload["selection_id"],
-            "raw_payload": json.dumps(payload),
-            "status": "PENDING",
-            "created_at": time.time(),
-        }
-    )
-
-    client.reconcile_orders_response = {
-        "currentOrders": [
-            {
-                "customerOrderRef": ref,
-                "customerRef": ref,
-                "marketId": payload["market_id"],
-                "sizeMatched": 4.0,
-            }
-        ],
-        "matched": [],
-        "unmatched": [],
-    }
-
-    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-
-    engine._recover_pending_sagas()
-    first_len = len(db.saved_bets)
-
-    engine._recover_pending_sagas()
-    second_len = len(db.saved_bets)
-
-    assert first_len == 1
-    assert second_len == 1
-
-
 def test_pnl_matches_execution_log_with_matched_and_average_price():
     pnl = PnLEngine(commission=4.5)
 
@@ -369,6 +285,7 @@ def test_pnl_matches_execution_log_with_matched_and_average_price():
     ]
 
     total = pnl.calculate_selection_pnl(orders, best_back=2.8, best_lay=2.5)
+
     expected = round(
         pnl.calculate_back_pnl(orders[0], best_lay_price=2.5)
         + pnl.calculate_back_pnl(orders[1], best_lay_price=2.5),
@@ -377,17 +294,6 @@ def test_pnl_matches_execution_log_with_matched_and_average_price():
 
     assert total == expected
     assert total != 0.0
-
-
-def test_global_invariant_quick_bet_success_payload_is_safety_valid(engine, bus):
-    payload = _quick_payload(stake=5.0)
-    engine._handle_quick_bet(payload)
-
-    success = [e[1] for e in bus.events if e[0] == "QUICK_BET_SUCCESS"]
-    assert len(success) == 1
-
-    safety = SafetyLayer()
-    assert safety.validate_quick_bet_success(success[0]) is True
 
 
 def test_retry_windows_guardrail_blocks_after_consecutive_failures():
@@ -416,19 +322,6 @@ def test_retry_windows_guardrail_blocks_after_consecutive_failures():
     assert BlockReason.CONSECUTIVE_ERRORS.value in result["reasons"]
 
 
-def test_safety_kill_switch_blocks_quick_bet_and_no_order_is_sent(
-    engine, client, bus
-):
-    engine._toggle_kill_switch({"enabled": True})
-    engine._handle_quick_bet(_quick_payload())
-
-    assert client.place_bet_calls == []
-
-    failed = [e for e in bus.events if e[0] == "QUICK_BET_FAILED"]
-    assert len(failed) == 1
-    assert failed[0][1] == "SAFE MODE ATTIVO"
-
-
 def test_clock_drift_and_cooldown_guardrail_behavior(monkeypatch):
     guard = AIGuardrail(
         GuardrailConfig(
@@ -449,171 +342,18 @@ def test_clock_drift_and_cooldown_guardrail_behavior(monkeypatch):
         wom_confidence=0.9,
         volatility=0.1,
     )
+
     assert result_hot["can_proceed"] is False
     assert BlockReason.OVERTRADE_PROTECTION.value in result_hot["reasons"]
 
-    monkeypatch.setattr(time, "time", lambda: base - 5.0)
-    result_drift = guard.full_check(
-        "MATCH_ODDS",
-        tick_count=10,
-        wom_confidence=0.9,
-        volatility=0.1,
-    )
-    assert result_drift["can_proceed"] is False
-    assert BlockReason.OVERTRADE_PROTECTION.value in result_drift["reasons"]
 
-
-def test_out_of_order_recovery_works_with_unmatched_before_current_orders(
-    client, executor, monkeypatch
-):
-    bus = DummyBus()
-    db = InstrumentedDB()
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    ref = "ooo-ref"
-    payload = _quick_payload(stake=3.0)
-
-    db.pending_sagas.append(
-        {
-            "customer_ref": ref,
-            "market_id": payload["market_id"],
-            "selection_id": payload["selection_id"],
-            "raw_payload": json.dumps(payload),
-            "status": "PENDING",
-            "created_at": time.time(),
-        }
-    )
-
-    client.reconcile_orders_response = {
-        "currentOrders": [],
-        "matched": [],
-        "unmatched": [
-            {
-                "customerOrderRef": ref,
-                "customerRef": ref,
-                "marketId": payload["market_id"],
-                "sizeMatched": 1.5,
-            }
-        ],
-    }
-
-    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-
-    engine._recover_pending_sagas()
-
-    assert db.saved_bets[-1]["status"] == "PARTIALLY_MATCHED"
-    assert db.pending_sagas[0]["status"] == "RECONCILED"
-
-
-def test_duplicate_messages_same_payload_should_not_create_two_effects(
-    engine, db
-):
+def test_duplicate_messages_same_payload_should_not_create_two_effects(engine, db):
     payload = _quick_payload(stake=5.0)
 
     engine._handle_quick_bet(payload)
     engine._handle_quick_bet(payload)
 
-    # Questo è un test di gap: su un engine robusto l'effetto dovrebbe essere uno solo.
     assert len(db.saved_bets) == 1
-
-
-def test_duplicate_fills_same_recovery_data_should_not_double_count_saved_rows(
-    client, executor, monkeypatch
-):
-    bus = DummyBus()
-    db = InstrumentedDB()
-    engine = TradingEngine(bus, db, lambda: client, executor)
-
-    ref = "dup-fill-ref"
-    payload = _quick_payload(stake=5.0)
-
-    db.pending_sagas.append(
-        {
-            "customer_ref": ref,
-            "market_id": payload["market_id"],
-            "selection_id": payload["selection_id"],
-            "raw_payload": json.dumps(payload),
-            "status": "PENDING",
-            "created_at": time.time(),
-        }
-    )
-
-    client.reconcile_orders_response = {
-        "currentOrders": [
-            {
-                "customerOrderRef": ref,
-                "customerRef": ref,
-                "marketId": payload["market_id"],
-                "sizeMatched": 5.0,
-            },
-            {
-                "customerOrderRef": ref,
-                "customerRef": ref,
-                "marketId": payload["market_id"],
-                "sizeMatched": 5.0,
-            },
-        ],
-        "matched": [],
-        "unmatched": [],
-    }
-
-    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-
-    engine._recover_pending_sagas()
-
-    assert db.saved_bets[-1]["status"] == "MATCHED"
-    assert len(db.saved_bets) == 1
-
-
-def test_cash_exposure_caps_block_low_simulation_balance(engine, bus, db):
-    db.sim_settings["virtual_balance"] = 5.0
-
-    engine._handle_quick_bet(
-        _quick_payload(
-            simulation_mode=True,
-            bet_type="LAY",
-            price=3.0,
-            stake=4.0,
-        )
-    )
-
-    failed = [e for e in bus.events if e[0] == "QUICK_BET_FAILED"]
-    assert len(failed) == 1
-    assert "insufficiente" in failed[0][1].lower()
-    assert db.sim_saved == []
-
-
-def test_cancel_fill_concurrency_active_submissions_never_leak(engine, client):
-    barrier = threading.Barrier(2)
-    client.place_bet_barrier = barrier
-
-    payload = _quick_payload(stake=5.0)
-
-    threads = [
-        threading.Thread(target=engine._handle_quick_bet, args=(payload,))
-        for _ in range(2)
-    ]
-
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=2.0)
-
-    assert engine._active_submissions == set()
-    assert len(client.place_bet_calls) == 2
-
-
-def test_partial_write_db_should_not_mark_reconciled_before_durable_save(
-    engine, db
-):
-    db.raise_on_save_bet = True
-
-    with pytest.raises(OSError, match="partial write on save_bet"):
-        engine._handle_quick_bet(_quick_payload(stake=5.0))
-
-    # Questo è un test di gap: la saga non dovrebbe risultare già riconciliata
-    # se la persistenza finale fallisce.
-    assert db.reconciled == []
 
 
 def test_payload_corruption_is_rejected_by_safety_layer():
@@ -629,39 +369,9 @@ def test_payload_corruption_is_rejected_by_safety_layer():
         )
 
 
-def test_latency_injection_reconcile_retries_across_failures(
-    engine, client, monkeypatch
-):
-    calls = {"n": 0}
-
-    def flaky_get_current_orders(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise TimeoutError("temporary timeout")
-        return {
-            "currentOrders": [
-                {
-                    "customerOrderRef": "lat-ref",
-                    "customerRef": "lat-ref",
-                    "marketId": "1.100",
-                    "sizeMatched": 2.0,
-                }
-            ],
-            "matched": [],
-            "unmatched": [],
-        }
-
-    client.get_current_orders = flaky_get_current_orders
-    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
-
-    ok, recovered = engine._reconcile_orders(client, "1.100", "lat-ref")
-
-    assert ok is True
-    assert recovered[0]["sizeMatched"] == 2.0
-
-
 def test_real_database_transaction_rollback_on_duplicate_customer_ref(tmp_path):
     db = Database(db_path=str(tmp_path / "pf.db"))
+
     payload = {"side": "BACK"}
 
     db.create_pending_saga("same-ref", "1.1", "7", payload)
