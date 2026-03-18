@@ -12,9 +12,10 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
-
   lint_static:
     name: Lint & Static Checks
     runs-on: ubuntu-latest
@@ -26,7 +27,8 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install lint tools
+        run: |
           python -m pip install --upgrade pip
           pip install ruff bandit
 
@@ -49,11 +51,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install pip-audit
+        run: |
           python -m pip install --upgrade pip
           pip install pip-audit
 
-      - run: |
+      - name: Audit dependencies
+        run: |
           pip-audit
 
   import_smoke:
@@ -67,8 +71,33 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
+
+      - name: Debug import environment
+        run: |
           python - <<'PY'
+          import os
+          import sys
+
+          print("cwd =", os.getcwd())
+          print("python =", sys.executable)
+          print("sys.path[0:10] =", sys.path[:10])
+          print("ai exists =", os.path.isdir("ai"))
+          print("ai/__init__.py exists =", os.path.isfile("ai/__init__.py"))
+          print("ai/ai_guardrail.py exists =", os.path.isfile("ai/ai_guardrail.py"))
+          PY
+
+      - name: Import smoke
+        run: |
+          python - <<'PY'
+          import importlib
+          import sys
+
           modules = [
               "database",
               "dutching",
@@ -78,11 +107,24 @@ jobs:
               "core.risk_middleware",
               "controllers.dutching_controller",
               "app_modules.telegram_module",
-              "main"
+              "main",
           ]
-          for m in modules:
-              __import__(m)
-              print("[OK]", m)
+
+          failed = []
+
+          for module_name in modules:
+              try:
+                  importlib.import_module(module_name)
+                  print("[OK]", module_name)
+              except Exception as e:
+                  print("[FAIL]", module_name, "->", e)
+                  failed.append(module_name)
+
+          if failed:
+              print("\nMODULES FAILED TO IMPORT:")
+              for module_name in failed:
+                  print(" -", module_name)
+              sys.exit(1)
           PY
 
   full_tests:
@@ -97,15 +139,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install system deps
+        run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
 
-      - run: |
+      - name: Install Python deps
+        run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov pytest-asyncio pytest-mock coverage[toml]
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
 
       - name: Run tests
         run: |
@@ -128,18 +173,26 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install Python deps
+        run: |
           python -m pip install --upgrade pip
           pip install pytest
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
 
-      - run: |
+      - name: Run performance tests
+        run: |
           if [ -f tests/test_pickfair_ultra_speed.py ]; then
             pytest tests/test_pickfair_ultra_speed.py -vv
+          else
+            echo "SKIP: tests/test_pickfair_ultra_speed.py not found"
           fi
+
           if [ -f tests/test_pickfair_pipeline_latency.py ]; then
             pytest tests/test_pickfair_pipeline_latency.py -vv
+          else
+            echo "SKIP: tests/test_pickfair_pipeline_latency.py not found"
           fi
 
   stress_tests:
@@ -154,17 +207,20 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install Python deps
+        run: |
           python -m pip install --upgrade pip
           pip install pytest
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
 
-      - run: |
+      - name: Run HFT stress tests
+        run: |
           if [ -f tests/test_pickfair_hft_stress.py ]; then
             pytest tests/test_pickfair_hft_stress.py -vv
           else
-            echo "HFT stress tests not found"
+            echo "SKIP: tests/test_pickfair_hft_stress.py not found"
           fi
 
   chaos_tests:
@@ -179,17 +235,20 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install Python deps
+        run: |
           python -m pip install --upgrade pip
           pip install pytest
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
 
-      - run: |
+      - name: Run chaos tests
+        run: |
           if [ -f tests/test_market_chaos_engine.py ]; then
             pytest tests/test_market_chaos_engine.py -vv
           else
-            echo "Chaos tests not found"
+            echo "SKIP: tests/test_market_chaos_engine.py not found"
           fi
 
   repo_autopsy:
@@ -203,10 +262,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Parse repo AST
+        run: |
           python - <<'PY'
-          import os
           import ast
+          import os
 
           print("REPO AUTOPSY")
 
@@ -214,19 +274,19 @@ jobs:
               if ".git" in root:
                   continue
 
-              for f in files:
-                  if not f.endswith(".py"):
+              for filename in files:
+                  if not filename.endswith(".py"):
                       continue
 
-                  p = os.path.join(root, f)
+                  path = os.path.join(root, filename)
 
                   try:
-                      with open(p, "r", encoding="utf-8") as fh:
+                      with open(path, "r", encoding="utf-8") as fh:
                           src = fh.read()
                       ast.parse(src)
-                      print("[OK]", p)
+                      print("[OK]", path)
                   except Exception as e:
-                      print("[ERROR]", p, e)
+                      print("[ERROR]", path, e)
           PY
 
   repo_forensics:
@@ -240,10 +300,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Analyze functions
+        run: |
           python - <<'PY'
-          import os
           import ast
+          import os
 
           print("REPO FORENSICS")
 
@@ -251,11 +312,11 @@ jobs:
               if ".git" in root:
                   continue
 
-              for f in files:
-                  if not f.endswith(".py"):
+              for filename in files:
+                  if not filename.endswith(".py"):
                       continue
 
-                  path = os.path.join(root, f)
+                  path = os.path.join(root, filename)
 
                   try:
                       with open(path, "r", encoding="utf-8") as fh:
@@ -279,22 +340,31 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - run: |
+      - name: Install system deps
+        run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
 
-      - run: |
+      - name: Install Python deps
+        run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest pytest-asyncio pytest-mock
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          python -m pip install telethon || true
 
-      - run: |
+      - name: Run system simulation
+        run: |
           if [ -f tests/test_system_simulation.py ]; then
             xvfb-run -a pytest tests/test_system_simulation.py -vv
+          else
+            echo "SKIP: tests/test_system_simulation.py not found"
           fi
 
-      - run: |
+      - name: Run expanded system validation
+        run: |
           if [ -f tests/test_system_expanded_validation.py ]; then
             xvfb-run -a pytest tests/test_system_expanded_validation.py -vv
+          else
+            echo "SKIP: tests/test_system_expanded_validation.py not found"
           fi
