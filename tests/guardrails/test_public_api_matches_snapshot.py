@@ -25,7 +25,6 @@ def test_public_api_matches_snapshot():
     current = build_public_api_snapshot(ROOT)
     expected = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
 
-    # normalize ordering to avoid false positives
     current_json = json.dumps(current, sort_keys=True, indent=2)
     expected_json = json.dumps(expected, sort_keys=True, indent=2)
 
