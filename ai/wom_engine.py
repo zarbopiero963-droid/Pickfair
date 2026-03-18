@@ -14,7 +14,6 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional
 
 WOM_WINDOW_SIZE = 50
 WOM_TIME_WINDOW_SEC = 30.0
@@ -69,7 +68,7 @@ class SelectionWoMHistory:
 
     selection_id: int
     maxlen: int = WOM_WINDOW_SIZE
-    ticks: Deque[TickData] = field(init=False)
+    ticks: deque[TickData] = field(init=False)
 
     def __post_init__(self):
         self.ticks = deque(maxlen=max(2, int(self.maxlen or WOM_WINDOW_SIZE)))
@@ -79,15 +78,15 @@ class SelectionWoMHistory:
 
     def get_recent_from_snapshot(
         self,
-        ticks_snapshot: List[TickData],
+        ticks_snapshot: list[TickData],
         max_age_sec: float,
-        now: Optional[float] = None,
-    ) -> List[TickData]:
+        now: float | None = None,
+    ) -> list[TickData]:
         ref_now = time.time() if now is None else float(now)
         max_age = max(0.1, float(max_age_sec or WOM_TIME_WINDOW_SEC))
         return [t for t in ticks_snapshot if ref_now - t.timestamp <= max_age]
 
-    def get_recent(self, max_age_sec: float = WOM_TIME_WINDOW_SEC) -> List[TickData]:
+    def get_recent(self, max_age_sec: float = WOM_TIME_WINDOW_SEC) -> list[TickData]:
         return self.get_recent_from_snapshot(list(self.ticks), max_age_sec)
 
     def clear(self):
@@ -106,14 +105,14 @@ class WoMEngine:
     ):
         self._window_size = max(2, int(window_size or WOM_WINDOW_SIZE))
         self._time_window = max(1.0, float(time_window or WOM_TIME_WINDOW_SEC))
-        self._histories: Dict[int, SelectionWoMHistory] = {}
+        self._histories: dict[int, SelectionWoMHistory] = {}
         self._lock = threading.RLock()
 
     # =========================================================
     # SAFE PARSERS
     # =========================================================
 
-    def _safe_int(self, value, default: Optional[int] = None) -> Optional[int]:
+    def _safe_int(self, value, default: int | None = None) -> int | None:
         try:
             if value in (None, ""):
                 return default
@@ -149,8 +148,8 @@ class WoMEngine:
     def _get_ticks_snapshot(
         self,
         selection_id: int,
-        max_age_sec: Optional[float] = None,
-    ) -> List[TickData]:
+        max_age_sec: float | None = None,
+    ) -> list[TickData]:
         with self._lock:
             history = self._histories.get(selection_id)
             if history is None:
@@ -164,7 +163,7 @@ class WoMEngine:
         max_age = max(0.1, self._safe_float(max_age_sec, self._time_window))
         return [t for t in ticks_snapshot if now - t.timestamp <= max_age]
 
-    def _calculate_wom_from_ticks(self, ticks: List[TickData]) -> Optional[float]:
+    def _calculate_wom_from_ticks(self, ticks: list[TickData]) -> float | None:
         if len(ticks) < 2:
             return None
 
@@ -210,7 +209,7 @@ class WoMEngine:
     # PUBLIC READ / ANALYSIS API
     # =========================================================
 
-    def calculate_wom(self, selection_id: int) -> Optional[WoMResult]:
+    def calculate_wom(self, selection_id: int) -> WoMResult | None:
         sel_id = self._safe_int(selection_id)
         if sel_id is None:
             return None
@@ -253,8 +252,8 @@ class WoMEngine:
             time_span=max(0.0, time_span),
         )
 
-    def get_ai_edge_score(self, selections: List[Dict]) -> Dict[int, WoMResult]:
-        results: Dict[int, WoMResult] = {}
+    def get_ai_edge_score(self, selections: list[dict]) -> dict[int, WoMResult]:
+        results: dict[int, WoMResult] = {}
 
         for sel in selections or []:
             sel_id = sel.get("selectionId", sel.get("selection_id"))
@@ -268,7 +267,7 @@ class WoMEngine:
 
         return results
 
-    def get_mixed_suggestions(self, selections: List[Dict]) -> List[Dict]:
+    def get_mixed_suggestions(self, selections: list[dict]) -> list[dict]:
         selections = selections or []
         if not selections:
             return []
@@ -361,9 +360,7 @@ class WoMEngine:
     def _calculate_confidence(self, wom: float, tick_count: int, trend: float) -> float:
         wom_distance = abs(float(wom) - 0.5) * 2.0
         tick_factor = min(1.0, max(0.0, float(tick_count) / 30.0))
-        trend_coherence = (
-            1.0 if (wom > 0.5 and trend > 0) or (wom < 0.5 and trend < 0) else 0.7
-        )
+        trend_coherence = 1.0 if (wom > 0.5 and trend > 0) or (wom < 0.5 and trend < 0) else 0.7
         confidence = wom_distance * 0.4 + tick_factor * 0.4 + trend_coherence * 0.2
         return self._clamp(confidence, 0.0, 1.0)
 
@@ -371,7 +368,7 @@ class WoMEngine:
     # HOUSEKEEPING
     # =========================================================
 
-    def clear_history(self, selection_id: Optional[int] = None):
+    def clear_history(self, selection_id: int | None = None):
         with self._lock:
             if selection_id is not None:
                 sel_id = self._safe_int(selection_id)
@@ -380,7 +377,7 @@ class WoMEngine:
             else:
                 self._histories.clear()
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         with self._lock:
             total_ticks = sum(len(h.ticks) for h in self._histories.values())
             selections_tracked = len(self._histories)
@@ -408,7 +405,7 @@ class WoMEngine:
         wom = self._calculate_wom_from_ticks(ticks)
         return wom if wom is not None else 0.5
 
-    def calculate_multi_window_wom(self, selection_id: int) -> Dict[str, float]:
+    def calculate_multi_window_wom(self, selection_id: int) -> dict[str, float]:
         sel_id = self._safe_int(selection_id)
         if sel_id is None:
             return {
@@ -460,8 +457,8 @@ class WoMEngine:
         if q_size < 1:
             return 0.0
 
-        quarters = [ticks[i * q_size:(i + 1) * q_size] for i in range(4)]
-        wom_values: List[float] = []
+        quarters = [ticks[i * q_size : (i + 1) * q_size] for i in range(4)]
+        wom_values: list[float] = []
 
         for q in quarters:
             wom = self._calculate_wom_from_ticks(q)
@@ -484,7 +481,7 @@ class WoMEngine:
         if len(ticks) < 3:
             return 0.0
 
-        spreads: List[float] = []
+        spreads: list[float] = []
         for t in ticks:
             if t.lay_price > 0 and t.back_price > 0:
                 spreads.append(max(0.0, t.lay_price - t.back_price))
@@ -494,11 +491,11 @@ class WoMEngine:
 
         avg_spread = sum(spreads) / len(spreads)
         variance = sum((s - avg_spread) ** 2 for s in spreads) / len(spreads)
-        std_dev = variance ** 0.5
+        std_dev = variance**0.5
         volatility = min(1.0, std_dev / 0.05)
         return max(0.0, volatility)
 
-    def calculate_enhanced_wom(self, selection_id: int) -> Optional[WoMResult]:
+    def calculate_enhanced_wom(self, selection_id: int) -> WoMResult | None:
         base_result = self.calculate_wom(selection_id)
         if not base_result:
             return None
@@ -526,7 +523,7 @@ class WoMEngine:
             volatility=volatility,
         )
 
-    def get_time_window_signal(self, selection_id: int) -> Dict:
+    def get_time_window_signal(self, selection_id: int) -> dict:
         result = self.calculate_enhanced_wom(selection_id)
         if not result:
             return {
@@ -587,7 +584,7 @@ class WoMEngine:
         }
 
 
-_global_wom_engine: Optional[WoMEngine] = None
+_global_wom_engine: WoMEngine | None = None
 
 
 def get_wom_engine() -> WoMEngine:
