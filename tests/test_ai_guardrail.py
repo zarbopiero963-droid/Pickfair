@@ -100,4 +100,4 @@ def test_guardrail_auto_green_delay_counts_down():
 
     can_green, remaining = guardrail.check_auto_green_grace("BET-1")
     assert isinstance(can_green, bool)
-    assert isinstance(remaining, float)
+    assert isinstance(remaining, float) 
