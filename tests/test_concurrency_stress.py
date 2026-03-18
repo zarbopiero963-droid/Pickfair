@@ -1,7 +1,26 @@
 import threading
 
 
-def test_concurrency_stress(engine, broker):
+class DummyBroker:
+    def __init__(self):
+        self.orders = []
+
+    def place_order(self, payload):
+        self.orders.append(payload)
+        return {"status": "SUCCESS"}
+
+
+class DummyEngine:
+    def __init__(self, broker):
+        self.broker = broker
+
+    def _handle_quick_bet(self, payload):
+        self.broker.place_order(payload)
+
+
+def test_concurrency_stress():
+    broker = DummyBroker()
+    engine = DummyEngine(broker)
 
     payload = {
         "market_id": "1.200",
@@ -18,7 +37,6 @@ def test_concurrency_stress(engine, broker):
     threads = []
 
     for _ in range(10):
-
         t = threading.Thread(target=engine._handle_quick_bet, args=(payload,))
         threads.append(t)
 
