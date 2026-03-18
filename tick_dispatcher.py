@@ -54,14 +54,17 @@ class TickDispatcher:
         self._lock = threading.Lock()
         self._mode = DispatchMode.LIVE
 
-        self._last_ui_update: float = 0
-        self._last_automation_check: float = 0
+        self._last_ui_update: float = 0.0
+        self._last_automation_check: float = 0.0
 
-        self._pending_ticks: Dict[str, TickData] = {}
+        # Chiave robusta: evita overwrite di runner diversi sullo stesso market_id
+        self._pending_ticks: Dict[tuple[str, int], TickData] = {}
 
-        self._ui_callbacks: List[Callable[[Dict[str, TickData]], None]] = []
+        self._ui_callbacks: List[Callable[[Dict[tuple[str, int], TickData]], None]] = []
         self._storage_callbacks: List[Callable[[TickData], None]] = []
-        self._automation_callbacks: List[Callable[[Dict[str, TickData]], None]] = []
+        self._automation_callbacks: List[
+            Callable[[Dict[tuple[str, int], TickData]], None]
+        ] = []
 
         self._tick_count = 0
         self._ui_dispatch_count = 0
@@ -90,7 +93,9 @@ class TickDispatcher:
             return self.SIM_AUTOMATION_INTERVAL
         return self.MIN_AUTOMATION_INTERVAL
 
-    def register_ui_callback(self, callback: Callable[[Dict[str, TickData]], None]):
+    def register_ui_callback(
+        self, callback: Callable[[Dict[tuple[str, int], TickData]], None]
+    ):
         """Registra callback per aggiornamenti UI (throttled)."""
         with self._lock:
             self._ui_callbacks.append(callback)
@@ -101,7 +106,7 @@ class TickDispatcher:
             self._storage_callbacks.append(callback)
 
     def register_automation_callback(
-        self, callback: Callable[[Dict[str, TickData]], None]
+        self, callback: Callable[[Dict[tuple[str, int], TickData]], None]
     ):
         """Registra callback per automazioni (throttled)."""
         with self._lock:
@@ -126,26 +131,29 @@ class TickDispatcher:
                 except Exception:
                     pass
 
-            self._pending_ticks[tick.market_id] = tick
+            self._pending_ticks[(tick.market_id, tick.selection_id)] = tick
 
             should_update_ui = (now - self._last_ui_update) >= self.ui_interval
             should_check_automation = (
                 now - self._last_automation_check
             ) >= self.automation_interval
 
+            snapshot = dict(self._pending_ticks)
             ui_ticks = None
             auto_ticks = None
 
             if should_update_ui:
-                ui_ticks = dict(self._pending_ticks)
-                self._pending_ticks.clear()
+                ui_ticks = snapshot
                 self._last_ui_update = now
                 self._ui_dispatch_count += 1
 
             if should_check_automation:
-                auto_ticks = dict(self._pending_ticks) if not ui_ticks else ui_ticks
+                auto_ticks = snapshot
                 self._last_automation_check = now
                 self._automation_dispatch_count += 1
+
+            if should_update_ui or should_check_automation:
+                self._pending_ticks.clear()
 
         if ui_ticks:
             for cb in self._ui_callbacks:
@@ -173,6 +181,7 @@ class TickDispatcher:
                 )
                 * 100,
                 "mode": self._mode.value,
+                "pending_ticks": len(self._pending_ticks),
             }
 
     def reset_stats(self):
@@ -181,6 +190,7 @@ class TickDispatcher:
             self._tick_count = 0
             self._ui_dispatch_count = 0
             self._automation_dispatch_count = 0
+            self._pending_ticks.clear()
 
 
 _dispatcher: Optional[TickDispatcher] = None
@@ -192,4 +202,3 @@ def get_tick_dispatcher() -> TickDispatcher:
     if _dispatcher is None:
         _dispatcher = TickDispatcher()
     return _dispatcher
-
