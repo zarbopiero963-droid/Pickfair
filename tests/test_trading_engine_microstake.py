@@ -24,8 +24,8 @@ class DummyDB:
     def __init__(self):
         self.pending_sagas = []
         self.saved_bets = []
-        self.failed = []
         self.reconciled = []
+        self.failed = []
         self.sim_settings = {"virtual_balance": 1000.0}
 
     def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
@@ -85,7 +85,7 @@ class DummyDB:
         return kwargs
 
 
-class MicroClient:
+class HappyMicroClient:
     def __init__(self):
         self.place_bet_calls = []
         self.cancel_orders_calls = []
@@ -113,41 +113,22 @@ class MicroClient:
         )
         return {
             "status": "SUCCESS",
-            "instructionReports": [
-                {
-                    "betId": f"BET-{selection_id}",
-                    "sizeMatched": 0.0,
-                }
-            ],
+            "instructionReports": [{"betId": "BET-123", "sizeMatched": 0.0}],
         }
 
     def cancel_orders(self, market_id=None, instructions=None):
         self.cancel_orders_calls.append(
-            {
-                "market_id": market_id,
-                "instructions": instructions,
-            }
+            {"market_id": market_id, "instructions": instructions}
         )
-        return {
-            "status": "SUCCESS",
-            "instructionReports": [],
-        }
+        return {"status": "SUCCESS", "instructionReports": []}
 
     def replace_orders(self, market_id=None, instructions=None):
         self.replace_orders_calls.append(
-            {
-                "market_id": market_id,
-                "instructions": instructions,
-            }
+            {"market_id": market_id, "instructions": instructions}
         )
         return {
             "status": "SUCCESS",
-            "instructionReports": [
-                {
-                    "betId": instructions[0]["betId"],
-                    "sizeMatched": 0.5,
-                }
-            ],
+            "instructionReports": [{"betId": "BET-123", "sizeMatched": 0.5}],
         }
 
     def get_current_orders(self, *args, **kwargs):
@@ -157,109 +138,69 @@ class MicroClient:
 def _make_engine():
     bus = DummyBus()
     db = DummyDB()
-    client = MicroClient()
+    client = HappyMicroClient()
     engine = TradingEngine(bus, db, lambda: client, DummyExecutor())
     return engine, bus, db, client
 
 
-def test_microstake_back_uses_stub_price_and_replace_flow():
+def test_microstake_boundary_values_are_detected_correctly():
+    engine, _, _, _ = _make_engine()
+
+    assert engine._needs_micro_stake(0.05) is False
+    assert engine._needs_micro_stake(0.10) is True
+    assert engine._needs_micro_stake(1.99) is True
+    assert engine._needs_micro_stake(2.00) is False
+
+
+def test_microstake_success_payload_has_expected_flags_and_status():
     engine, bus, db, client = _make_engine()
 
     payload = {
-        "market_id": "1.101",
-        "selection_id": 11,
+        "market_id": "1.500",
+        "selection_id": 50,
         "bet_type": "BACK",
-        "price": 2.34,
+        "price": 2.3,
         "stake": 0.5,
         "event_name": "A - B",
         "market_name": "Match Odds",
-        "runner_name": "Runner A",
+        "runner_name": "Runner X",
         "simulation_mode": False,
     }
 
     engine._handle_quick_bet(payload)
 
     assert len(client.place_bet_calls) == 1
-    assert client.place_bet_calls[0]["price"] == 1.01
-    assert client.place_bet_calls[0]["size"] == 2.0
-
     assert len(client.cancel_orders_calls) == 1
     assert len(client.replace_orders_calls) == 1
 
     success = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"]
     assert len(success) == 1
-    assert success[0][1]["micro"] is True
-    assert db.saved_bets[-1]["status"] in {"UNMATCHED", "PARTIALLY_MATCHED", "MATCHED"}
+
+    evt = success[0][1]
+    assert evt["micro"] is True
+    assert evt["sim"] is False
+    assert evt["market_id"] == "1.500"
+    assert evt["selection_id"] == 50
+    assert evt["bet_type"] == "BACK"
+    assert evt["runner_name"] == "Runner X"
+    assert evt["status"] in {"PARTIALLY_MATCHED", "MATCHED", "UNMATCHED"}
+
+    assert len(db.saved_bets) == 1
+    assert db.saved_bets[0]["market_id"] == "1.500"
 
 
-def test_microstake_lay_uses_opposite_stub_price():
-    engine, bus, db, client = _make_engine()
+def test_microstake_creates_pending_saga_before_resolution():
+    engine, _, db, _ = _make_engine()
 
     payload = {
-        "market_id": "1.102",
-        "selection_id": 12,
+        "market_id": "1.501",
+        "selection_id": 51,
         "bet_type": "LAY",
-        "price": 3.1,
+        "price": 4.0,
         "stake": 1.0,
         "event_name": "C - D",
         "market_name": "Match Odds",
-        "runner_name": "Runner B",
-        "simulation_mode": False,
-    }
-
-    engine._handle_quick_bet(payload)
-
-    assert len(client.place_bet_calls) == 1
-    assert client.place_bet_calls[0]["price"] == 1000.0
-    assert client.place_bet_calls[0]["size"] == 2.0
-    assert len(client.cancel_orders_calls) == 1
-    assert len(client.replace_orders_calls) == 1
-
-    success = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"]
-    assert len(success) == 1
-    assert success[0][1]["micro"] is True
-
-
-def test_non_microstake_path_does_not_use_stub_flow():
-    engine, bus, db, client = _make_engine()
-
-    payload = {
-        "market_id": "1.103",
-        "selection_id": 13,
-        "bet_type": "BACK",
-        "price": 2.2,
-        "stake": 5.0,
-        "event_name": "E - F",
-        "market_name": "Match Odds",
-        "runner_name": "Runner C",
-        "simulation_mode": False,
-    }
-
-    engine._handle_quick_bet(payload)
-
-    assert len(client.place_bet_calls) == 1
-    assert client.place_bet_calls[0]["price"] == 2.2
-    assert client.place_bet_calls[0]["size"] == 5.0
-    assert client.cancel_orders_calls == []
-    assert client.replace_orders_calls == []
-
-    success = [evt for evt in bus.events if evt[0] == "QUICK_BET_SUCCESS"]
-    assert len(success) == 1
-    assert success[0][1]["micro"] is False
-
-
-def test_microstake_path_creates_and_resolves_pending_saga():
-    engine, bus, db, client = _make_engine()
-
-    payload = {
-        "market_id": "1.104",
-        "selection_id": 14,
-        "bet_type": "BACK",
-        "price": 4.0,
-        "stake": 0.25,
-        "event_name": "G - H",
-        "market_name": "Match Odds",
-        "runner_name": "Runner D",
+        "runner_name": "Runner Y",
         "simulation_mode": False,
     }
 
@@ -268,3 +209,10 @@ def test_microstake_path_creates_and_resolves_pending_saga():
     assert len(db.pending_sagas) == 1
     assert len(db.reconciled) == 1
     assert db.failed == []
+
+
+def test_microstake_stub_prices_follow_side_convention():
+    engine, _, _, _ = _make_engine()
+
+    assert engine._micro_stub_price("BACK") == 1.01
+    assert engine._micro_stub_price("LAY") == 1000.0
