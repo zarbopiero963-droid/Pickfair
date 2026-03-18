@@ -1,14 +1,17 @@
-from core.event_bus import EventBus
+from event_bus import EventBus
 
 
-def test_multiple_handlers_receive_event():
+def test_multiple_subscribers_receive_event():
+
     bus = EventBus()
-    a, b = [], []
 
-    bus.subscribe("EV", lambda p: a.append(p))
-    bus.subscribe("EV", lambda p: b.append(p))
+    a = []
+    b = []
 
-    bus.publish("EV", {"k": 1})
+    bus.subscribe("X", lambda p: a.append(p))
+    bus.subscribe("X", lambda p: b.append(p))
 
-    assert len(a) == 1
-    assert len(b) == 1
+    bus.publish("X", {"v": 1})
+
+    assert a == [{"v": 1}]
+    assert b == [{"v": 1}]
