@@ -1,0 +1,104 @@
+name: Pickfair E2E UI Suite
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+jobs:
+  e2e-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v4
+
+      - name: Configura Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze di sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            python3-tk \
+            libx11-xcb1 \
+            libxrender1 \
+            libxext6 \
+            libx11-6 \
+            libgl1
+
+      - name: Installa dipendenze Python
+        run: |
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            pip install pytest pytest-asyncio pytest-mock pytest-cov
+          fi
+
+          python -m pip install telethon customtkinter hypothesis || true
+
+      - name: Debug ambiente UI
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          print("cwd =", os.getcwd())
+          print("python =", sys.executable)
+          print("sys.path[0:10] =", sys.path[:10])
+          print("DISPLAY =", os.environ.get("DISPLAY"))
+          print("ai/__init__.py exists =", os.path.isfile("ai/__init__.py"))
+          print("ai/ai_guardrail.py exists =", os.path.isfile("ai/ai_guardrail.py"))
+          print("event_bus.py exists =", os.path.isfile("event_bus.py"))
+          print("safe_mode_manager.py exists =", os.path.isfile("safe_mode_manager.py"))
+          print("telegram_controller.py exists =", os.path.isfile("telegram_controller.py"))
+          print("core/tick_dispatcher.py exists =", os.path.isfile("core/tick_dispatcher.py"))
+          PY
+
+      - name: Lancia test E2E UI
+        run: |
+          xvfb-run -a python -m pytest -v \
+            tests/test_e2e_app_startup_flow.py \
+            tests/test_e2e_cashout_flow.py \
+            tests/test_e2e_dutching_from_ui_flow.py \
+            tests/test_e2e_live_price_update_to_ui_flow.py \
+            tests/test_e2e_market_switching_runtime.py \
+            tests/test_e2e_multiple_telegram_signals_queue_flow.py \
+            tests/test_e2e_quick_bet_flow.py \
+            tests/test_e2e_quick_bet_then_cashout_flow.py \
+            tests/test_e2e_safe_mode_recovery_flow.py \
+            tests/test_e2e_safe_mode_recovery_ui_flow.py \
+            tests/test_e2e_telegram_to_order_flow.py \
+            tests/test_e2e_telegram_to_ui_to_order_flow.py \
+            tests/tests/test_e2e_market_selection_to_quick_bet.py
+
+      - name: Debug workspace
+        if: always()
+        run: |
+          echo "==============================="
+          echo "ROOT FILES"
+          echo "==============================="
+          ls -la
+          echo "==============================="
+          echo "TESTS FILES"
+          echo "==============================="
+          ls -la tests || true
+          echo "==============================="
+          echo "NESTED TESTS FILES"
+          echo "==============================="
+          ls -la tests/tests || true
