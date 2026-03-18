@@ -252,3 +252,6 @@ def get_guardrail() -> AIGuardrail:
     if _global_guardrail is None:
         _global_guardrail = AIGuardrail()
     return _global_guardrail
+
+
+# patched by ai repair loop [lint_failure] 2026-03-18T06:34:19.901404Z
