@@ -1,49 +1,76 @@
-from telegram_listener import TelegramListener
+import importlib
+import sys
+import types
 
 
-def _make_listener():
-    return TelegramListener(api_id=12345, api_hash="hash")
+def _install_telethon_stub():
+    telethon_mod = types.ModuleType("telethon")
+    telethon_mod.TelegramClient = object
+    telethon_mod.events = object()
+
+    sessions_mod = types.ModuleType("telethon.sessions")
+
+    class DummyStringSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    sessions_mod.StringSession = DummyStringSession
+
+    sys.modules["telethon"] = telethon_mod
+    sys.modules["telethon.sessions"] = sessions_mod
 
 
-def test_telegram_listener_parse_master_signal():
-    listener = _make_listener()
+_install_telethon_stub()
 
-    msg = (
-        "🟢 MASTER SIGNAL\n"
-        "event_name: Juve - Milan\n"
-        "market_name: Match Odds\n"
-        "selection: Juve\n"
-        "action: BACK\n"
-        "master_price: 2.10\n"
-        "market_id: 1.123\n"
-        "selection_id: 11\n"
-    )
-
-    result = listener.parse_signal(msg)
-
-    assert result is not None
-    assert result["market_id"] == "1.123"
-    assert result["selection_id"] == 11
-    assert result["side"] == "BACK"
-    assert result["source"] == "MASTER_SIGNAL"
+listener_mod = importlib.import_module("telegram_listener")
+SignalQueue = listener_mod.SignalQueue
+parse_signal_message = listener_mod.parse_signal_message
 
 
-def test_telegram_listener_parse_legacy_signal():
-    listener = _make_listener()
+def test_parse_legacy_lay_signal_contract():
+    msg = "Under 2.5 @3.10 Stake 7 Banca"
 
-    msg = (
-        "🆚 Juve - Milan\n"
-        "Over 2.5\n"
-        "@ 2.10\n"
-        "stake 10\n"
-        "punta"
-    )
-
-    result = listener.parse_signal(msg)
+    result = parse_signal_message(msg)
 
     assert result is not None
-    assert result["side"] == "BACK"
     assert result["market_type"] == "OVER_UNDER"
+    assert result["selection"] == "Under 2.5"
+    assert result["side"] == "LAY"
+    assert result["action"] == "LAY"
+    assert float(result["price"]) == 3.10
+    assert float(result["stake"]) == 7.0
+
+
+def test_parse_signal_trims_spaces_and_newlines():
+    msg = "\n   Over 2.5 @2.20 Stake 5 Punta   \n"
+
+    result = parse_signal_message(msg)
+
+    assert result is not None
     assert result["selection"] == "Over 2.5"
-    assert result["odds"] == 2.10
-    assert result["stake"] == 10.0
+    assert result["side"] == "BACK"
+    assert float(result["price"]) == 2.20
+    assert float(result["stake"]) == 5.0
+
+
+def test_signal_queue_accepts_parsed_runtime_payload():
+    queue = SignalQueue(maxsize=5)
+
+    msg = "Over 2.5 @2.20 Stake 5 Punta"
+    parsed = parse_signal_message(msg)
+
+    assert parsed is not None
+
+    queue.push(parsed)
+    popped = queue.pop()
+
+    assert popped["selection"] == "Over 2.5"
+    assert popped["side"] == "BACK"
+    assert float(popped["stake"]) == 5.0
+
+
+def test_signal_queue_returns_none_when_empty():
+    queue = SignalQueue(maxsize=2)
+
+    assert queue.pop() is None
+    assert len(queue) == 0
