@@ -94,4 +94,4 @@ def test_parse_signal_message_invalid_garbage_returns_none():
 
     res = mod.parse_signal_message(msg)
 
-    assert res is None
+    assert res is None 
