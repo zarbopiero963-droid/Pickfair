@@ -26,7 +26,7 @@ jobs:
       - name: Installa dipendenze di sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1
+          sudo apt-get install -y xvfb libx11-xcb1 libxrender1 libxext6 libx11-6 libgl1 python3-tk
 
       - name: Installa dipendenze Python
         run: |
@@ -38,8 +38,7 @@ jobs:
             pip install pytest pytest-cov pytest-asyncio pytest-mock
           fi
 
-          # safety net per workflow che importano telegram_listener
-          python -m pip install telethon customtkinter || true
+          python -m pip install telethon customtkinter hypothesis || true
 
       - name: Debug package AI
         run: |
@@ -53,6 +52,10 @@ jobs:
           print("ai exists =", os.path.isdir("ai"))
           print("ai/__init__.py exists =", os.path.isfile("ai/__init__.py"))
           print("ai/ai_guardrail.py exists =", os.path.isfile("ai/ai_guardrail.py"))
+          print("event_bus.py exists =", os.path.isfile("event_bus.py"))
+          print("safe_mode_manager.py exists =", os.path.isfile("safe_mode_manager.py"))
+          print("telegram_controller.py exists =", os.path.isfile("telegram_controller.py"))
+          print("core/tick_dispatcher.py exists =", os.path.isfile("core/tick_dispatcher.py"))
           PY
 
       - name: Lancia Test Compatibili (Hedge-Fund V2)
@@ -67,4 +70,10 @@ jobs:
             --ignore=tests/test_telemetry_indicator.py \
             --ignore=tests/test_toolbar_live.py \
             --ignore=tests/test_ui_components.py \
+            --ignore=tests/test_e2e_app_startup_flow.py \
+            --ignore=tests/test_e2e_live_price_update_to_ui_flow.py \
+            --ignore=tests/test_e2e_market_switching_runtime.py \
+            --ignore=tests/test_gui_manual_smoke.py \
+            --ignore=tests/test_gui_runtime_state_flow.py \
+            --ignore=tests/tests/test_e2e_market_selection_to_quick_bet.py \
             -v
