@@ -173,4 +173,4 @@ def test_dutching_controller_blocks_when_safe_mode_is_active(ctrl):
             market_type="MATCH_ODDS",
             selections=[{"selectionId": 1, "runnerName": "Runner A", "price": 2.0}],
             total_stake=10.0,
-        )
+        ) 
