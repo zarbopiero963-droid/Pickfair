@@ -18,8 +18,8 @@ class DummyBus:
 
 
 class DummyExecutor:
-    def submit(self, name, fn):
-        return fn()
+    def submit(self, name, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
 
 
 class DummyDB:
@@ -236,6 +236,10 @@ def test_quick_bet_real_success_payload_is_complete():
     assert event_payload["event_name"] == "Juve - Milan"
     assert event_payload["market_name"] == "Match Odds"
     assert event_payload["sim"] is False
+    assert event_payload["micro"] is False
+
+    assert db.saved_bets[0]["status"] == "MATCHED"
+    assert db.saved_bets[0]["selections"][0]["selectionId"] == 11
 
 
 def test_quick_bet_micro_stake_uses_stub_cancel_replace():
@@ -264,6 +268,7 @@ def test_quick_bet_micro_stake_uses_stub_cancel_replace():
     success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
     assert len(success_events) == 1
     assert success_events[0][1]["micro"] is True
+    assert db.saved_bets[0]["status"] in {"UNMATCHED", "PARTIALLY_MATCHED", "MATCHED"}
 
 
 def test_dutching_real_success_with_best_price():
@@ -298,6 +303,10 @@ def test_dutching_real_success_with_best_price():
     assert event_payload["event_name"] == "Napoli - Lazio"
     assert event_payload["market_name"] == "Match Odds"
     assert len(event_payload["selections"]) == 2
+    assert event_payload["status"] == "MATCHED"
+
+    assert db.saved_bets[-1]["total_stake"] == 15.0
+    assert db.saved_bets[-1]["status"] == "MATCHED"
 
 
 def test_quick_bet_simulation_mode_works_without_client():
@@ -323,4 +332,38 @@ def test_quick_bet_simulation_mode_works_without_client():
     success_events = [x for x in bus.events if x[0] == "QUICK_BET_SUCCESS"]
     assert len(success_events) == 1
     assert success_events[0][1]["sim"] is True
+    assert success_events[0][1]["new_balance"] == 980.0
     assert db.sim_balance_updates[-1] == 980.0
+    assert db.sim_saved[-1]["status"] == "MATCHED"
+
+
+def test_cashout_real_success_persists_transaction_and_event():
+    engine, bus, db, client = _make_engine()
+
+    payload = {
+        "market_id": "1.333",
+        "selection_id": 22,
+        "side": "LAY",
+        "stake": 5.0,
+        "price": 1.8,
+        "green_up": 2.5,
+    }
+
+    engine._handle_cashout(payload)
+
+    success_events = [x for x in bus.events if x[0] == "CASHOUT_SUCCESS"]
+    assert len(success_events) == 1
+
+    evt = success_events[0][1]
+    assert evt["market_id"] == "1.333"
+    assert evt["selection_id"] == 22
+    assert evt["side"] == "LAY"
+    assert evt["stake"] == 5.0
+    assert evt["price"] == 1.8
+    assert evt["green_up"] == 2.5
+    assert evt["status"] == "MATCHED"
+    assert evt["micro"] is False
+
+    assert len(db.saved_cashouts) == 1
+    assert db.saved_cashouts[0]["cashout_side"] == "LAY"
+    assert db.saved_cashouts[0]["profit_loss"] == 2.5
