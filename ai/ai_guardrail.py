@@ -7,7 +7,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ class GuardrailConfig:
     consecutive_error_limit: int = 3
     cooldown_after_error_sec: float = 30.0
     min_wom_confidence: float = 0.3
-    dutching_ready_market_types: Set[str] = field(
+    dutching_ready_market_types: set[str] = field(
         default_factory=lambda: {
             "MATCH_ODDS",
             "WINNER",
@@ -63,40 +62,34 @@ class OrderRecord:
 @dataclass
 class GuardrailState:
     level: GuardrailLevel = GuardrailLevel.NORMAL
-    block_reasons: List[BlockReason] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    block_reasons: list[BlockReason] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     last_order_time: float = 0.0
     consecutive_errors: int = 0
     blocked_until: float = 0.0
-    order_history: List[OrderRecord] = field(default_factory=list)
+    order_history: list[OrderRecord] = field(default_factory=list)
 
 
 class AIGuardrail:
-    def __init__(self, config: Optional[GuardrailConfig] = None):
+    def __init__(self, config: GuardrailConfig | None = None):
         self.config = config or GuardrailConfig()
         self.state = GuardrailState()
         self._lock = threading.RLock()
-        self._pending_auto_green: Dict[str, float] = {}
+        self._pending_auto_green: dict[str, float] = {}
 
-    def check_market_ready(
-        self, market_type: str
-    ) -> tuple[bool, Optional[BlockReason]]:
+    def check_market_ready(self, market_type: str) -> tuple[bool, BlockReason | None]:
         if market_type in self.config.dutching_ready_market_types:
             return True, None
         return False, BlockReason.MARKET_NOT_READY
 
-    def check_wom_data(
-        self, tick_count: int, confidence: float
-    ) -> tuple[bool, Optional[BlockReason]]:
+    def check_wom_data(self, tick_count: int, confidence: float) -> tuple[bool, BlockReason | None]:
         if tick_count < self.config.min_tick_count:
             return False, BlockReason.INSUFFICIENT_DATA
         if confidence < self.config.min_wom_confidence:
             return False, BlockReason.INSUFFICIENT_DATA
         return True, None
 
-    def check_volatility(
-        self, volatility: float
-    ) -> tuple[bool, Optional[BlockReason]]:
+    def check_volatility(self, volatility: float) -> tuple[bool, BlockReason | None]:
         if volatility > self.config.max_volatility:
             return False, BlockReason.HIGH_VOLATILITY
         return True, None
@@ -115,25 +108,21 @@ class AIGuardrail:
 
             return False, remaining
 
-    def register_order_for_auto_green(
-        self, bet_id: str, placed_at: Optional[float] = None
-    ) -> None:
+    def register_order_for_auto_green(self, bet_id: str, placed_at: float | None = None) -> None:
         with self._lock:
             self._pending_auto_green[bet_id] = placed_at or time.time()
 
-    def check_order_rate(self) -> tuple[bool, Optional[BlockReason]]:
+    def check_order_rate(self) -> tuple[bool, BlockReason | None]:
         with self._lock:
             cutoff = time.time() - 60.0
             recent_orders = [
-                order
-                for order in self.state.order_history
-                if order.timestamp > cutoff
+                order for order in self.state.order_history if order.timestamp > cutoff
             ]
             if len(recent_orders) >= self.config.max_orders_per_minute:
                 return False, BlockReason.OVERTRADE_PROTECTION
             return True, None
 
-    def check_error_state(self) -> tuple[bool, Optional[BlockReason]]:
+    def check_error_state(self) -> tuple[bool, BlockReason | None]:
         with self._lock:
             if self.state.consecutive_errors >= self.config.consecutive_error_limit:
                 if time.time() < self.state.blocked_until:
@@ -172,9 +161,7 @@ class AIGuardrail:
             else:
                 self.state.consecutive_errors += 1
                 if self.state.consecutive_errors >= self.config.consecutive_error_limit:
-                    self.state.blocked_until = (
-                        time.time() + self.config.cooldown_after_error_sec
-                    )
+                    self.state.blocked_until = time.time() + self.config.cooldown_after_error_sec
 
     def full_check(
         self,
@@ -182,10 +169,10 @@ class AIGuardrail:
         tick_count: int = 0,
         wom_confidence: float = 0.5,
         volatility: float = 0.0,
-    ) -> Dict:
+    ) -> dict:
         with self._lock:
-            reasons: List[BlockReason] = []
-            warnings: List[str] = []
+            reasons: list[BlockReason] = []
+            warnings: list[str] = []
 
             ok, reason = self.check_market_ready(market_type)
             if not ok and reason is not None:
@@ -227,9 +214,7 @@ class AIGuardrail:
                 "reasons": [reason.value for reason in reasons],
                 "warnings": warnings,
                 "blocked_until": (
-                    self.state.blocked_until
-                    if self.state.blocked_until > time.time()
-                    else 0
+                    self.state.blocked_until if self.state.blocked_until > time.time() else 0
                 ),
             }
 
@@ -242,30 +227,24 @@ class AIGuardrail:
             self.state = GuardrailState()
             self._pending_auto_green.clear()
 
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict:
         with self._lock:
             now = time.time()
             recent_orders = [
-                order
-                for order in self.state.order_history
-                if order.timestamp > now - 60.0
+                order for order in self.state.order_history if order.timestamp > now - 60.0
             ]
             return {
                 "level": self.state.level.value,
                 "consecutive_errors": self.state.consecutive_errors,
                 "orders_last_minute": len(recent_orders),
                 "pending_auto_green": len(self._pending_auto_green),
-                "blocked_until": self.state.blocked_until
-                if self.state.blocked_until > now
-                else 0,
+                "blocked_until": self.state.blocked_until if self.state.blocked_until > now else 0,
                 "warnings": self.state.warnings,
-                "block_reasons": [
-                    reason.value for reason in self.state.block_reasons
-                ],
+                "block_reasons": [reason.value for reason in self.state.block_reasons],
             }
 
 
-_global_guardrail: Optional[AIGuardrail] = None
+_global_guardrail: AIGuardrail | None = None
 
 
 def get_guardrail() -> AIGuardrail:
