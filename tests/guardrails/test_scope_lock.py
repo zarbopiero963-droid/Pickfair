@@ -6,9 +6,18 @@ ROOT = Path(__file__).resolve().parents[2]
 ALLOWED_FILES_PATH = ROOT / "guardrails" / "allowed_files.json"
 
 
-def test_changed_files_are_within_allowed_scope():
+def test_allowed_scope_manifest_exists_and_is_valid():
     assert ALLOWED_FILES_PATH.exists(), "Missing guardrails/allowed_files.json"
 
+    data = json.loads(ALLOWED_FILES_PATH.read_text(encoding="utf-8"))
+    allowed = data.get("allowed_files", [])
+
+    assert isinstance(allowed, list)
+    assert allowed, "allowed_files.json contains no allowed files"
+    assert all(isinstance(path, str) and path.strip() for path in allowed)
+
+
+def test_changed_files_are_within_allowed_scope():
     data = json.loads(ALLOWED_FILES_PATH.read_text(encoding="utf-8"))
     allowed = set(data.get("allowed_files", []))
 
