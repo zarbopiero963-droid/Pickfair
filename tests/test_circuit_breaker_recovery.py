@@ -1,13 +1,16 @@
+import time
 from circuit_breaker import CircuitBreaker
 
 
-def test_circuit_recovery():
-    cb = CircuitBreaker(max_failures=1)
+def test_circuit_breaker_recovers():
 
+    cb = CircuitBreaker(failure_threshold=2, recovery_time=0.1)
+
+    cb.record_failure()
     cb.record_failure()
 
     assert cb.is_open()
 
-    cb.reset()
+    time.sleep(0.2)
 
-    assert not cb.is_open()
+    assert cb.is_half_open() or not cb.is_open()
