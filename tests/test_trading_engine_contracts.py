@@ -101,4 +101,4 @@ def test_trading_engine_detects_stub_micro_orders():
     ) is False
     assert engine._is_stub_micro_order(
         {"price": 1.01, "sizeRemaining": 0.0}
-    ) is False
+    ) is False 
