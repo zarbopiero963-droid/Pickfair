@@ -1,22 +1,18 @@
-import threading
-import time
-
-from core.event_bus import EventBus
+from event_bus import EventBus
 
 
-def test_event_bus_many_messages():
+def test_event_bus_many_events():
+
     bus = EventBus()
 
-    received = []
+    counter = {"v": 0}
 
-    def handler(payload):
-        received.append(payload)
+    def handler(_):
+        counter["v"] += 1
 
-    bus.subscribe("TEST_EVENT", handler)
+    bus.subscribe("EV", handler)
 
-    for i in range(1000):
-        bus.publish("TEST_EVENT", {"n": i})
+    for _ in range(1000):
+        bus.publish("EV", {})
 
-    time.sleep(0.05)
-
-    assert len(received) == 1000
+    assert counter["v"] == 1000
