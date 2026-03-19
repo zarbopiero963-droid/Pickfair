@@ -18,7 +18,10 @@ class AutomationEngine:
         self._last_action_time = {}
         self._cooldown_ms = 1500
         self._global_lock = threading.Lock()
+
+        # Compatibilità legacy / test
         self.running = False
+        self.rules = []
 
     def start(self):
         """Compatibilità legacy."""
