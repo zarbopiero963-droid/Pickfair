@@ -68,7 +68,6 @@ class CircuitBreaker:
         except Exception as e:
             error_str = str(e).lower()
 
-            # Errori permanenti
             if any(
                 x in error_str
                 for x in [
@@ -86,7 +85,6 @@ class CircuitBreaker:
                 )
                 raise PermanentError(f"Errore Permanente: {e}") from e
 
-            # Errori temporanei
             self._record_failure(e)
             raise TransientError(f"Errore Temporaneo: {e}") from e
 
@@ -100,8 +98,12 @@ class CircuitBreaker:
 
         return True
 
-    def _record_failure(self, error: Exception):
+    def _record_failure(self, error: Exception | None = None):
         self.failures += 1
+
+        if error is None:
+            error = RuntimeError("failure")
+
         logger.warning(
             "[CB] Fallimento API (%s/%s): %s",
             self.failures,
@@ -116,7 +118,7 @@ class CircuitBreaker:
                 self.reset_timeout,
             )
 
-    def record_failure(self, error: Exception):
+    def record_failure(self, error: Exception | None = None):
         self._record_failure(error)
 
     def _reset(self):
