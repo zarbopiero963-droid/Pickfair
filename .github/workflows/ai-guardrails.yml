@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -62,6 +63,8 @@ jobs:
 
       - name: Auto-commit refreshed guardrail snapshots on main
         if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -71,6 +74,15 @@ jobs:
           if git diff --cached --quiet; then
             echo "No guardrail snapshot changes to commit"
           else
+            BRANCH="auto/update-guardrail-snapshots"
+            git checkout -b "$BRANCH"
             git commit -m "auto-update guardrail snapshots"
-            git push
+            git push --force origin "$BRANCH"
+            if gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' | grep -q .; then
+              echo "PR already exists for $BRANCH"
+            else
+              gh pr create --title "Auto-update guardrail snapshots" \
+                --body "Automated update of guardrail snapshot files." \
+                --base main --head "$BRANCH"
+            fi
           fi
