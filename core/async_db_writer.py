@@ -131,6 +131,10 @@ class AsyncDBWriter:
                 return None
             return self.queue.popleft()
 
+    def _has_pending_items(self):
+        with self._lock:
+            return bool(self.queue)
+
     def _loop(self):
         """
         Continua finché running=True oppure finché restano item in queue.
@@ -166,8 +170,10 @@ class AsyncDBWriter:
                         self.max_retries,
                         e,
                     )
-                    time.sleep(self.retry_delay)
+                    # FIX: requeue e attendi PRIMA di riprovare
                     self._requeue_front(item)
+                    self._event.wait(timeout=self.retry_delay)
+                    self._event.clear()
                 else:
                     logger.exception(
                         "[AsyncDBWriter] Write persa definitivamente kind=%s dopo %s tentativi: %s",
@@ -175,7 +181,3 @@ class AsyncDBWriter:
                         self.max_retries,
                         e,
                     )
-
-    def _has_pending_items(self):
-        with self._lock:
-            return bool(self.queue)
