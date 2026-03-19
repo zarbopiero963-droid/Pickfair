@@ -61,6 +61,10 @@ class AutomationOptimizer:
         self._lock = threading.Lock()
         self._states: Dict[str, AutomationState] = {}
         self._global_enabled = True
+
+        # Compat legacy / test
+        self.history = []
+
         self._stats = {
             "total_checks": 0,
             "early_exits": 0,
@@ -113,6 +117,14 @@ class AutomationOptimizer:
                 self._stats["early_exits"] += 1
                 self._stats["by_reason"][reason.value] += 1
                 state.skip_count += 1
+                self.history.append(
+                    {
+                        "order_id": order_id,
+                        "evaluated": False,
+                        "reason": reason.value,
+                        "timestamp": now,
+                    }
+                )
             return (False, reason)
 
         if not self._global_enabled:
@@ -143,6 +155,14 @@ class AutomationOptimizer:
         with self._lock:
             state.last_check = now
             self._stats["full_evaluations"] += 1
+            self.history.append(
+                {
+                    "order_id": order_id,
+                    "evaluated": True,
+                    "reason": None,
+                    "timestamp": now,
+                }
+            )
 
         return (True, None)
 
@@ -170,6 +190,7 @@ class AutomationOptimizer:
         """Pulisce tutti gli stati."""
         with self._lock:
             self._states.clear()
+            self.history.clear()
 
     def get_stats(self) -> Dict[str, Any]:
         """Statistiche dell'optimizer."""
@@ -179,6 +200,7 @@ class AutomationOptimizer:
                 **self._stats,
                 "skip_ratio": (self._stats["early_exits"] / max(1, total)) * 100,
                 "orders_tracked": len(self._states),
+                "history_size": len(self.history),
             }
 
 
@@ -191,4 +213,3 @@ def get_automation_optimizer() -> AutomationOptimizer:
     if _automation_optimizer is None:
         _automation_optimizer = AutomationOptimizer()
     return _automation_optimizer
-
