@@ -103,6 +103,8 @@ class DutchingController:
         selections: List[Dict],
         total_stake: float,
         mode: str = "BACK",
+        event_name: Optional[str] = None,
+        market_name: Optional[str] = None,
         ai_enabled: bool = False,
         ai_wom_enabled: bool = False,
         auto_green: bool = False,
@@ -112,6 +114,7 @@ class DutchingController:
         take_profit: Optional[float] = None,
         trailing: Optional[float] = None,
         dry_run: bool = False,
+        **kwargs,
     ) -> Dict:
         market_id = str(market_id or "").strip()
         market_type = str(market_type or "").strip()
@@ -119,6 +122,13 @@ class DutchingController:
         total_stake = self._safe_float(total_stake, 0.0)
         commission = self._safe_float(commission, 4.5)
         mode = self._normalize_mode(mode)
+
+        # Salva i valori runtime per event_name e market_name
+        if event_name is not None:
+            self.current_event_name = str(event_name)
+
+        if market_name is not None:
+            self.current_market_name = str(market_name)
 
         if self.safe_mode.is_safe_mode_active:
             raise RuntimeError("SAFE MODE attivo: dutching bloccato")
