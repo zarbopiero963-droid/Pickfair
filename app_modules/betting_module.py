@@ -1,6 +1,6 @@
-import tkinter as tk
+from ui.tk_safe import tk, messagebox
+
 from datetime import datetime
-from tkinter import messagebox
 
 from betfair_client import BetfairClient
 from dutching import calculate_dutching_stakes, format_currency, validate_selections
@@ -47,7 +47,7 @@ class BettingModule:
             messagebox.showerror("Errore", "Configura prima le credenziali dal menu File")
             return
 
-        from tkinter import ttk
+        from ui.tk_safe import ttk
 
         pwd_dialog = tk.Toplevel(self.root)
         pwd_dialog.title("Password Betfair")
@@ -125,6 +125,3 @@ class BettingModule:
         self._refresh_dashboard_tab()
 
         self.bus.publish("CLIENT_CONNECTED", None)
-
-    # (file completo come da codice che hai fornito)
-
