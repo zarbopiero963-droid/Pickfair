@@ -1,10 +1,20 @@
 import os
-from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def _get_openai_client():
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError(
+            "openai non installato. Installa 'openai' per usare generate_fix."
+        ) from e
+
+    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def generate_fix(log_text):
+    client = _get_openai_client()
+
     prompt = f"""
 Analyze pytest failure log and propose minimal fix.
 
@@ -17,7 +27,7 @@ LOG:
         input=prompt
     )
 
-    return resp.output_text
+    return getattr(resp, "output_text", "")
 
 
 if __name__ == "__main__":
