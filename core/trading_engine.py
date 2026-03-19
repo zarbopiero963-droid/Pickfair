@@ -14,6 +14,7 @@ Micro-stake:
 
 __all__ = ["TradingEngine"]
 
+import copy
 import json
 import logging
 import threading
@@ -170,6 +171,120 @@ class TradingEngine:
                 e,
             )
             return False
+
+    # =========================================================
+    # SAGA PAYLOAD HELPERS
+    # =========================================================
+
+    def _copy_payload(self, payload):
+        if isinstance(payload, dict):
+            return copy.deepcopy(payload)
+        return {}
+
+    def _safe_update_saga_payload(self, customer_ref, patch):
+        if not customer_ref or not isinstance(patch, dict):
+            return False
+
+        try:
+            updater = getattr(self.db, "update_pending_saga_payload", None)
+            if callable(updater):
+                updater(customer_ref, patch)
+                return True
+        except Exception:
+            logger.exception(
+                "[Saga] update_pending_saga_payload fallita customer_ref=%s",
+                customer_ref,
+            )
+
+        try:
+            updater = getattr(self.db, "update_saga_payload", None)
+            if callable(updater):
+                updater(customer_ref, patch)
+                return True
+        except Exception:
+            logger.exception(
+                "[Saga] update_saga_payload fallita customer_ref=%s",
+                customer_ref,
+            )
+
+        return False
+
+    def _extract_micro_state(self, payload):
+        if not isinstance(payload, dict):
+            return {}
+        data = payload.get("__micro_state")
+        return data if isinstance(data, dict) else {}
+
+    def _patch_micro_state(
+        self,
+        customer_ref,
+        payload,
+        *,
+        phase=None,
+        stub_bet_id=None,
+        replaced_bet_id=None,
+        rollback_pending=None,
+        rollback_error=None,
+        stub_price=None,
+        stub_size=None,
+        target_price=None,
+        target_stake=None,
+        selection_id=None,
+        market_id=None,
+        side=None,
+    ):
+        if not isinstance(payload, dict):
+            return
+
+        state = dict(self._extract_micro_state(payload))
+
+        if phase is not None:
+            state["phase"] = phase
+        if stub_bet_id is not None:
+            state["stub_bet_id"] = str(stub_bet_id) if stub_bet_id else ""
+        if replaced_bet_id is not None:
+            state["replaced_bet_id"] = str(replaced_bet_id) if replaced_bet_id else ""
+        if rollback_pending is not None:
+            state["rollback_pending"] = bool(rollback_pending)
+        if rollback_error is not None:
+            state["rollback_error"] = str(rollback_error or "")
+        if stub_price is not None:
+            state["stub_price"] = float(stub_price)
+        if stub_size is not None:
+            state["stub_size"] = float(stub_size)
+        if target_price is not None:
+            state["target_price"] = float(target_price)
+        if target_stake is not None:
+            state["target_stake"] = float(target_stake)
+        if selection_id is not None:
+            state["selection_id"] = selection_id
+        if market_id is not None:
+            state["market_id"] = str(market_id)
+        if side is not None:
+            state["side"] = str(side).upper()
+
+        payload["__micro_state"] = state
+        self._safe_update_saga_payload(customer_ref, {"__micro_state": state})
+
+    def _extract_recovery_bet_ids(self, payload):
+        state = self._extract_micro_state(payload)
+        ids = []
+
+        stub_bet_id = state.get("stub_bet_id")
+        if stub_bet_id:
+            ids.append(str(stub_bet_id))
+
+        replaced_bet_id = state.get("replaced_bet_id")
+        if replaced_bet_id:
+            ids.append(str(replaced_bet_id))
+
+        unique = []
+        seen = set()
+        for bet_id in ids:
+            if bet_id and bet_id not in seen:
+                seen.add(bet_id)
+                unique.append(bet_id)
+        return unique
 
     # =========================================================
     # RESPONSE / CLIENT NORMALIZATION
@@ -333,6 +448,33 @@ class TradingEngine:
             "newPrice": float(new_price),
         }
 
+    def _force_cancel_known_stub(self, client, market_id, payload):
+        micro_state = self._extract_micro_state(payload)
+        stub_bet_id = micro_state.get("stub_bet_id")
+        if not stub_bet_id:
+            return False
+
+        try:
+            self._call_cancel_orders(
+                client=client,
+                market_id=market_id,
+                instructions=[self._build_cancel_instruction(stub_bet_id)],
+            )
+            logger.warning(
+                "[Recovery] Cancel esplicito stub_bet_id=%s market_id=%s eseguito.",
+                stub_bet_id,
+                market_id,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "[Recovery] Cancel esplicito stub_bet_id=%s market_id=%s fallito: %s",
+                stub_bet_id,
+                market_id,
+                e,
+            )
+            return False
+
     def _execute_micro_stake(
         self,
         client,
@@ -342,6 +484,7 @@ class TradingEngine:
         price,
         stake,
         customer_ref,
+        saga_payload=None,
     ):
         requested_stake = float(stake)
         if requested_stake < self.MICRO_MIN_STAKE:
@@ -353,6 +496,22 @@ class TradingEngine:
 
         if size_reduction <= 0:
             raise ValueError("size_reduction non valida per micro-stake")
+
+        if saga_payload is not None:
+            self._patch_micro_state(
+                customer_ref,
+                saga_payload,
+                phase="PREPARED",
+                rollback_pending=False,
+                rollback_error="",
+                stub_price=stub_price,
+                stub_size=stub_size,
+                target_price=price,
+                target_stake=requested_stake,
+                selection_id=selection_id,
+                market_id=market_id,
+                side=side,
+            )
 
         place_resp = self._call_place_bet(
             client=client,
@@ -375,6 +534,18 @@ class TradingEngine:
 
         first_report = place_reports[0]
         bet_id = self._extract_bet_id(first_report)
+        if not bet_id:
+            raise RuntimeError("Micro-stake step PLACE senza betId")
+
+        if saga_payload is not None:
+            self._patch_micro_state(
+                customer_ref,
+                saga_payload,
+                phase="STUB_PLACED",
+                stub_bet_id=bet_id,
+                rollback_pending=False,
+                rollback_error="",
+            )
 
         try:
             cancel_resp = self._call_cancel_orders(
@@ -392,6 +563,16 @@ class TradingEngine:
                     f"Micro-stake step CANCEL fallito: {self._response_status(cancel_resp)}"
                 )
 
+            if saga_payload is not None:
+                self._patch_micro_state(
+                    customer_ref,
+                    saga_payload,
+                    phase="STUB_REDUCED",
+                    stub_bet_id=bet_id,
+                    rollback_pending=False,
+                    rollback_error="",
+                )
+
             replace_resp = self._call_replace_orders(
                 client=client,
                 market_id=market_id,
@@ -404,23 +585,73 @@ class TradingEngine:
                     f"Micro-stake step REPLACE fallito: {self._response_status(replace_resp)}"
                 )
 
-            reports = self._response_instruction_reports(replace_resp) or place_reports
+            replace_reports = self._response_instruction_reports(replace_resp)
+            final_bet_id = bet_id
+            if replace_reports:
+                replaced_bet_id = self._extract_bet_id(replace_reports[0])
+                if replaced_bet_id:
+                    final_bet_id = replaced_bet_id
+
+            if saga_payload is not None:
+                self._patch_micro_state(
+                    customer_ref,
+                    saga_payload,
+                    phase="STUB_REPLACED",
+                    stub_bet_id=bet_id,
+                    replaced_bet_id=final_bet_id,
+                    rollback_pending=False,
+                    rollback_error="",
+                )
+
+            reports = replace_reports or place_reports
 
             return {
                 "status": "SUCCESS",
                 "instructionReports": reports,
                 "micro": True,
-                "betId": bet_id,
+                "betId": final_bet_id,
+                "stubBetId": bet_id,
             }
 
-        except Exception:
+        except Exception as micro_error:
+            if saga_payload is not None:
+                self._patch_micro_state(
+                    customer_ref,
+                    saga_payload,
+                    phase="ROLLBACK_PENDING",
+                    stub_bet_id=bet_id,
+                    rollback_pending=True,
+                    rollback_error=str(micro_error),
+                )
+
             try:
                 self._call_cancel_orders(
                     client=client,
                     market_id=market_id,
                     instructions=[self._build_cancel_instruction(bet_id)],
                 )
+
+                if saga_payload is not None:
+                    self._patch_micro_state(
+                        customer_ref,
+                        saga_payload,
+                        phase="ROLLED_BACK",
+                        stub_bet_id=bet_id,
+                        rollback_pending=False,
+                        rollback_error="",
+                    )
+
             except Exception as rollback_error:
+                if saga_payload is not None:
+                    self._patch_micro_state(
+                        customer_ref,
+                        saga_payload,
+                        phase="ROLLBACK_FAILED",
+                        stub_bet_id=bet_id,
+                        rollback_pending=True,
+                        rollback_error=str(rollback_error),
+                    )
+
                 logger.critical(
                     "[MicroStake] Rollback fallito bet_id=%s market_id=%s err=%s",
                     bet_id,
@@ -458,11 +689,26 @@ class TradingEngine:
                 except Exception:
                     payload = {}
 
+                known_bet_ids = self._extract_recovery_bet_ids(payload)
+
                 is_recovered, recovered_reports = self._reconcile_orders(
                     client,
                     market_id,
                     customer_ref,
+                    known_bet_ids=known_bet_ids,
                 )
+
+                if not is_recovered and self._force_cancel_known_stub(
+                    client,
+                    market_id,
+                    payload,
+                ):
+                    is_recovered, recovered_reports = self._reconcile_orders(
+                        client,
+                        market_id,
+                        customer_ref,
+                        known_bet_ids=known_bet_ids,
+                    )
 
                 if not is_recovered:
                     self.db.mark_saga_failed(customer_ref)
@@ -482,6 +728,7 @@ class TradingEngine:
                         client,
                         market_id,
                         customer_ref,
+                        known_bet_ids=known_bet_ids,
                     )
 
                 self.db.mark_saga_reconciled(customer_ref)
@@ -547,7 +794,9 @@ class TradingEngine:
 
         self.executor.submit("saga_recovery", task)
 
-    def _reconcile_orders(self, client, market_id, customer_ref):
+    def _reconcile_orders(self, client, market_id, customer_ref, known_bet_ids=None):
+        known_bet_ids = {str(x) for x in (known_bet_ids or []) if x}
+
         for delay in [0.5, 1.0, 2.0]:
             time.sleep(delay)
             try:
@@ -569,15 +818,23 @@ class TradingEngine:
 
                 all_orders = current_orders + matched_orders + unmatched_orders
 
-                recovered = [
-                    order
-                    for order in all_orders
-                    if (
-                        order.get("customerOrderRef") == customer_ref
-                        or order.get("customerRef") == customer_ref
+                recovered = []
+                for order in all_orders:
+                    order_market_id = str(order.get("marketId", ""))
+                    if order_market_id != str(market_id):
+                        continue
+
+                    order_customer_ref = (
+                        order.get("customerOrderRef")
+                        or order.get("customerRef")
+                        or order.get("customer_order_ref")
                     )
-                    and str(order.get("marketId")) == str(market_id)
-                ]
+                    order_bet_id = str(order.get("betId", "") or order.get("bet_id", ""))
+
+                    if order_customer_ref == customer_ref or (
+                        order_bet_id and order_bet_id in known_bet_ids
+                    ):
+                        recovered.append(order)
 
                 if recovered:
                     return True, recovered
@@ -658,11 +915,12 @@ class TradingEngine:
                 if not client:
                     raise Exception("Client non connesso")
 
+                saga_payload = self._copy_payload(payload)
                 self.db.create_pending_saga(
                     customer_ref,
                     market_id,
                     selection_id,
-                    payload,
+                    saga_payload,
                 )
 
                 try:
@@ -675,6 +933,7 @@ class TradingEngine:
                             price=price,
                             stake=stake,
                             customer_ref=customer_ref,
+                            saga_payload=saga_payload,
                         )
                     else:
                         result = self._call_place_bet(
@@ -758,6 +1017,7 @@ class TradingEngine:
                         client,
                         market_id,
                         customer_ref,
+                        known_bet_ids=self._extract_recovery_bet_ids(saga_payload),
                     )
 
                     if is_recovered:
@@ -919,7 +1179,8 @@ class TradingEngine:
                 if not client:
                     raise Exception("Client non connesso")
 
-                self.db.create_pending_saga(customer_ref, market_id, None, payload)
+                saga_payload = self._copy_payload(payload)
+                self.db.create_pending_saga(customer_ref, market_id, None, saga_payload)
 
                 try:
                     normal_instructions = []
@@ -966,6 +1227,7 @@ class TradingEngine:
                                 price=target_price,
                                 stake=size,
                                 customer_ref=customer_ref,
+                                saga_payload=saga_payload,
                             )
                             micro_reports.extend(
                                 self._response_instruction_reports(micro_result)
@@ -1048,6 +1310,7 @@ class TradingEngine:
                         client,
                         market_id,
                         customer_ref,
+                        known_bet_ids=self._extract_recovery_bet_ids(saga_payload),
                     )
 
                     if is_recovered:
@@ -1135,11 +1398,12 @@ class TradingEngine:
                 price = float(payload["price"])
                 green_up = float(payload["green_up"])
 
+                saga_payload = self._copy_payload(payload)
                 self.db.create_pending_saga(
                     customer_ref,
                     market_id,
                     selection_id,
-                    payload,
+                    saga_payload,
                 )
 
                 try:
@@ -1152,6 +1416,7 @@ class TradingEngine:
                             price=price,
                             stake=stake,
                             customer_ref=customer_ref,
+                            saga_payload=saga_payload,
                         )
                     else:
                         instructions = [
@@ -1219,6 +1484,7 @@ class TradingEngine:
                         client,
                         market_id,
                         customer_ref,
+                        known_bet_ids=self._extract_recovery_bet_ids(saga_payload),
                     )
 
                     if is_recovered:
