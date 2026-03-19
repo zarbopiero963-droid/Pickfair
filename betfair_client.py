@@ -18,7 +18,7 @@ from betfairlightweight import filters
 from betfairlightweight.streaming import StreamListener
 
 # --- HEDGE-FUND STABLE FIX ---
-from circuit_breaker import CircuitBreaker
+from circuit_breaker import CircuitBreaker, TransientError, PermanentError
 
 # -----------------------------
 
@@ -27,11 +27,6 @@ logger = logging.getLogger(__name__)
 # Retry configuration
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0  # seconds
-
-# Transient Error Class
-class TransientError(Exception):
-    """Errore temporaneo/retriable lato rete, SDK o integrazione."""
-    pass
 
 
 def with_retry(func):
