@@ -1,8 +1,8 @@
 import sys
-import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Dict, List, Optional
+
+from ui.tk_safe import tk, filedialog, messagebox, scrolledtext, ttk
 
 import customtkinter as ctk
 
