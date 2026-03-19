@@ -128,7 +128,32 @@ class SimulationBroker:
         self.bet_counter = 0
         self.lock = threading.RLock()
 
+        # Compat legacy test/runtime
+        self.connected = True
+
         logger.info(f"[SIM BROKER] Inizializzato con balance €{actual_balance:.2f}")
+
+    def connect(self):
+        """
+        Compatibilità legacy:
+        ripristina la connessione del broker simulato.
+        """
+        self.connected = True
+        return True
+
+    def disconnect(self):
+        """
+        Compatibilità legacy:
+        segna il broker simulato come disconnesso.
+        """
+        self.connected = False
+        return True
+
+    def is_connected(self):
+        """
+        Helper legacy/readability.
+        """
+        return bool(getattr(self, "connected", False))
 
     def place_order(
         self,
@@ -404,6 +429,7 @@ class SimulationBroker:
             self.orders.clear()
             self.bet_counter = 0
             self.balance = self.initial_balance
+            self.connected = True
             logger.info("[SIM] Broker resettato")
 
     def settle_market(self, market_id: str, winner_selection_id: int) -> float:
@@ -716,4 +742,3 @@ class TickReplayEngine:
             if not self.ticks:
                 return 0.0
             return self.index / len(self.ticks)
-
