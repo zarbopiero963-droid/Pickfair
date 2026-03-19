@@ -1,5 +1,5 @@
 {
-  "ai": {
+  "__init__": {
     "classes": {},
     "functions": {}
   },
@@ -468,6 +468,15 @@
     "classes": {
       "AutoThrottle": {
         "methods": {
+          "allow_call": {
+            "name": "allow_call",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
           "wait": {
             "name": "wait",
             "positional": [
@@ -626,6 +635,24 @@
     "classes": {
       "AutomationEngine": {
         "methods": {
+          "start": {
+            "name": "start",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "stop": {
+            "name": "stop",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
           "process_tick": {
             "name": "process_tick",
             "positional": [
@@ -677,6 +704,16 @@
             "positional": [
               "self",
               "value"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_result": {
+            "name": "record_result",
+            "positional": [
+              "self",
+              "result"
             ],
             "kwonly": [],
             "vararg": null,
@@ -1103,10 +1140,13 @@
   },
   "circuit_breaker": {
     "classes": {
-      "TransientError": {
+      "State": {
         "methods": {}
       },
       "PermanentError": {
+        "methods": {}
+      },
+      "TransientError": {
         "methods": {}
       },
       "CircuitBreaker": {
@@ -1123,6 +1163,34 @@
           },
           "is_open": {
             "name": "is_open",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "is_half_open": {
+            "name": "is_half_open",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "record_failure": {
+            "name": "record_failure",
+            "positional": [
+              "self",
+              "error"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "reset": {
+            "name": "reset",
             "positional": [
               "self"
             ],
@@ -1146,6 +1214,16 @@
       },
       "DutchingController": {
         "methods": {
+          "execute": {
+            "name": "execute",
+            "positional": [
+              "self",
+              "payload"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
           "submit_dutching": {
             "name": "submit_dutching",
             "positional": [
@@ -1163,7 +1241,9 @@
               "stop_loss",
               "take_profit",
               "trailing",
-              "dry_run"
+              "dry_run",
+              "event_name",
+              "market_name"
             ],
             "kwonly": [],
             "vararg": null,
@@ -1484,6 +1564,10 @@
         }
       }
     },
+    "functions": {}
+  },
+  "core.market_tracker": {
+    "classes": {},
     "functions": {}
   },
   "core.perf_counters": {
@@ -1810,6 +1894,10 @@
         "kwarg": null
       }
     }
+  },
+  "core.tick_dispatcher": {
+    "classes": {},
+    "functions": {}
   },
   "core.tick_ring_buffer": {
     "classes": {
@@ -2393,6 +2481,19 @@
         "vararg": null,
         "kwarg": "kwargs"
       },
+      "calculate_dutching": {
+        "name": "calculate_dutching",
+        "positional": [
+          "selections",
+          "total_stake",
+          "bet_type",
+          "commission",
+          "side"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": "kwargs"
+      },
       "dynamic_cashout_single": {
         "name": "dynamic_cashout_single",
         "positional": [
@@ -2900,6 +3001,48 @@
         "kwarg": null
       }
     }
+  },
+  "event_bus": {
+    "classes": {
+      "EventBus": {
+        "methods": {
+          "subscribe": {
+            "name": "subscribe",
+            "positional": [
+              "self",
+              "event_type",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "unsubscribe": {
+            "name": "unsubscribe",
+            "positional": [
+              "self",
+              "event_type",
+              "callback"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "publish": {
+            "name": "publish",
+            "positional": [
+              "self",
+              "event_type",
+              "data"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          }
+        }
+      }
+    },
+    "functions": {}
   },
   "executor_manager": {
     "classes": {
@@ -4219,6 +4362,10 @@
       }
     }
   },
+  "safe_mode_manager": {
+    "classes": {},
+    "functions": {}
+  },
   "safety_logger": {
     "classes": {
       "SafetyEventType": {
@@ -4441,6 +4588,33 @@
       },
       "SimulationBroker": {
         "methods": {
+          "connect": {
+            "name": "connect",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "disconnect": {
+            "name": "disconnect",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
+          "is_connected": {
+            "name": "is_connected",
+            "positional": [
+              "self"
+            ],
+            "kwonly": [],
+            "vararg": null,
+            "kwarg": null
+          },
           "place_order": {
             "name": "place_order",
             "positional": [
@@ -4826,6 +5000,10 @@
       }
     }
   },
+  "telegram_controller": {
+    "classes": {},
+    "functions": {}
+  },
   "telegram_listener": {
     "classes": {
       "TelegramListener": {
@@ -5168,6 +5346,22 @@
       }
     },
     "functions": {
+      "format_bet_message": {
+        "name": "format_bet_message",
+        "positional": [
+          "runner_name",
+          "action",
+          "price",
+          "market_id",
+          "selection_id",
+          "event_name",
+          "market_name",
+          "status"
+        ],
+        "kwonly": [],
+        "vararg": null,
+        "kwarg": null
+      },
       "get_telegram_sender": {
         "name": "get_telegram_sender",
         "positional": [
@@ -5580,6 +5774,10 @@
         }
       }
     },
+    "functions": {}
+  },
+  "ui.tk_safe": {
+    "classes": {},
     "functions": {}
   },
   "ui.toolbar": {

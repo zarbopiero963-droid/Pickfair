@@ -96,6 +96,18 @@ class DutchingController:
     def _safe_market_name(self) -> str:
         return str(getattr(self, "current_market_name", "") or "Market")
 
+    def execute(self, payload: Dict) -> Dict:
+        selections = payload.get("selections", payload.get("results", []))
+        return self.submit_dutching(
+            market_id=payload.get("market_id", ""),
+            market_type=payload.get("market_type", ""),
+            selections=selections,
+            total_stake=payload.get("total_stake", 0),
+            mode=payload.get("mode", payload.get("bet_type", "BACK")),
+            event_name=payload.get("event_name", ""),
+            market_name=payload.get("market_name", ""),
+        )
+
     def submit_dutching(
         self,
         market_id: str,
@@ -112,9 +124,15 @@ class DutchingController:
         take_profit: Optional[float] = None,
         trailing: Optional[float] = None,
         dry_run: bool = False,
+        event_name: str = "",
+        market_name: str = "",
     ) -> Dict:
         market_id = str(market_id or "").strip()
         market_type = str(market_type or "").strip()
+        if event_name:
+            self.current_event_name = event_name
+        if market_name:
+            self.current_market_name = market_name
         selections = list(selections or [])
         total_stake = self._safe_float(total_stake, 0.0)
         commission = self._safe_float(commission, 4.5)

@@ -105,14 +105,20 @@ def calculate_dutching_stakes(
 
 # ✅ FIX COMPATIBILITÀ LEGACY
 def calculate_dutching(
-    selections: List[Dict],
+    selections,
     total_stake: float,
     bet_type: str = "BACK",
     commission: float = 4.5,
     side: str = None,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
-    return calculate_dutching_stakes(
+):
+    legacy_mode = selections and not isinstance(selections[0], dict)
+    if legacy_mode:
+        selections = [
+            {"selectionId": i, "runnerName": str(i), "price": float(p)}
+            for i, p in enumerate(selections)
+        ]
+    results, profit, implied_prob = calculate_dutching_stakes(
         selections=selections,
         total_stake=total_stake,
         bet_type=bet_type,
@@ -120,6 +126,15 @@ def calculate_dutching(
         side=side,
         **kwargs,
     )
+    if legacy_mode:
+        return {
+            "stakes": [r["stake"] for r in results],
+            "profits": [r["profitIfWins"] for r in results],
+            "results": results,
+            "profit": profit,
+            "implied_probability": implied_prob,
+        }
+    return results, profit, implied_prob
 
 
 def _calculate_back_dutching(
