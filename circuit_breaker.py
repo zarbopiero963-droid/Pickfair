@@ -1,17 +1,22 @@
 import logging
 import time
-from typing import Any, Callable
+from enum import Enum
+from typing import Callable, Any
 
 logger = logging.getLogger("CB")
 
 
-class TransientError(Exception):
-    """Errore temporaneo: ritentabile."""
-    pass
+class State(Enum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
 
 
 class PermanentError(Exception):
-    """Errore permanente: non ritentare."""
+    pass
+
+
+class TransientError(Exception):
     pass
 
 
@@ -20,20 +25,11 @@ class CircuitBreaker:
         self,
         failure_threshold: int | None = None,
         max_failures: int | None = None,
-        recovery_timeout: int | float | None = None,
-        recovery_time: int | float | None = None,
-        reset_timeout: int | float = 30,
+        recovery_time: float | None = None,
+        recovery_timeout: float | None = None,
+        reset_timeout: float = 30.0,
     ):
-        """
-        Circuit breaker compatibile con naming legacy e attuale.
-
-        Supporta:
-        - failure_threshold
-        - max_failures
-        - recovery_timeout
-        - recovery_time
-        - reset_timeout
-        """
+        # compat naming
         if failure_threshold is not None:
             self.max_failures = int(failure_threshold)
         elif max_failures is not None:
@@ -48,8 +44,11 @@ class CircuitBreaker:
         else:
             self.reset_timeout = float(reset_timeout)
 
+        self.state = State.CLOSED
         self.failures = 0
         self.opened_at = None
+
+    # ---------------- CORE ---------------- #
 
     def call(self, fn: Callable, *args, **kwargs) -> Any:
         if self.is_open():
@@ -59,14 +58,14 @@ class CircuitBreaker:
 
         try:
             result = fn(*args, **kwargs)
-            self._reset()
+            self._on_success()
             return result
 
         except PermanentError:
             raise
 
         except TransientError as e:
-            self._record_failure(e)
+            self._on_failure(e)
             raise
 
         except Exception as e:
@@ -83,54 +82,63 @@ class CircuitBreaker:
                     "invalid session",
                 ]
             ):
-                logger.error(
-                    "[CB] Errore Permanente rilevato: %s. Operazione bloccata.",
-                    e,
-                )
                 raise PermanentError(f"Errore Permanente: {e}") from e
 
-            self._record_failure(e)
+            self._on_failure(e)
             raise TransientError(f"Errore Temporaneo: {e}") from e
 
+    # ---------------- STATE ---------------- #
+
     def is_open(self) -> bool:
-        if self.opened_at is None:
+        if self.state != State.OPEN:
             return False
 
         if time.time() - self.opened_at > self.reset_timeout:
-            self._reset()
+            self.state = State.HALF_OPEN
             return False
 
         return True
 
-    def _record_failure(self, error: Exception | None = None):
+    def is_half_open(self) -> bool:
+        return self.state == State.HALF_OPEN
+
+    # ---------------- FAILURE ---------------- #
+
+    def record_failure(self, error: Exception | None = None):
+        self._on_failure(error)
+
+    def _on_failure(self, error: Exception | None = None):
         self.failures += 1
 
         if error is None:
             error = RuntimeError("failure")
 
         logger.warning(
-            "[CB] Fallimento API (%s/%s): %s",
+            "[CB] Failure (%s/%s): %s",
             self.failures,
             self.max_failures,
             error,
         )
 
         if self.failures >= self.max_failures:
+            self.state = State.OPEN
             self.opened_at = time.time()
             logger.error(
-                "[CB] CIRCUIT BREAKER APERTO per %.1f secondi!",
+                "[CB] OPEN for %.2fs",
                 self.reset_timeout,
             )
 
-    def record_failure(self, error: Exception | None = None):
-        self._record_failure(error)
+    # ---------------- SUCCESS ---------------- #
 
-    def _reset(self):
-        if self.failures > 0 or self.opened_at is not None:
-            logger.info("[CB] Circuit breaker RESET. Connessione ripristinata.")
+    def _on_success(self):
+        if self.state in (State.HALF_OPEN, State.OPEN):
+            logger.info("[CB] Recovery -> CLOSED")
 
-        self.failures = 0
-        self.opened_at = None
+        self.reset()
+
+    # ---------------- RESET ---------------- #
 
     def reset(self):
-        self._reset()
+        self.state = State.CLOSED
+        self.failures = 0
+        self.opened_at = None
