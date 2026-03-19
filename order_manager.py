@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 logger = logging.getLogger("OrderManager")
 
@@ -35,7 +34,7 @@ class OrderManager:
         self.db = db if db is not None else getattr(app, "db", None)
 
         # Cache locale puramente legacy / diagnostica
-        self._local_cache: Dict[str, Dict[str, Any]] = {}
+        self._local_cache: dict[str, dict[str, Any]] = {}
 
     # =========================================================
     # LEGACY SAFE API
@@ -82,7 +81,7 @@ class OrderManager:
     # CACHE / HOUSEKEEPING
     # =========================================================
 
-    def remember(self, key: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    def remember(self, key: str, payload: dict[str, Any] | None = None) -> None:
         """
         Memorizza temporaneamente info legacy utili a UI/debug.
         Nessun valore operativo lato OMS.
@@ -95,7 +94,7 @@ class OrderManager:
     def forget(self, key: str) -> None:
         self._local_cache.pop(str(key), None)
 
-    def get_cached(self, key: str, default: Optional[Any] = None) -> Any:
+    def get_cached(self, key: str, default: Any | None = None) -> Any:
         item = self._local_cache.get(str(key))
         if item is None:
             return default
@@ -130,7 +129,7 @@ class OrderManager:
     # DIAGNOSTICA
     # =========================================================
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         return {
             "bus_available": self.bus is not None,
             "db_available": self.db is not None,

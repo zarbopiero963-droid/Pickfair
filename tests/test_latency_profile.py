@@ -1,5 +1,5 @@
-import time
 import statistics
+import time
 
 
 def test_latency_profile():

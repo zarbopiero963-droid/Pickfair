@@ -4,9 +4,9 @@ Separa logica di stato dalla UI per architettura pulita.
 """
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional
 
 
 class DutchingMode(Enum):
@@ -38,7 +38,7 @@ class RunnerState:
         """BACK o LAY basato su swap."""
         return "LAY" if self.swap else "BACK"
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Converti a dizionario per engine."""
         return {
             "selectionId": self.selection_id,
@@ -57,7 +57,7 @@ class DutchingState:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._runners: List[RunnerState] = []
+        self._runners: list[RunnerState] = []
         self._mode: DutchingMode = DutchingMode.STAKE_AVAILABLE
         self._total_stake: float = 100.0
         self._target_profit: float = 10.0
@@ -78,7 +78,7 @@ class DutchingState:
         self._simulation_mode: bool = False
 
         # Callback per aggiornamento UI
-        self._on_change: Optional[Callable] = None
+        self._on_change: Callable | None = None
 
     def set_callback(self, callback: Callable):
         """Imposta callback chiamato ad ogni modifica stato."""
@@ -139,7 +139,7 @@ class DutchingState:
 
     # === RUNNERS ===
 
-    def load_runners(self, runners: List[Dict]):
+    def load_runners(self, runners: list[dict]):
         """
         Carica runners dal mercato.
         runners: [{'selectionId': int, 'runnerName': str, 'price': float}]
@@ -165,7 +165,7 @@ class DutchingState:
                     break
         self._notify()
 
-    def update_all_odds(self, odds_map: Dict[int, float]):
+    def update_all_odds(self, odds_map: dict[int, float]):
         """Aggiorna quote multiple."""
         with self._lock:
             for r in self._runners:
@@ -237,13 +237,13 @@ class DutchingState:
         self._notify()
 
     @property
-    def runners(self) -> List[RunnerState]:
+    def runners(self) -> list[RunnerState]:
         """Lista runner (copia)."""
         with self._lock:
             return list(self._runners)
 
     @property
-    def included_runners(self) -> List[RunnerState]:
+    def included_runners(self) -> list[RunnerState]:
         """Solo runner inclusi."""
         with self._lock:
             return [r for r in self._runners if r.included]
@@ -329,11 +329,11 @@ class DutchingState:
         """Somma stake calcolate."""
         return sum(r.stake for r in self._runners)
 
-    def get_selections_for_engine(self) -> List[Dict]:
+    def get_selections_for_engine(self) -> list[dict]:
         """Ritorna selezioni formattate per dutching engine."""
         return [r.to_dict() for r in self.included_runners]
 
-    def apply_calculation_results(self, results: List[Dict]):
+    def apply_calculation_results(self, results: list[dict]):
         """Applica risultati calcolo alle righe."""
         with self._lock:
             results_map = {r["selectionId"]: r for r in results}
@@ -348,7 +348,7 @@ class DutchingState:
                     runner.profit_if_wins = -self.get_total_stake()
         # Non notifica - chiamante gestisce refresh UI
 
-    def get_orders_to_place(self) -> List[Dict]:
+    def get_orders_to_place(self) -> list[dict]:
         """Ritorna ordini pronti per placement."""
         orders = []
         for r in self.included_runners:

@@ -12,7 +12,6 @@ Compatibile con chiamate legacy/tests:
 
 import logging
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, getcontext
-from typing import Dict, List, Tuple
 
 getcontext().prec = 12
 
@@ -48,7 +47,7 @@ def _normalize_price(value) -> Decimal:
     return price
 
 
-def _normalize_side(selection: Dict, default_side: str) -> str:
+def _normalize_side(selection: dict, default_side: str) -> str:
     side = (
         selection.get("effectiveType")
         or selection.get("side")
@@ -61,8 +60,8 @@ def _normalize_side(selection: Dict, default_side: str) -> str:
     return side
 
 
-def validate_selections(results: List[Dict], bet_type: str = "BACK") -> List[str]:
-    errors: List[str] = []
+def validate_selections(results: list[dict], bet_type: str = "BACK") -> list[str]:
+    errors: list[str] = []
 
     for r in results:
         runner = str(r.get("runnerName", str(r.get("selectionId", "?"))))
@@ -83,13 +82,13 @@ def validate_selections(results: List[Dict], bet_type: str = "BACK") -> List[str
 
 
 def calculate_dutching_stakes(
-    selections: List[Dict],
+    selections: list[dict],
     total_stake: float,
     bet_type: str = "BACK",
     commission: float = 4.5,
     side: str = None,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     if not selections:
         return [], 0.0, 0.0
 
@@ -105,13 +104,13 @@ def calculate_dutching_stakes(
 
 # ✅ FIX COMPATIBILITÀ LEGACY
 def calculate_dutching(
-    selections: List[Dict],
+    selections: list[dict],
     total_stake: float,
     bet_type: str = "BACK",
     commission: float = 4.5,
     side: str = None,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     return calculate_dutching_stakes(
         selections=selections,
         total_stake=total_stake,
@@ -123,10 +122,10 @@ def calculate_dutching(
 
 
 def _calculate_back_dutching(
-    selections: List[Dict],
+    selections: list[dict],
     total_stake: float,
     commission: float,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     total_stake_dec = _to_decimal(total_stake, "0")
     if total_stake_dec <= 0:
         return [], 0.0, 0.0
@@ -188,10 +187,10 @@ def _calculate_back_dutching(
 
 
 def _calculate_lay_dutching(
-    selections: List[Dict],
+    selections: list[dict],
     total_target_profit: float,
     commission: float,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     target_profit_dec = _to_decimal(total_target_profit, "0")
     if target_profit_dec <= 0:
         return [], 0.0, 0.0
@@ -271,11 +270,11 @@ def dynamic_cashout_single(
 
 
 def calculate_mixed_dutching(
-    selections: List[Dict],
+    selections: list[dict],
     amount: float,
     commission: float = 4.5,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     if not selections:
         return [], 0.0, 0.0
 
@@ -375,12 +374,12 @@ def calculate_mixed_dutching(
 
 
 def calculate_ai_mixed_stakes(
-    selections: List[Dict],
+    selections: list[dict],
     amount: float = None,
     commission: float = 4.5,
     total_stake: float = None,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     if amount is None:
         amount = total_stake
     if amount is None:
@@ -389,9 +388,9 @@ def calculate_ai_mixed_stakes(
 
 
 def calculate_ai_mixed_dutching(
-    selections: List[Dict],
+    selections: list[dict],
     amount: float,
     commission: float = 4.5,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     return calculate_mixed_dutching(selections, amount, commission)

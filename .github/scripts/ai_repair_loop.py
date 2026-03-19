@@ -84,7 +84,7 @@ def load_ci_context() -> dict:
 
 
 def count_ci_failures() -> int:
-    return len((load_ci_context().get("ci_failures") or []))
+    return len(load_ci_context().get("ci_failures") or [])
 
 
 def patch_summary() -> dict:

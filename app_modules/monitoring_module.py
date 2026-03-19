@@ -1,6 +1,6 @@
+import logging
 import tkinter as tk
 from tkinter import messagebox
-import logging
 
 from theme import COLORS
 

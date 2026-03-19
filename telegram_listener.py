@@ -9,8 +9,8 @@ import asyncio
 import os
 import re
 import threading
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -39,21 +39,21 @@ class TelegramListener:
         self.api_hash = api_hash
         self.session_string = session_string
         self.session_path = session_path
-        self.client: Optional[TelegramClient] = None
+        self.client: TelegramClient | None = None
         self.running = False
         self.loop = None
         self.thread = None
 
-        self.monitored_chats: List[int] = []
-        self.signal_callback: Optional[Callable] = None
-        self.message_callback: Optional[Callable] = None
-        self.status_callback: Optional[Callable] = None
+        self.monitored_chats: list[int] = []
+        self.signal_callback: Callable | None = None
+        self.message_callback: Callable | None = None
+        self.status_callback: Callable | None = None
 
         self.db = None
         self.custom_patterns = []
         self.signal_patterns = self._default_patterns()
 
-    def _default_patterns(self) -> Dict:
+    def _default_patterns(self) -> dict:
         """Default regex patterns for parsing betting signals."""
         return {
             "event_icon": r"🆚\s*(.+?)(?:\n|$)",
@@ -72,7 +72,7 @@ class TelegramListener:
             "ignore_patterns": [r"📈Quota\s*\d+[.,]?\d*", r"📊\d+[.,]?\d+%"],
         }
 
-    def set_signal_patterns(self, patterns: Dict):
+    def set_signal_patterns(self, patterns: dict):
         """Update signal parsing patterns."""
         self.signal_patterns.update(patterns or {})
 
@@ -98,7 +98,7 @@ class TelegramListener:
         else:
             self.custom_patterns = []
 
-    def set_monitored_chats(self, chat_ids: List[int]):
+    def set_monitored_chats(self, chat_ids: list[int]):
         """Set list of chat IDs to monitor."""
         self.monitored_chats = list(chat_ids or [])
 
@@ -113,7 +113,7 @@ class TelegramListener:
         self.message_callback = on_message
         self.status_callback = on_status
 
-    def _base_signal(self, text: str, source: str = "LEGACY") -> Dict:
+    def _base_signal(self, text: str, source: str = "LEGACY") -> dict:
         return {
             "raw_text": text,
             "timestamp": datetime.now().isoformat(),
@@ -139,7 +139,7 @@ class TelegramListener:
             "source": source,
         }
 
-    def _normalize_action(self, value: Optional[str], default: str = "BACK") -> str:
+    def _normalize_action(self, value: str | None, default: str = "BACK") -> str:
         action = str(value or default).upper().strip()
         if action not in ("BACK", "LAY"):
             return default
@@ -161,7 +161,7 @@ class TelegramListener:
         except Exception:
             return None
 
-    def _extract_master_field(self, text: str, field: str) -> Optional[str]:
+    def _extract_master_field(self, text: str, field: str) -> str | None:
         match = re.search(
             rf"^{field}\s*:\s*(.+)$",
             text,
@@ -169,7 +169,7 @@ class TelegramListener:
         )
         return match.group(1).strip() if match else None
 
-    def _parse_master_signal(self, text: str) -> Optional[Dict]:
+    def _parse_master_signal(self, text: str) -> dict | None:
         event = self._extract_master_field(text, "event_name")
         market = self._extract_master_field(text, "market_name")
         selection = self._extract_master_field(text, "selection")
@@ -207,7 +207,7 @@ class TelegramListener:
         )
         return signal
 
-    def _parse_custom_patterns(self, text: str) -> Optional[Dict]:
+    def _parse_custom_patterns(self, text: str) -> dict | None:
         custom_patterns = getattr(self, "custom_patterns", []) or []
 
         for cp in custom_patterns:
@@ -302,7 +302,7 @@ class TelegramListener:
 
         return None
 
-    def _parse_cashout_signal(self, text: str) -> Optional[Dict]:
+    def _parse_cashout_signal(self, text: str) -> dict | None:
         if re.search(self.signal_patterns["cashout_all"], text, re.IGNORECASE):
             signal = self._base_signal(text, source="LEGACY")
             signal["market_type"] = "CASHOUT"
@@ -317,7 +317,7 @@ class TelegramListener:
 
         return None
 
-    def _extract_event_from_lines(self, text: str) -> Optional[str]:
+    def _extract_event_from_lines(self, text: str) -> str | None:
         icon_match = re.search(self.signal_patterns["event_icon"], text, re.IGNORECASE)
         if icon_match:
             return icon_match.group(1).strip()
@@ -332,7 +332,7 @@ class TelegramListener:
 
         return None
 
-    def _parse_legacy_signal(self, text: str) -> Optional[Dict]:
+    def _parse_legacy_signal(self, text: str) -> dict | None:
         signal = self._base_signal(text, source="LEGACY")
 
         event_value = self._extract_event_from_lines(text)
@@ -412,7 +412,7 @@ class TelegramListener:
 
         return None
 
-    def parse_signal(self, text: str) -> Optional[Dict]:
+    def parse_signal(self, text: str) -> dict | None:
         """
         Parse message text for betting signals.
 
@@ -565,7 +565,7 @@ class TelegramListener:
         if self.status_callback:
             self.status_callback("STOPPED", "Listener fermato")
 
-    def get_session_string(self) -> Optional[str]:
+    def get_session_string(self) -> str | None:
         """Get current session string for saving."""
         if self.client:
             return self.client.session.save()
@@ -592,23 +592,23 @@ class SignalQueue:
     """Thread-safe queue for betting signals."""
 
     def __init__(self, max_size: int = 100):
-        self.queue: List[Dict] = []
+        self.queue: list[dict] = []
         self.max_size = max_size
         self.lock = threading.Lock()
 
-    def add(self, signal: Dict):
+    def add(self, signal: dict):
         """Add signal to queue."""
         with self.lock:
             self.queue.append(signal)
             if len(self.queue) > self.max_size:
                 self.queue.pop(0)
 
-    def get_pending(self) -> List[Dict]:
+    def get_pending(self) -> list[dict]:
         """Get all pending signals."""
         with self.lock:
             return list(self.queue)
 
-    def remove(self, signal: Dict):
+    def remove(self, signal: dict):
         """Remove a signal from queue."""
         with self.lock:
             if signal in self.queue:

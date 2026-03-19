@@ -6,11 +6,10 @@ Non esegue ordini direttamente.
 Pubblica soltanto intenti REQ_QUICK_BET sull'EventBus.
 """
 
-from ui.tk_safe import tk, messagebox
-
 import customtkinter as ctk
 
 from theme import COLORS
+from ui.tk_safe import messagebox, tk
 
 
 class MiniLadder(ctk.CTkFrame):
@@ -31,13 +30,13 @@ class MiniLadder(ctk.CTkFrame):
 
     def _extract_back_price(self, data):
         price = data.get("backPrice")
-        if isinstance(price, (int, float)) and price > 0:
+        if isinstance(price, int | float) and price > 0:
             return float(price)
 
         back_prices = data.get("backPrices", [])
         if back_prices and isinstance(back_prices, list):
             first = back_prices[0]
-            if isinstance(first, (list, tuple)) and first:
+            if isinstance(first, list | tuple) and first:
                 try:
                     return float(first[0])
                 except Exception:
@@ -61,13 +60,13 @@ class MiniLadder(ctk.CTkFrame):
 
     def _extract_lay_price(self, data):
         price = data.get("layPrice")
-        if isinstance(price, (int, float)) and price > 0:
+        if isinstance(price, int | float) and price > 0:
             return float(price)
 
         lay_prices = data.get("layPrices", [])
         if lay_prices and isinstance(lay_prices, list):
             first = lay_prices[0]
-            if isinstance(first, (list, tuple)) and first:
+            if isinstance(first, list | tuple) and first:
                 try:
                     return float(first[0])
                 except Exception:

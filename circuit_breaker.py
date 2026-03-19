@@ -1,7 +1,8 @@
 import logging
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, Any
+from typing import Any
 
 logger = logging.getLogger("CB")
 

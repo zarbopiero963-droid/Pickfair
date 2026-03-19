@@ -1,4 +1,3 @@
-import pytest
 
 from core.tick_ring_buffer import TickRingBuffer
 

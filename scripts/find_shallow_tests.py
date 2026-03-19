@@ -24,7 +24,7 @@ def get_assert_nodes(func: ast.FunctionDef):
 
 
 def is_name_or_attr(expr):
-    return isinstance(expr, (ast.Name, ast.Attribute, ast.Subscript, ast.Call))
+    return isinstance(expr, ast.Name | ast.Attribute | ast.Subscript | ast.Call)
 
 
 def classify_assert(assert_node: ast.Assert):
@@ -80,7 +80,7 @@ def function_is_import_smoke_only(func: ast.FunctionDef):
         return False
 
     asserts = [n for n in body if isinstance(n, ast.Assert)]
-    non_asserts = [n for n in body if not isinstance(n, ast.Assert)]
+    [n for n in body if not isinstance(n, ast.Assert)]
 
     if not asserts:
         return False

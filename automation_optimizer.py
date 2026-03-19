@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from trading_config import AUTO_GREEN_DELAY_SEC
 
@@ -37,7 +37,7 @@ class AutomationOptimizer:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._states: Dict[str, AutomationState] = {}
+        self._states: dict[str, AutomationState] = {}
         self._global_enabled = True
 
         # ✅ richiesto dai test
@@ -78,10 +78,10 @@ class AutomationOptimizer:
         auto_green_enabled: bool,
         has_open_orders: bool,
         market_status: str,
-        placed_at: Optional[float],
+        placed_at: float | None,
         current_pnl: float,
         simulation: bool = False,
-    ) -> tuple[bool, Optional[SkipReason]]:
+    ) -> tuple[bool, SkipReason | None]:
         now = time.time()
 
         with self._lock:
@@ -149,7 +149,7 @@ class AutomationOptimizer:
             self._states.clear()
             self.history.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             total = self._stats["total_checks"]
             return {
@@ -159,7 +159,7 @@ class AutomationOptimizer:
             }
 
 
-_automation_optimizer: Optional[AutomationOptimizer] = None
+_automation_optimizer: AutomationOptimizer | None = None
 
 
 def get_automation_optimizer() -> AutomationOptimizer:

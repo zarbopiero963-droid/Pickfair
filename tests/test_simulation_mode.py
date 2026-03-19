@@ -136,7 +136,7 @@ class TestDryRun(unittest.TestCase):
 
         initial_orders = len(broker.orders)
 
-        result = controller.submit_dutching(
+        controller.submit_dutching(
             market_id="1.234",
             market_type="MATCH_ODDS",
             selections=deepcopy(SELECTIONS),

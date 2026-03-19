@@ -10,7 +10,7 @@ Impatto: -80% chiamate PnLEngine
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 @dataclass
@@ -30,7 +30,7 @@ class MarketPnLState:
     """Stato P&L per un mercato."""
 
     market_id: str
-    cached_pnl: Dict[int, CachedPnL] = field(default_factory=dict)
+    cached_pnl: dict[int, CachedPnL] = field(default_factory=dict)
     total_pnl: float = 0.0
     has_open_positions: bool = False
     last_update: float = 0.0
@@ -51,15 +51,15 @@ class PnLCache:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._markets: Dict[str, MarketPnLState] = {}
+        self._markets: dict[str, MarketPnLState] = {}
         self._stats = {"hits": 0, "misses": 0, "short_circuits": 0, "invalidations": 0}
 
-    def _compute_prices_hash(self, prices: Dict[int, Tuple[float, float]]) -> int:
+    def _compute_prices_hash(self, prices: dict[int, tuple[float, float]]) -> int:
         """Hash delle quote (back, lay) per ogni selezione."""
         items = sorted(prices.items())
         return hash(tuple((k, round(v[0], 2), round(v[1], 2)) for k, v in items))
 
-    def _compute_orders_hash(self, orders: List[Dict]) -> int:
+    def _compute_orders_hash(self, orders: list[dict]) -> int:
         """Hash degli ordini aperti."""
         if not orders:
             return 0
@@ -83,8 +83,8 @@ class PnLCache:
             return state.has_open_positions if state else False
 
     def get_cached_pnl(
-        self, market_id: str, prices: Dict[int, Tuple[float, float]], orders: List[Dict]
-    ) -> Optional[Dict[str, Any]]:
+        self, market_id: str, prices: dict[int, tuple[float, float]], orders: list[dict]
+    ) -> dict[str, Any] | None:
         """
         Ottiene P&L dalla cache se valido.
 
@@ -139,9 +139,9 @@ class PnLCache:
     def update_cache(
         self,
         market_id: str,
-        prices: Dict[int, Tuple[float, float]],
-        orders: List[Dict],
-        pnl_results: Dict[str, Any],
+        prices: dict[int, tuple[float, float]],
+        orders: list[dict],
+        pnl_results: dict[str, Any],
     ):
         """
         Aggiorna la cache con nuovi risultati P&L.
@@ -198,7 +198,7 @@ class PnLCache:
         with self._lock:
             self._markets.pop(market_id, None)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Statistiche della cache."""
         with self._lock:
             total = self._stats["hits"] + self._stats["misses"]
@@ -209,7 +209,7 @@ class PnLCache:
             }
 
 
-_pnl_cache: Optional[PnLCache] = None
+_pnl_cache: PnLCache | None = None
 
 
 def get_pnl_cache() -> PnLCache:

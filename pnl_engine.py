@@ -6,7 +6,6 @@ utilizzando le quote live e la formula di cashout dinamico.
 """
 
 import logging
-from typing import Dict, Optional
 
 from dutching import dynamic_cashout_single
 
@@ -23,7 +22,7 @@ class PnLEngine:
         """
         self.commission = commission
 
-    def calculate_back_pnl(self, order: Dict, best_lay_price: float) -> float:
+    def calculate_back_pnl(self, order: dict, best_lay_price: float) -> float:
         """
         Calcola P&L live per una posizione BACK.
 
@@ -55,7 +54,7 @@ class PnLEngine:
             logger.error(f"Errore calcolo P&L BACK: {e}")
             return 0.0
 
-    def calculate_lay_pnl(self, order: Dict, best_back_price: float) -> float:
+    def calculate_lay_pnl(self, order: dict, best_back_price: float) -> float:
         """
         Calcola P&L live per una posizione LAY.
 
@@ -76,7 +75,7 @@ class PnLEngine:
             return 0.0
 
         try:
-            liability = stake * (price - 1)
+            stake * (price - 1)
 
             if best_back_price >= price:
                 profit = stake - (stake * price / best_back_price)
@@ -92,7 +91,7 @@ class PnLEngine:
             return 0.0
 
     def calculate_order_pnl(
-        self, order: Dict, best_back: float, best_lay: float
+        self, order: dict, best_back: float, best_lay: float
     ) -> float:
         """
         Calcola P&L per qualsiasi ordine (BACK o LAY).
@@ -135,7 +134,7 @@ class PnLEngine:
 
     @staticmethod
     def is_auto_green_eligible(
-        order: Dict, current_time: Optional[float] = None
+        order: dict, current_time: float | None = None
     ) -> bool:
         """
         Verifica se un ordine è idoneo per auto-green.
@@ -177,7 +176,7 @@ class PnLEngine:
 
         return True
 
-    def calculate_preview(self, selection: Dict, side: str = "BACK") -> float:
+    def calculate_preview(self, selection: dict, side: str = "BACK") -> float:
         """
         Calcola P&L preview per un singolo runner (prima del piazzamento).
 

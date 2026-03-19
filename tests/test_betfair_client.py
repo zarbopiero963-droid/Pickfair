@@ -1,5 +1,6 @@
 import sys
 import types
+
 import pytest
 
 
@@ -28,7 +29,7 @@ def _install_betfair_stubs():
 
 
 _install_betfair_stubs()
-from betfair_client import BetfairClient, with_retry
+from betfair_client import BetfairClient, with_retry  # noqa: E402
 
 
 def test_betfair_client_clean_string_removes_whitespace():
@@ -67,6 +68,6 @@ def test_with_retry_does_not_retry_non_transient_failures(monkeypatch):
         calls["n"] += 1
         raise Exception("invalid_session")
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="invalid_session"):
         bad()
     assert calls["n"] == 1

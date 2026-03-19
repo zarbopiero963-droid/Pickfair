@@ -1,4 +1,3 @@
-import asyncio
 
 from telegram_sender import TelegramSender
 

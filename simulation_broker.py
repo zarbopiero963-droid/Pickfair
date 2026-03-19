@@ -8,17 +8,17 @@ Permette di testare strategie complete senza rischiare soldi reali.
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # Importa costanti da modulo config centralizzato
-from trading_config import BOOK_BLOCK, BOOK_WARNING, MIN_STAKE, SIM_INITIAL_BALANCE
+from trading_config import BOOK_BLOCK, BOOK_WARNING, MIN_STAKE, SIM_INITIAL_BALANCE  # noqa: E402
 
 
 def apply_slippage(
-    price_ladder: List[Dict], requested_size: float, side: str = "BACK"
+    price_ladder: list[dict], requested_size: float, side: str = "BACK"
 ) -> tuple:
     """
     Applica slippage realistico basato sulla profondità del book.
@@ -83,7 +83,7 @@ class SimulatedOrder:
     matched: float = 0.0
     status: str = "PENDING"
     placed_at: float = field(default_factory=time.time)
-    price_requested: Optional[float] = None  # Prezzo originale richiesto
+    price_requested: float | None = None  # Prezzo originale richiesto
 
     def __post_init__(self):
         if self.price_requested is None:
@@ -110,7 +110,7 @@ class SimulationBroker:
     """
 
     def __init__(
-        self, initial_balance: Optional[float] = None, commission: float = 4.5
+        self, initial_balance: float | None = None, commission: float = 4.5
     ):
         """
         Args:
@@ -124,7 +124,7 @@ class SimulationBroker:
         self.initial_balance = actual_balance
         self.commission = commission
 
-        self.orders: Dict[str, SimulatedOrder] = {}
+        self.orders: dict[str, SimulatedOrder] = {}
         self.bet_counter = 0
         self.lock = threading.RLock()
 
@@ -163,9 +163,9 @@ class SimulationBroker:
         price: float,
         size: float,
         runner_name: str = "",
-        price_ladder: Optional[List[Dict]] = None,
+        price_ladder: list[dict] | None = None,
         partial_match_pct: float = 1.0,
-    ) -> Dict:
+    ) -> dict:
         """
         Piazza ordine simulato con supporto per matching parziale.
 
@@ -259,9 +259,9 @@ class SimulationBroker:
         side: str,
         price: float,
         size: float,
-        price_ladder: List[Dict],
+        price_ladder: list[dict],
         runner_name: str = "",
-    ) -> Dict:
+    ) -> dict:
         """
         DEPRECATED: Usa place_order(price_ladder=...) invece.
 
@@ -277,7 +277,7 @@ class SimulationBroker:
             price_ladder=price_ladder,
         )
 
-    def cancel_order(self, bet_id: str) -> Dict:
+    def cancel_order(self, bet_id: str) -> dict:
         """
         Cancella ordine - gestisce correttamente ordini parzialmente matched.
 
@@ -357,8 +357,8 @@ class SimulationBroker:
             return {"success": False, "sizeCancelled": 0, "sizeMatched": order.matched}
 
     def list_bets(
-        self, market_id: Optional[str] = None, status: Optional[str] = None
-    ) -> List[Dict]:
+        self, market_id: str | None = None, status: str | None = None
+    ) -> list[dict]:
         """
         Lista ordini simulati.
 
@@ -395,7 +395,7 @@ class SimulationBroker:
 
             return result
 
-    def get_order(self, bet_id: str) -> Optional[Dict]:
+    def get_order(self, bet_id: str) -> dict | None:
         """Ritorna singolo ordine."""
         with self.lock:
             order = self.orders.get(bet_id)
@@ -516,9 +516,9 @@ class BookOptimizer:
 
     def __init__(
         self,
-        warning_threshold: Optional[float] = None,
-        max_threshold: Optional[float] = None,
-        min_stake: Optional[float] = None,
+        warning_threshold: float | None = None,
+        max_threshold: float | None = None,
+        min_stake: float | None = None,
     ):
         """
         Args:
@@ -530,7 +530,7 @@ class BookOptimizer:
         self.max_threshold = max_threshold or BOOK_BLOCK
         self.min_stake = min_stake or MIN_STAKE
 
-    def calculate_book(self, selections: List[Dict]) -> float:
+    def calculate_book(self, selections: list[dict]) -> float:
         """
         Calcola book % dalle selezioni.
 
@@ -547,8 +547,8 @@ class BookOptimizer:
         return total * 100
 
     def optimize(
-        self, selections: List[Dict], target_book: float = 100.0
-    ) -> List[Dict]:
+        self, selections: list[dict], target_book: float = 100.0
+    ) -> list[dict]:
         """
         Ottimizza stake per raggiungere target book % con equal-profit.
 
@@ -578,7 +578,7 @@ class BookOptimizer:
 
         # Iterazione: clamp e ribilancia fino a convergenza
         max_iterations = 10
-        for iteration in range(max_iterations):
+        for _iteration in range(max_iterations):
             # Calcola profitto target (equal profit dutching)
             # profit = total_stake / book - total_stake
             book_pct = self.calculate_book(result)
@@ -640,7 +640,7 @@ class BookOptimizer:
             return "WARNING"
         return "OK"
 
-    def validate_stakes(self, selections: List[Dict]) -> List[str]:
+    def validate_stakes(self, selections: list[dict]) -> list[str]:
         """
         Valida che tutti gli stake siano >= min_stake.
 
@@ -665,19 +665,19 @@ class TickReplayEngine:
     senza rischio, con velocità configurabile.
     """
 
-    def __init__(self, on_tick: Optional[Callable] = None):
+    def __init__(self, on_tick: Callable | None = None):
         """
         Args:
             on_tick: Callback chiamato per ogni tick (selection_id, price)
         """
-        self.ticks: List[Dict] = []
+        self.ticks: list[dict] = []
         self.index = 0
         self.on_tick = on_tick
         self.playing = False
         self.speed = 1.0
         self.lock = threading.Lock()
 
-    def load_ticks(self, ticks: List[Dict]):
+    def load_ticks(self, ticks: list[dict]):
         """
         Carica tick storici.
 
@@ -689,7 +689,7 @@ class TickReplayEngine:
             self.index = 0
             logger.info(f"[REPLAY] Caricati {len(ticks)} tick")
 
-    def next_tick(self) -> Optional[Dict]:
+    def next_tick(self) -> dict | None:
         """Ritorna prossimo tick o None se finito."""
         with self.lock:
             if self.index >= len(self.ticks):

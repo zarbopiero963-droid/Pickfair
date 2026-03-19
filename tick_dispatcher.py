@@ -9,9 +9,10 @@ Impatto: -60/70% carico CPU
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 
 class DispatchMode(Enum):
@@ -28,12 +29,12 @@ class TickData:
     market_id: str
     selection_id: int
     timestamp: float
-    back_prices: List[float] = field(default_factory=list)
-    lay_prices: List[float] = field(default_factory=list)
-    back_sizes: List[float] = field(default_factory=list)
-    lay_sizes: List[float] = field(default_factory=list)
-    last_traded_price: Optional[float] = None
-    total_matched: Optional[float] = None
+    back_prices: list[float] = field(default_factory=list)
+    lay_prices: list[float] = field(default_factory=list)
+    back_sizes: list[float] = field(default_factory=list)
+    lay_sizes: list[float] = field(default_factory=list)
+    last_traded_price: float | None = None
+    total_matched: float | None = None
 
 
 class TickDispatcher:
@@ -58,12 +59,12 @@ class TickDispatcher:
         self._last_automation_check: float = 0.0
 
         # Chiave robusta: evita overwrite di runner diversi sullo stesso market_id
-        self._pending_ticks: Dict[tuple[str, int], TickData] = {}
+        self._pending_ticks: dict[tuple[str, int], TickData] = {}
 
-        self._ui_callbacks: List[Callable[[Dict[tuple[str, int], TickData]], None]] = []
-        self._storage_callbacks: List[Callable[[TickData], None]] = []
-        self._automation_callbacks: List[
-            Callable[[Dict[tuple[str, int], TickData]], None]
+        self._ui_callbacks: list[Callable[[dict[tuple[str, int], TickData]], None]] = []
+        self._storage_callbacks: list[Callable[[TickData], None]] = []
+        self._automation_callbacks: list[
+            Callable[[dict[tuple[str, int], TickData]], None]
         ] = []
 
         self._tick_count = 0
@@ -94,7 +95,7 @@ class TickDispatcher:
         return self.MIN_AUTOMATION_INTERVAL
 
     def register_ui_callback(
-        self, callback: Callable[[Dict[tuple[str, int], TickData]], None]
+        self, callback: Callable[[dict[tuple[str, int], TickData]], None]
     ):
         """Registra callback per aggiornamenti UI (throttled)."""
         with self._lock:
@@ -106,7 +107,7 @@ class TickDispatcher:
             self._storage_callbacks.append(callback)
 
     def register_automation_callback(
-        self, callback: Callable[[Dict[tuple[str, int], TickData]], None]
+        self, callback: Callable[[dict[tuple[str, int], TickData]], None]
     ):
         """Registra callback per automazioni (throttled)."""
         with self._lock:
@@ -169,7 +170,7 @@ class TickDispatcher:
                 except Exception:
                     pass
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Statistiche del dispatcher."""
         with self._lock:
             return {
@@ -193,7 +194,7 @@ class TickDispatcher:
             self._pending_ticks.clear()
 
 
-_dispatcher: Optional[TickDispatcher] = None
+_dispatcher: TickDispatcher | None = None
 
 
 def get_tick_dispatcher() -> TickDispatcher:

@@ -6,7 +6,7 @@ Gestisce l'automazione, gli stop loss e previene double-triggers.
 import logging
 import threading
 import time
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger("AUTO_ENGINE")
 
@@ -72,7 +72,7 @@ class AutomationEngine:
 
         return []
 
-    def process_tick(self, market_id: str, market_data: Dict[str, Any]):
+    def process_tick(self, market_id: str, market_data: dict[str, Any]):
         """Analizza il tick e decide se agire, protetto da cooldown."""
         market_id = str(market_id or "").strip()
         if not market_id:
@@ -92,7 +92,7 @@ class AutomationEngine:
         for order in market_orders:
             self._evaluate_order(order, market_data or {})
 
-    def _evaluate_order(self, order: Dict, market_data: Dict):
+    def _evaluate_order(self, order: dict, market_data: dict):
         """Valuta le condizioni di uscita per un singolo ordine."""
         try:
             market_status = str(market_data.get("status", "OPEN")).upper()

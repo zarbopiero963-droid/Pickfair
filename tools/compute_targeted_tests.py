@@ -2,7 +2,6 @@ import ast
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Set
 
 ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = ROOT / "tests"
@@ -21,7 +20,7 @@ EXCLUDED_DIRS = {
 }
 
 
-def iter_python_files(root: Path) -> List[Path]:
+def iter_python_files(root: Path) -> list[Path]:
     files = []
     for p in root.rglob("*.py"):
         if any(part in EXCLUDED_DIRS for part in p.parts):
@@ -44,7 +43,7 @@ def module_name_from_path(path: Path, root: Path) -> str:
     return ".".join(parts)
 
 
-def collect_imports(tree: ast.AST) -> Set[str]:
+def collect_imports(tree: ast.AST) -> set[str]:
     imports = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -63,9 +62,9 @@ def load_dependency_graph():
     return json.loads(path.read_text())
 
 
-def impacted_modules(changed_files: List[str]) -> Set[str]:
+def impacted_modules(changed_files: list[str]) -> set[str]:
     graph = load_dependency_graph()
-    modules = graph["modules"]
+    graph["modules"]
     reverse = graph["reverse_dependencies"]
 
     changed = []
@@ -87,7 +86,7 @@ def impacted_modules(changed_files: List[str]) -> Set[str]:
     return impacted
 
 
-def find_targeted_tests(changed_files: List[str]) -> Dict:
+def find_targeted_tests(changed_files: list[str]) -> dict:
 
     impacted = impacted_modules(changed_files)
     selected = set()

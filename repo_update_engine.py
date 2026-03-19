@@ -172,7 +172,7 @@ def create_file(path, content):
     ensure_dir(os.path.dirname(path))
 
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             existing = f.read()
 
         if existing == content:
@@ -189,7 +189,7 @@ def append_file(path, content):
     ensure_dir(os.path.dirname(path))
 
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             existing = f.read()
 
         normalized = content.strip()
@@ -240,7 +240,7 @@ def replace_text(path, old, new):
         log(f"[SKIP] replace target missing {path}")
         return
 
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+    with open(path, encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
     if old not in content:
@@ -260,7 +260,7 @@ def insert_line(path, line_number, text):
         log(f"[SKIP] insert target missing {path}")
         return
 
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+    with open(path, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
     line_number = int(line_number)
@@ -284,7 +284,7 @@ def insert_line(path, line_number, text):
 
 
 def normalize_file_whitespace(path):
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+    with open(path, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
     new_lines = []
@@ -304,7 +304,7 @@ def normalize_file_whitespace(path):
 
 
 def fix_whitespace():
-    for root, dirs, files in os.walk("."):
+    for root, _dirs, files in os.walk("."):
         if ".git" in root:
             continue
 
@@ -429,7 +429,7 @@ def process():
     if AUTO_BACKUP_ALWAYS:
         backup_repository()
 
-    with open(INSTRUCTIONS_FILE, "r", encoding="utf-8", errors="ignore") as f:
+    with open(INSTRUCTIONS_FILE, encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
     i = 0

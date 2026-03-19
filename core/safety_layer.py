@@ -29,8 +29,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class MarketSanityError(SafetyLayerError):
 class SchemaField:
     name: str
     required: bool = True
-    allowed_types: Tuple[type, ...] = field(default_factory=tuple)
+    allowed_types: tuple[type, ...] = field(default_factory=tuple)
     allow_none: bool = False
 
 
@@ -81,10 +82,10 @@ class WatchdogState:
 class PendingSagaRecord:
     customer_ref: str
     market_id: str
-    selection_id: Optional[str] = None
+    selection_id: str | None = None
     status: str = "PENDING"
     age_sec: float = 0.0
-    raw_payload: Optional[str] = None
+    raw_payload: str | None = None
 
 
 # =========================================================
@@ -173,11 +174,11 @@ class SafetyLayer:
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._watchdogs: Dict[str, WatchdogState] = {}
-        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdogs: dict[str, WatchdogState] = {}
+        self._watchdog_thread: threading.Thread | None = None
         self._watchdog_stop = threading.Event()
         self._watchdog_interval_sec = 1.0
-        self._watchdog_callback: Optional[Callable[[str, str], None]] = None
+        self._watchdog_callback: Callable[[str, str], None] | None = None
 
     # =========================================================
     # SAFE CASTS
@@ -211,11 +212,11 @@ class SafetyLayer:
     # GENERIC SCHEMA VALIDATION
     # =========================================================
 
-    def _validate_schema(self, payload: Dict[str, Any], schema: List[SchemaField], name: str):
+    def _validate_schema(self, payload: dict[str, Any], schema: list[SchemaField], name: str):
         if not isinstance(payload, dict):
             raise PayloadValidationError(f"{name}: payload non dict")
 
-        errors: List[str] = []
+        errors: list[str] = []
 
         for field_def in schema:
             exists = field_def.name in payload
@@ -245,17 +246,17 @@ class SafetyLayer:
     # EVENT / REQUEST VALIDATION
     # =========================================================
 
-    def validate_quick_bet_request(self, payload: Dict[str, Any]) -> bool:
+    def validate_quick_bet_request(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.QUICK_BET_REQUEST_SCHEMA, "QUICK_BET_REQUEST")
         self._validate_common_order_rules(payload, allow_micro=True)
         return True
 
-    def validate_quick_bet_success(self, payload: Dict[str, Any]) -> bool:
+    def validate_quick_bet_success(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.QUICK_BET_SUCCESS_SCHEMA, "QUICK_BET_SUCCESS")
         self._validate_success_payload_common(payload)
         return True
 
-    def validate_dutching_request(self, payload: Dict[str, Any]) -> bool:
+    def validate_dutching_request(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.DUTCHING_REQUEST_SCHEMA, "DUTCHING_REQUEST")
         total_stake = self._safe_float(payload.get("total_stake"), 0.0)
         if total_stake <= 0:
@@ -284,7 +285,7 @@ class SafetyLayer:
 
         return True
 
-    def validate_dutching_success(self, payload: Dict[str, Any]) -> bool:
+    def validate_dutching_success(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.DUTCHING_SUCCESS_SCHEMA, "DUTCHING_SUCCESS")
         matched = self._safe_float(payload.get("matched"), 0.0)
         total_stake = self._safe_float(payload.get("total_stake"), 0.0)
@@ -292,7 +293,7 @@ class SafetyLayer:
             raise RiskInvariantError("DUTCHING_SUCCESS: matched/total_stake invalidi")
         return True
 
-    def validate_cashout_request(self, payload: Dict[str, Any]) -> bool:
+    def validate_cashout_request(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.CASHOUT_REQUEST_SCHEMA, "CASHOUT_REQUEST")
         price = self._safe_float(payload.get("price"), 0.0)
         stake = self._safe_float(payload.get("stake"), 0.0)
@@ -302,7 +303,7 @@ class SafetyLayer:
             raise RiskInvariantError("CASHOUT_REQUEST: stake <= 0")
         return True
 
-    def validate_cashout_success(self, payload: Dict[str, Any]) -> bool:
+    def validate_cashout_success(self, payload: dict[str, Any]) -> bool:
         self._validate_schema(payload, self.CASHOUT_SUCCESS_SCHEMA, "CASHOUT_SUCCESS")
         matched = self._safe_float(payload.get("matched"), 0.0)
         if matched < 0:
@@ -313,7 +314,7 @@ class SafetyLayer:
     # COMMON ORDER RULES
     # =========================================================
 
-    def _validate_common_order_rules(self, payload: Dict[str, Any], allow_micro: bool = True):
+    def _validate_common_order_rules(self, payload: dict[str, Any], allow_micro: bool = True):
         bet_type = self._safe_str(payload.get("bet_type")).upper().strip()
         price = self._safe_float(payload.get("price"), 0.0)
         stake = self._safe_float(payload.get("stake"), 0.0)
@@ -338,7 +339,7 @@ class SafetyLayer:
         if not isinstance(selection_id, int):
             raise PayloadValidationError("selection_id non int")
 
-    def _validate_success_payload_common(self, payload: Dict[str, Any]):
+    def _validate_success_payload_common(self, payload: dict[str, Any]):
         self._validate_common_order_rules(payload, allow_micro=True)
 
         matched = self._safe_float(payload.get("matched"), -1.0)
@@ -353,7 +354,7 @@ class SafetyLayer:
     # MARKET SANITY
     # =========================================================
 
-    def validate_market_book(self, market_book: Dict[str, Any]) -> bool:
+    def validate_market_book(self, market_book: dict[str, Any]) -> bool:
         if not isinstance(market_book, dict):
             raise MarketSanityError("market_book non dict")
 
@@ -413,8 +414,8 @@ class SafetyLayer:
         self,
         db,
         stale_after_sec: float = 60.0,
-    ) -> List[PendingSagaRecord]:
-        rows: List[PendingSagaRecord] = []
+    ) -> list[PendingSagaRecord]:
+        rows: list[PendingSagaRecord] = []
         if db is None or not hasattr(db, "get_pending_sagas"):
             return rows
 
@@ -456,7 +457,7 @@ class SafetyLayer:
         self,
         db,
         stale_after_sec: float = 60.0,
-    ) -> List[PendingSagaRecord]:
+    ) -> list[PendingSagaRecord]:
         rows = self.inspect_pending_sagas(db, stale_after_sec=stale_after_sec)
         return [r for r in rows if r.status == "PENDING" and r.age_sec >= stale_after_sec]
 
@@ -497,10 +498,10 @@ class SafetyLayer:
                 state.triggered = False
                 state.last_error = ""
 
-    def get_watchdog_status(self) -> Dict[str, Dict[str, Any]]:
+    def get_watchdog_status(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             now = time.time()
-            status: Dict[str, Dict[str, Any]] = {}
+            status: dict[str, dict[str, Any]] = {}
             for name, s in self._watchdogs.items():
                 age = max(0.0, now - s.last_ping)
                 status[name] = {
@@ -512,7 +513,7 @@ class SafetyLayer:
                 }
             return status
 
-    def set_watchdog_callback(self, callback: Optional[Callable[[str, str], None]]) -> None:
+    def set_watchdog_callback(self, callback: Callable[[str, str], None] | None) -> None:
         self._watchdog_callback = callback
 
     def start_watchdog(self, interval_sec: float = 1.0) -> None:
@@ -546,7 +547,7 @@ class SafetyLayer:
 
     def _run_watchdog_check(self) -> None:
         callback = self._watchdog_callback
-        to_notify: List[Tuple[str, str]] = []
+        to_notify: list[tuple[str, str]] = []
 
         with self._lock:
             now = time.time()
@@ -572,42 +573,42 @@ class SafetyLayer:
     # HELPERS READY-TO-USE
     # =========================================================
 
-    def safe_validate_quick_bet_request(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_quick_bet_request(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_quick_bet_request(payload)
             return True, None
         except Exception as e:
             return False, str(e)
 
-    def safe_validate_quick_bet_success(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_quick_bet_success(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_quick_bet_success(payload)
             return True, None
         except Exception as e:
             return False, str(e)
 
-    def safe_validate_dutching_request(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_dutching_request(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_dutching_request(payload)
             return True, None
         except Exception as e:
             return False, str(e)
 
-    def safe_validate_dutching_success(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_dutching_success(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_dutching_success(payload)
             return True, None
         except Exception as e:
             return False, str(e)
 
-    def safe_validate_cashout_request(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_cashout_request(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_cashout_request(payload)
             return True, None
         except Exception as e:
             return False, str(e)
 
-    def safe_validate_cashout_success(self, payload: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def safe_validate_cashout_success(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
             self.validate_cashout_success(payload)
             return True, None
@@ -619,7 +620,7 @@ class SafetyLayer:
 # SINGLETON
 # =========================================================
 
-_global_safety_layer: Optional[SafetyLayer] = None
+_global_safety_layer: SafetyLayer | None = None
 
 
 def get_safety_layer() -> SafetyLayer:

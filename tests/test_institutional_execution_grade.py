@@ -2,7 +2,6 @@ import copy
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -44,8 +43,8 @@ class CancelEvent:
 class AmendEvent:
     event_id: str
     order_id: str
-    new_price: Optional[float] = None
-    new_size: Optional[float] = None
+    new_price: float | None = None
+    new_size: float | None = None
 
 
 @dataclass
@@ -55,19 +54,19 @@ class EngineConfig:
     cooldown_seconds: float = 0.0
     retry_limit: int = 2
     ack_timeout_seconds: float = 0.5
-    allowed_markets: Tuple[str, ...] = ("MATCH_ODDS",)
+    allowed_markets: tuple[str, ...] = ("MATCH_ODDS",)
     fail_closed: bool = True
 
 
 @dataclass
 class LedgerState:
-    orders: Dict[str, Order] = field(default_factory=dict)
+    orders: dict[str, Order] = field(default_factory=dict)
     processed_event_ids: set = field(default_factory=set)
     processed_persistence_ids: set = field(default_factory=set)
     pnl_realized: float = 0.0
     exposure: float = 0.0
-    position_by_selection: Dict[int, float] = field(default_factory=dict)
-    audit_log: List[dict] = field(default_factory=list)
+    position_by_selection: dict[int, float] = field(default_factory=dict)
+    audit_log: list[dict] = field(default_factory=list)
     safe_mode: bool = False
     last_submit_ts: float = 0.0
 
@@ -83,13 +82,13 @@ class FakePersistence:
         with self.lock:
             if self.fail_next_write:
                 self.fail_next_write = False
-                raise IOError("simulated persistence failure")
+                raise OSError("simulated persistence failure")
 
             if self.partial_write_mode:
                 partial = dict(row)
                 partial["partial"] = True
                 self.rows.append((op_id, partial))
-                raise IOError("simulated partial write")
+                raise OSError("simulated partial write")
 
             if any(existing_op_id == op_id for existing_op_id, _ in self.rows):
                 return False
@@ -103,7 +102,7 @@ class FakePersistence:
 
 class FakeBroker:
     def __init__(self):
-        self.orders: Dict[str, Order] = {}
+        self.orders: dict[str, Order] = {}
         self.submit_calls = 0
         self.cancel_calls = 0
         self.amend_calls = 0
@@ -111,7 +110,7 @@ class FakeBroker:
         self.disconnect_mid_submit = False
         self.network_flap = False
         self.latency_seconds = 0.0
-        self.outbox: List[object] = []
+        self.outbox: list[object] = []
         self.lock = threading.Lock()
 
     def submit(self, order: Order):
@@ -166,7 +165,7 @@ class FakeBroker:
             )
             return True
 
-    def emit_fill(self, order_id: str, size: float, price: Optional[float] = None, event_id: Optional[str] = None):
+    def emit_fill(self, order_id: str, size: float, price: float | None = None, event_id: str | None = None):
         with self.lock:
             order = self.orders[order_id]
             px = price if price is not None else order.price
@@ -182,7 +181,7 @@ class FakeBroker:
 
 
 class ReferenceEngine:
-    def __init__(self, broker: FakeBroker, persistence: FakePersistence, config: Optional[EngineConfig] = None):
+    def __init__(self, broker: FakeBroker, persistence: FakePersistence, config: EngineConfig | None = None):
         self.broker = broker
         self.persistence = persistence
         self.config = config or EngineConfig()
@@ -223,7 +222,7 @@ class ReferenceEngine:
     def recover_from_persistence(self):
         with self._lock:
             new_state = LedgerState(safe_mode=self.state.safe_mode)
-            for op_id, row in self.persistence.snapshot():
+            for _op_id, row in self.persistence.snapshot():
                 if row.get("partial"):
                     continue
                 kind = row["kind"]
@@ -282,7 +281,7 @@ class ReferenceEngine:
         price: float,
         suggested_size: float,
         risk_ok: bool = True,
-        clock: Optional[float] = None,
+        clock: float | None = None,
     ) -> str:
         with self._lock:
             now = clock if clock is not None else self._now()

@@ -1,14 +1,13 @@
 import random
-import time
 import statistics
 import threading
+import time
 
 import pytest
 
+from core.safety_layer import SafetyLayer
 from core.trading_engine import TradingEngine
 from pnl_engine import PnLEngine
-from core.safety_layer import SafetyLayer
-
 
 # ---------------------------------------------------------
 # Deterministic Market Replay
@@ -241,7 +240,7 @@ def test_risk_limit_behavior():
 
     safety = SafetyLayer()
 
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, TypeError)):
 
         safety.validate_quick_bet_request(
             {

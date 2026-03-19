@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Any, List
+from typing import Any
 
 
 class TickRingBuffer:
@@ -19,7 +19,7 @@ class TickRingBuffer:
             return self._buf.popleft()
         return None
 
-    def drain(self, limit: int = 1000) -> List[Any]:
+    def drain(self, limit: int = 1000) -> list[Any]:
         items = []
         for _ in range(limit):
             if not self._buf:

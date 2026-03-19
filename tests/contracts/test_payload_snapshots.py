@@ -2,7 +2,6 @@ from copy import deepcopy
 
 from tests.fixtures.system_payloads import SYSTEM_PAYLOAD
 
-
 REQUIRED_TOP_LEVEL_KEYS = [
     "source",
     "market_id",
@@ -51,7 +50,7 @@ def test_system_payload_core_types():
     assert SYSTEM_PAYLOAD["market_type"].strip()
 
     assert isinstance(SYSTEM_PAYLOAD["results"], list)
-    assert isinstance(SYSTEM_PAYLOAD["total_stake"], (int, float))
+    assert isinstance(SYSTEM_PAYLOAD["total_stake"], int | float)
     assert isinstance(SYSTEM_PAYLOAD["preflight"], dict)
     assert isinstance(SYSTEM_PAYLOAD["analytics"], dict)
 
@@ -68,10 +67,10 @@ def test_system_payload_result_contract():
     assert isinstance(row["runnerName"], str)
     assert row["runnerName"].strip()
 
-    assert isinstance(row["price"], (int, float))
+    assert isinstance(row["price"], int | float)
     assert row["price"] > 1.0
 
-    assert isinstance(row["stake"], (int, float))
+    assert isinstance(row["stake"], int | float)
     assert row["stake"] > 0
 
     assert row["side"] in {"BACK", "LAY"}
@@ -96,10 +95,10 @@ def test_system_payload_analytics_contract():
     for key in REQUIRED_ANALYTICS_KEYS:
         assert key in analytics, f"Missing analytics key: {key}"
 
-    assert isinstance(analytics["potential_profit"], (int, float))
+    assert isinstance(analytics["potential_profit"], int | float)
     assert analytics["potential_profit"] >= 0
 
-    assert isinstance(analytics["implied_probability"], (int, float))
+    assert isinstance(analytics["implied_probability"], int | float)
     assert 0 <= analytics["implied_probability"] <= 1
 
 

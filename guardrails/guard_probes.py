@@ -1,10 +1,10 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from controllers.dutching_controller import DutchingController
 from telegram_listener import TelegramListener, parse_signal_message
 
 
-def _sample_dutching_selections() -> List[Dict[str, Any]]:
+def _sample_dutching_selections() -> list[dict[str, Any]]:
     return [
         {
             "selectionId": 101,
@@ -23,7 +23,7 @@ def _sample_dutching_selections() -> List[Dict[str, Any]]:
     ]
 
 
-def dutching_controller_semantic_probe_case() -> Dict[str, Any]:
+def dutching_controller_semantic_probe_case() -> dict[str, Any]:
     controller = DutchingController(simulation=True)
     selections = _sample_dutching_selections()
     total_stake = 10.0
@@ -57,7 +57,7 @@ def dutching_controller_semantic_probe_case() -> Dict[str, Any]:
     }
 
 
-def dutching_controller_runtime_smoke() -> Dict[str, Any]:
+def dutching_controller_runtime_smoke() -> dict[str, Any]:
     controller = DutchingController(simulation=True)
     status = controller.get_guardrail_status()
     return {
@@ -67,7 +67,7 @@ def dutching_controller_runtime_smoke() -> Dict[str, Any]:
     }
 
 
-def telegram_listener_semantic_probe_case() -> Dict[str, Any]:
+def telegram_listener_semantic_probe_case() -> dict[str, Any]:
     message = "BACK @2.50 selection_id=101 market_id=1.123456"
     parsed = parse_signal_message(message)
 
@@ -89,7 +89,7 @@ def telegram_listener_semantic_probe_case() -> Dict[str, Any]:
     }
 
 
-def telegram_listener_runtime_smoke() -> Dict[str, Any]:
+def telegram_listener_runtime_smoke() -> dict[str, Any]:
     listener = TelegramListener(api_id=1, api_hash="guardrail")
     listener.set_monitored_chats([123456789])
     listener.set_callbacks(on_signal=lambda *_: None, on_message=lambda *_: None)

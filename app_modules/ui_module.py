@@ -1,14 +1,13 @@
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
-from ui.tk_safe import tk, filedialog, messagebox, scrolledtext, ttk
+from typing import Any
 
 import customtkinter as ctk
 
 from auto_updater import DEFAULT_UPDATE_URL, check_for_updates, show_update_dialog
 from betfair_client import MARKET_TYPES
 from theme import COLORS, FONTS, configure_ttk_dark_theme
+from ui.tk_safe import filedialog, messagebox, scrolledtext, tk, ttk
 
 APP_NAME = "Pickfair"
 APP_VERSION = "3.19.1"
@@ -19,7 +18,7 @@ class UIModule:
     # CORE HELPERS
     # =========================================================
 
-    def _safe_get_db_settings(self) -> Dict[str, Any]:
+    def _safe_get_db_settings(self) -> dict[str, Any]:
         try:
             if hasattr(self, "db") and self.db and hasattr(self.db, "get_settings"):
                 data = self.db.get_settings()
@@ -414,8 +413,8 @@ class UIModule:
 
         self.events_tree.bind("<<TreeviewSelect>>", self._on_event_selected)
 
-        self.all_events: List[Dict[str, Any]] = []
-        self.filtered_events: List[Dict[str, Any]] = []
+        self.all_events: list[dict[str, Any]] = []
+        self.filtered_events: list[dict[str, Any]] = []
         self.auto_refresh_id = None
 
     def _filter_events(self, *args):
@@ -440,7 +439,7 @@ class UIModule:
         self._tree_clear(self.events_tree)
 
         events = self.filtered_events if hasattr(self, "filtered_events") else self.all_events
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
 
         for event in events or []:
             country = str(event.get("country") or "N/A")
@@ -1106,7 +1105,7 @@ class UIModule:
         self.market_live_tracking_id = None
         self.market_cashout_fetch_in_progress = False
         self.market_cashout_fetch_cancelled = False
-        self.market_cashout_positions: Dict[str, Dict[str, Any]] = {}
+        self.market_cashout_positions: dict[str, dict[str, Any]] = {}
 
         if not hasattr(self, "selected_runners"):
             self.selected_runners = {}
@@ -1224,7 +1223,7 @@ class UIModule:
         except Exception as e:
             self._safe_message("error", "Dutching", f"Errore apertura finestra:\n{e}")
 
-    def _submit_dutching_orders_from_modal(self, orders: List[Dict[str, Any]]):
+    def _submit_dutching_orders_from_modal(self, orders: list[dict[str, Any]]):
         if not orders:
             return
 
@@ -1401,7 +1400,7 @@ class UIModule:
         for _, position in list(self.market_cashout_positions.items()):
             self._submit_cashout(position)
 
-    def _submit_cashout(self, position: Dict[str, Any]):
+    def _submit_cashout(self, position: dict[str, Any]):
         market = getattr(self, "current_market", {}) or {}
 
         payload = {
@@ -1575,7 +1574,7 @@ class UIModule:
         if settings and settings.get("session_token"):
             self._try_restore_session(settings)
 
-    def _try_restore_session(self, settings: Dict[str, Any]):
+    def _try_restore_session(self, settings: dict[str, Any]):
         if not all(
             [
                 settings.get("username"),
@@ -1628,7 +1627,7 @@ class UIModule:
             if not filename:
                 return
             try:
-                with open(filename, "r", encoding="utf-8") as f:
+                with open(filename, encoding="utf-8") as f:
                     widget.delete("1.0", tk.END)
                     widget.insert("1.0", f.read())
             except Exception as e:

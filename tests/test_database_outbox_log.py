@@ -1,4 +1,3 @@
-import pytest
 
 from database import Database
 

@@ -1,8 +1,8 @@
 import time
 
-from core.tick_ring_buffer import TickRingBuffer
 from core.fast_analytics import FastWoMState
 from core.perf_counters import PerfCounters
+from core.tick_ring_buffer import TickRingBuffer
 
 
 def test_ring_buffer_push_pop_10000_under_threshold():

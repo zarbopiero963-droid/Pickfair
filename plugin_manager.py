@@ -11,9 +11,10 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any
 
 # --- HEDGE-FUND STABLE FIX ---
 from plugin_runner import PluginRunner
@@ -112,8 +113,8 @@ class PluginManager:
             plugins_dir: Directory for plugins (default: %APPDATA%/Pickfair/plugins)
         """
         self.app = app
-        self.plugins: Dict[str, PluginInfo] = {}
-        self.hooks: Dict[str, List[Callable]] = {}
+        self.plugins: dict[str, PluginInfo] = {}
+        self.hooks: dict[str, list[Callable]] = {}
         self._lock = threading.Lock()
 
         # --- HEDGE-FUND STABLE FIX ---
@@ -256,7 +257,7 @@ class PluginManager:
             (is_valid: bool, message: str)
         """
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 code = f.read()
             return self.validate_plugin_code(code, os.path.basename(filepath))
         except Exception as e:
@@ -286,7 +287,7 @@ class PluginManager:
 
         try:
             # Read requirements
-            with open(req_file, "r") as f:
+            with open(req_file) as f:
                 requirements = [
                     line.strip()
                     for line in f
@@ -420,7 +421,7 @@ class PluginManager:
                     self._run_plugin_safe(
                         lambda: info.module.unregister(self.app), plugin_name
                     )
-                except:
+                except Exception:
                     pass
 
             # Remove from hooks
@@ -489,7 +490,7 @@ class PluginManager:
         callback._plugin_name = plugin_name
         self.hooks[hook_name].append(callback)
 
-    def call_hook(self, hook_name: str, *args, **kwargs) -> List[Any]:
+    def call_hook(self, hook_name: str, *args, **kwargs) -> list[Any]:
         """Call all registered callbacks for a hook.
 
         Returns:
@@ -503,7 +504,7 @@ class PluginManager:
             plugin_name = getattr(callback, "_plugin_name", "unknown")
             try:
                 result = self._run_plugin_safe(
-                    lambda: callback(*args, **kwargs), plugin_name
+                    lambda callback=callback: callback(*args, **kwargs), plugin_name
                 )
                 if result is not None:
                     results.append(result)
@@ -528,7 +529,7 @@ class PluginManager:
             else:
                 print(f"[Plugin] ERRORE: {msg}")
 
-    def get_plugin_list(self) -> List[PluginInfo]:
+    def get_plugin_list(self) -> list[PluginInfo]:
         """Get list of all plugins."""
         with self._lock:
             return list(self.plugins.values())
@@ -563,7 +564,7 @@ class PluginManager:
             # Remove failed plugin
             try:
                 os.remove(dest_path)
-            except:
+            except Exception:
                 pass
             return False, msg
 
@@ -667,7 +668,7 @@ class PluginAPI:
             raise PermissionError(f"Accesso file negato: {filepath}")
 
         if os.path.exists(filepath):
-            with open(filepath, "r") as f:
+            with open(filepath) as f:
                 return json.load(f)
         return default or {}
 

@@ -46,6 +46,6 @@ def test_invalid_side_raises_error():
             odds=2.0,
             side="INVALID",
         )
-        assert False
+        raise AssertionError()
     except Exception:
         assert True

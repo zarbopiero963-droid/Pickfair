@@ -132,6 +132,59 @@ def _install_ui_and_external_stubs():
     ttk.Scrollbar = DummyScrollbar
     sys.modules["tkinter.ttk"] = ttk
 
+    if "tkinter.messagebox" not in sys.modules:
+        mb = types.ModuleType("tkinter.messagebox")
+        mb.showinfo = lambda *a, **kw: None
+        mb.showwarning = lambda *a, **kw: None
+        mb.showerror = lambda *a, **kw: None
+        mb.askquestion = lambda *a, **kw: "no"
+        mb.askokcancel = lambda *a, **kw: False
+        mb.askyesno = lambda *a, **kw: False
+        mb.askretrycancel = lambda *a, **kw: False
+        sys.modules["tkinter.messagebox"] = mb
+
+    if "tkinter.filedialog" not in sys.modules:
+        fd = types.ModuleType("tkinter.filedialog")
+        fd.askopenfilename = lambda *a, **kw: ""
+        fd.asksaveasfilename = lambda *a, **kw: ""
+        fd.askdirectory = lambda *a, **kw: ""
+        sys.modules["tkinter.filedialog"] = fd
+
+    if "tkinter.simpledialog" not in sys.modules:
+        sd = types.ModuleType("tkinter.simpledialog")
+        sd.askstring = lambda *a, **kw: None
+        sd.askinteger = lambda *a, **kw: None
+        sd.askfloat = lambda *a, **kw: None
+        sys.modules["tkinter.simpledialog"] = sd
+
+    if "tkinter.scrolledtext" not in sys.modules:
+        st = types.ModuleType("tkinter.scrolledtext")
+
+        class DummyScrolledText:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def pack(self, *args, **kwargs):
+                return None
+
+            def grid(self, *args, **kwargs):
+                return None
+
+            def insert(self, *args, **kwargs):
+                return None
+
+            def delete(self, *args, **kwargs):
+                return None
+
+            def get(self, *args, **kwargs):
+                return ""
+
+            def configure(self, **kwargs):
+                pass
+
+        st.ScrolledText = DummyScrolledText
+        sys.modules["tkinter.scrolledtext"] = st
+
     if "telethon" not in sys.modules:
         telethon_mod = types.ModuleType("telethon")
         telethon_mod.TelegramClient = object
@@ -256,7 +309,7 @@ def test_e2e_app_startup_telegram_tab_can_boot_with_persisted_settings(tmp_path)
             return None
 
     app = DummyApp(db)
-    ui = TelegramTabUI(parent_frame=object(), app=app)
+    TelegramTabUI(parent_frame=object(), app=app)
 
     assert app.tg_api_id_var.get() == "123"
     assert app.tg_api_hash_var.get() == "hash123"

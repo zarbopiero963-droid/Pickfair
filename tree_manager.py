@@ -60,7 +60,7 @@ class TreeManager:
             for item_data in data:
                 parent_id = str(parent_getter(item_data))
                 item_id = str(id_getter(item_data))
-                item_text = text_getter(item_data)
+                text_getter(item_data)
                 item_values = values_getter(item_data)
 
                 # Gestione del nodo padre (es. Nazione)

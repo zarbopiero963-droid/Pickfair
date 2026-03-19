@@ -1,11 +1,7 @@
-from ui.tk_safe import tk, messagebox
-
-from datetime import datetime
 
 from betfair_client import BetfairClient
-from dutching import calculate_dutching_stakes, format_currency, validate_selections
-from dutching_ui import open_dutching_window
 from theme import COLORS
+from ui.tk_safe import messagebox, tk
 
 
 class BettingModule:
@@ -13,7 +9,7 @@ class BettingModule:
         try:
             if hasattr(self, "order_manager") and self.order_manager:
                 self.order_manager.cleanup_old(max_age_seconds=3600)
-        except:
+        except Exception:
             pass
         self.root.after(3600000, self._schedule_order_cleanup)
 

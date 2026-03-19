@@ -209,7 +209,7 @@ def build_call_edges(parsed_files):
 
     for item in parsed_files:
         file_path = item["file"]
-        current_functions = {
+        {
             fn["qualname"]: fn for fn in item["functions"]
         }
 

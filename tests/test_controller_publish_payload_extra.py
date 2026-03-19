@@ -141,8 +141,8 @@ def test_controller_publish_payload_contains_preflight_and_analytics(monkeypatch
     assert payload["preflight"]["is_valid"] is True
     assert isinstance(payload["preflight"]["warnings"], list)
     assert isinstance(payload["preflight"]["errors"], list)
-    assert isinstance(payload["analytics"]["potential_profit"], (int, float))
-    assert isinstance(payload["analytics"]["implied_probability"], (int, float))
+    assert isinstance(payload["analytics"]["potential_profit"], int | float)
+    assert isinstance(payload["analytics"]["implied_probability"], int | float)
 
 
 def test_controller_publish_payload_casts_selection_rows_consistently(monkeypatch):

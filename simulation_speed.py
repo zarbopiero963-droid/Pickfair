@@ -11,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class SimulationSpeed(Enum):
@@ -33,7 +33,7 @@ class SpeedProfile:
     description: str
 
 
-SPEED_PROFILES: Dict[SimulationSpeed, SpeedProfile] = {
+SPEED_PROFILES: dict[SimulationSpeed, SpeedProfile] = {
     SimulationSpeed.REALTIME: SpeedProfile(
         name="Realtime",
         ui_interval=0.25,
@@ -211,11 +211,11 @@ class SimulationSpeedController:
         if compressed > 0:
             time.sleep(compressed)
 
-    def get_available_speeds(self) -> Dict[str, SpeedProfile]:
+    def get_available_speeds(self) -> dict[str, SpeedProfile]:
         """Lista velocità disponibili."""
         return {s.value: SPEED_PROFILES[s] for s in SimulationSpeed}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Statistiche della simulazione."""
         with self._lock:
             return {
@@ -235,7 +235,7 @@ class SimulationSpeedController:
             }
 
 
-_speed_controller: Optional[SimulationSpeedController] = None
+_speed_controller: SimulationSpeedController | None = None
 
 
 def get_speed_controller() -> SimulationSpeedController:

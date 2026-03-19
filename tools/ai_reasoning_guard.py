@@ -2,8 +2,8 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict
-from urllib import request, error
+from typing import Any
+from urllib import error, request
 
 ROOT = Path(".").resolve()
 ARTIFACTS_DIR = ROOT / "artifacts"
@@ -24,7 +24,7 @@ def _env(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
-def _requests_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int):
+def _requests_post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int):
     try:
         import requests
     except Exception:
@@ -45,7 +45,7 @@ def _requests_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], t
         }
 
 
-def _urllib_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int):
+def _urllib_post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int):
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
         url=url,
@@ -81,14 +81,14 @@ def _urllib_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], tim
         }
 
 
-def _http_post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: int):
+def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int):
     via_requests = _requests_post(url, payload, headers, timeout)
     if via_requests is not None:
         return via_requests
     return _urllib_post(url, payload, headers, timeout)
 
 
-def _write_artifact(name: str, data: Dict[str, Any]) -> str:
+def _write_artifact(name: str, data: dict[str, Any]) -> str:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     out = ARTIFACTS_DIR / name
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -18,7 +18,7 @@ from betfairlightweight import filters
 from betfairlightweight.streaming import StreamListener
 
 # --- HEDGE-FUND STABLE FIX ---
-from circuit_breaker import CircuitBreaker, TransientError, PermanentError
+from circuit_breaker import CircuitBreaker, TransientError
 
 # -----------------------------
 
@@ -227,26 +227,26 @@ class BetfairClient:
             }
         except betfairlightweight.exceptions.LoginError as e:
             self._cleanup_temp_files()
-            raise Exception(f"Credenziali errate o account bloccato: {str(e)}")
+            raise Exception(f"Credenziali errate o account bloccato: {str(e)}") from e
         except betfairlightweight.exceptions.CertsError as e:
             self._cleanup_temp_files()
             raise Exception(
                 f"Errore certificato SSL - verifica che .crt e .key siano corretti: {str(e)}"
-            )
+            ) from e
         except betfairlightweight.exceptions.APIError as e:
             self._cleanup_temp_files()
-            raise Exception(f"Errore API Betfair: {str(e)}")
+            raise Exception(f"Errore API Betfair: {str(e)}") from e
         except Exception as e:
             self._cleanup_temp_files()
             error_msg = str(e)
             if "SSL" in error_msg.upper() or "CERTIFICATE" in error_msg.upper():
                 raise Exception(
                     f"Errore SSL - il certificato potrebbe non essere valido: {error_msg}"
-                )
+                ) from e
             elif "timeout" in error_msg.lower():
-                raise Exception("Timeout connessione - riprova")
+                raise Exception("Timeout connessione - riprova") from e
             else:
-                raise Exception(f"Login fallito: {error_msg}")
+                raise Exception(f"Login fallito: {error_msg}") from e
 
     def logout(self):
         """Logout from Betfair and stop streaming."""
@@ -254,7 +254,7 @@ class BetfairClient:
         if self.client:
             try:
                 self.client.logout()
-            except:
+            except Exception:
                 pass
         self._cleanup_temp_files()
         self.client = None
@@ -298,7 +298,7 @@ class BetfairClient:
                         event_type_ids=[FOOTBALL_ID], in_play_only=True
                     )
                 )
-            except:
+            except Exception:
                 pass
 
         # Combine events (avoid duplicates)
@@ -572,7 +572,7 @@ class BetfairClient:
 
         except Exception as e:
             self.streaming_active = False
-            raise Exception(f"Errore avvio streaming: {str(e)}")
+            raise Exception(f"Errore avvio streaming: {str(e)}") from e
 
     def _run_stream(self):
         """Run the stream in a background thread."""
@@ -590,7 +590,7 @@ class BetfairClient:
         if self.stream:
             try:
                 self.stream.stop()
-            except:
+            except Exception:
                 pass
             self.stream = None
         self.stream_thread = None
@@ -1006,7 +1006,7 @@ class BetfairClient:
                             return runner.ex.available_to_lay[0].price
                     break
             return None
-        except:
+        except Exception:
             return None
 
     def _adjust_price_with_slippage(self, price, side, slippage_ticks=1):
@@ -1146,7 +1146,7 @@ class BetfairClient:
                     instruction_reports = getattr(result, attr_name, None)
                     if instruction_reports:
                         break
-                except:
+                except Exception:
                     pass
 
             if not instruction_reports and hasattr(result, "__getitem__"):
@@ -1154,7 +1154,7 @@ class BetfairClient:
                     instruction_reports = result.get(
                         "instructionReports"
                     ) or result.get("instruction_reports")
-                except:
+                except Exception:
                     pass
 
             bet_id = None

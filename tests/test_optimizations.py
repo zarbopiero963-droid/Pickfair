@@ -6,7 +6,6 @@ e rispettino le garanzie di performance.
 """
 
 import time
-from typing import Dict, List
 
 from automation_optimizer import (
     AutomationOptimizer,
@@ -87,7 +86,7 @@ class TestPnLCache:
         cache = PnLCache()
 
         prices = {1: (2.0, 2.02), 2: (3.0, 3.02)}
-        orders: List[Dict] = []
+        orders: list[dict] = []
 
         result = cache.get_cached_pnl("MKT1", prices, orders)
 
@@ -430,7 +429,7 @@ class TestSimulationSpeed:
         controller.speed = SimulationSpeed.FAST
 
         ui_updates = 0
-        for i in range(25):
+        for _i in range(25):
             if controller.should_process_tick():
                 ui_updates += 1
 
@@ -443,7 +442,7 @@ class TestSimulationSpeed:
         controller.speed = SimulationSpeed.ULTRA_FAST
 
         storage_count = 0
-        for i in range(50):
+        for _i in range(50):
             if controller.should_process_tick_for_storage():
                 storage_count += 1
 
@@ -456,7 +455,7 @@ class TestSimulationSpeed:
         controller.speed = SimulationSpeed.FAST
 
         results = []
-        for i in range(20):
+        for _i in range(20):
             results.append(controller.should_process_tick_for_automation())
 
         true_count = sum(1 for r in results if r)
@@ -474,7 +473,7 @@ class TestIntegration:
         """Flusso combinato ottimizzazioni."""
         dispatcher = TickDispatcher()
         pnl_cache = PnLCache()
-        dutch_cache = DutchingCache()
+        DutchingCache()
         auto_opt = AutomationOptimizer()
         ui_opt = UIOptimizer()
         speed_ctrl = SimulationSpeedController()
@@ -495,7 +494,7 @@ class TestIntegration:
                 dispatcher.dispatch_tick(tick)
 
         prices = {1: (2.0, 2.02)}
-        orders: List[Dict] = []
+        orders: list[dict] = []
         result = pnl_cache.get_cached_pnl("MKT1", prices, orders)
         assert result is not None
 

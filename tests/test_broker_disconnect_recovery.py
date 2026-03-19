@@ -1,4 +1,3 @@
-import pytest
 
 from simulation_broker import SimulationBroker
 

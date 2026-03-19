@@ -38,6 +38,6 @@ def test_invalid_odds_raise_error():
 
     try:
         calculate_dutching(odds, total_stake)
-        assert False
+        raise AssertionError()
     except Exception:
         assert True

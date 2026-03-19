@@ -11,7 +11,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger("DB")
 
@@ -28,7 +28,7 @@ def get_db_path() -> str:
 
 
 class Database:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or get_db_path()
         self._local = threading.local()
         self._write_lock = threading.RLock()
@@ -110,7 +110,7 @@ class Database:
             default = []
         if value in (None, "", b""):
             return default
-        if isinstance(value, (list, dict)):
+        if isinstance(value, list | dict):
             return value
         try:
             return json.loads(value)
@@ -370,18 +370,18 @@ class Database:
 
         return text
 
-    def get_settings(self) -> Dict[str, Any]:
+    def get_settings(self) -> dict[str, Any]:
         rows = self._execute(
             "SELECT key, value FROM settings",
             fetch=True,
             commit=False,
         )
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for row in rows or []:
             result[row["key"]] = self._parse_setting_value(row["value"])
         return result
 
-    def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
+    def save_settings(self, settings: dict[str, Any] | None = None, **kwargs):
         payload = {}
 
         if isinstance(settings, dict):
@@ -409,7 +409,7 @@ class Database:
             private_key=private_key or "",
         )
 
-    def save_password(self, password: Optional[str]):
+    def save_password(self, password: str | None):
         if password is None:
             try:
                 self._execute("DELETE FROM settings WHERE key = 'password'")
@@ -421,8 +421,8 @@ class Database:
 
     def save_session(
         self,
-        session_token: Optional[str],
-        expiry: Optional[str] = None,
+        session_token: str | None,
+        expiry: str | None = None,
     ):
         self._set_setting("session_token", session_token or "")
         self._set_setting("session_expiry", expiry or "")
@@ -438,17 +438,17 @@ class Database:
     def clear_sessions(self):
         self.clear_session()
 
-    def save_update_url(self, update_url: Optional[str]):
+    def save_update_url(self, update_url: str | None):
         self._set_setting("update_url", update_url or "")
 
-    def save_skipped_version(self, version: Optional[str]):
+    def save_skipped_version(self, version: str | None):
         self._set_setting("skipped_version", version or "")
 
     # =========================================================
     # TELEGRAM SETTINGS
     # =========================================================
 
-    def get_telegram_settings(self) -> Dict[str, Any]:
+    def get_telegram_settings(self) -> dict[str, Any]:
         rows = self._execute(
             "SELECT * FROM telegram_settings WHERE id = 1",
             fetch=True,
@@ -482,7 +482,7 @@ class Database:
 
     def save_telegram_settings(
         self,
-        settings: Optional[Dict[str, Any]] = None,
+        settings: dict[str, Any] | None = None,
         **kwargs,
     ):
         payload = {}
@@ -532,7 +532,7 @@ class Database:
     # TELEGRAM CHATS
     # =========================================================
 
-    def get_telegram_chats(self) -> List[Dict[str, Any]]:
+    def get_telegram_chats(self) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -552,8 +552,8 @@ class Database:
     def save_telegram_chat(
         self,
         chat_id,
-        title: Optional[str] = None,
-        username: Optional[str] = None,
+        title: str | None = None,
+        username: str | None = None,
         is_active: bool = True,
     ):
         self._execute(
@@ -573,7 +573,7 @@ class Database:
             ),
         )
 
-    def replace_telegram_chats(self, chats: List[Dict[str, Any]]):
+    def replace_telegram_chats(self, chats: list[dict[str, Any]]):
         self._execute("DELETE FROM telegram_chats")
         for chat in chats or []:
             self.save_telegram_chat(
@@ -593,7 +593,7 @@ class Database:
     # SIGNAL PATTERNS
     # =========================================================
 
-    def get_signal_patterns(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    def get_signal_patterns(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         if enabled_only:
             rows = self._execute(
                 """
@@ -626,7 +626,7 @@ class Database:
     def save_signal_pattern(
         self,
         pattern: str,
-        label: Optional[str] = None,
+        label: str | None = None,
         enabled: bool = True,
     ):
         self._execute(
@@ -645,7 +645,7 @@ class Database:
         self,
         pattern_id,
         pattern: str,
-        label: Optional[str] = None,
+        label: str | None = None,
     ):
         self._execute(
             """
@@ -711,7 +711,7 @@ class Database:
             ),
         )
 
-    def get_received_signals(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_received_signals(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -760,7 +760,7 @@ class Database:
             ),
         )
 
-    def get_telegram_outbox_log(self, limit=100) -> List[Dict[str, Any]]:
+    def get_telegram_outbox_log(self, limit=100) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -806,7 +806,7 @@ class Database:
             ),
         )
 
-    def get_pending_sagas(self) -> List[Dict[str, Any]]:
+    def get_pending_sagas(self) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -867,10 +867,10 @@ class Database:
             ),
         )
 
-    def get_recent_bets(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_recent_bets(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.get_bet_history(limit=limit)
 
-    def get_bet_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_bet_history(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -952,10 +952,10 @@ class Database:
     def add_simulated_bet(self, *args, **kwargs):
         self.save_simulation_bet(**kwargs)
 
-    def get_simulation_bets(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_simulation_bets(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.get_simulation_bet_history(limit=limit)
 
-    def get_simulation_bet_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_simulation_bet_history(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self._execute(
             """
             SELECT *
@@ -974,7 +974,7 @@ class Database:
             result.append(item)
         return result
 
-    def get_simulation_settings(self) -> Dict[str, Any]:
+    def get_simulation_settings(self) -> dict[str, Any]:
         settings = self.get_settings()
         return {
             "virtual_balance": self._as_float(

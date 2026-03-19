@@ -1,8 +1,8 @@
 import ast
 import json
 import sys
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 ROOT = Path(".").resolve()
 GUARDRAILS_DIR = ROOT / "guardrails"
@@ -121,7 +121,7 @@ def build_public_api_snapshot(root: Path = ROOT):
         functions = {}
 
         for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 if node.name.startswith("_"):
                     continue
                 functions[node.name] = ast_signature(node)
@@ -133,7 +133,7 @@ def build_public_api_snapshot(root: Path = ROOT):
                 methods = {}
 
                 for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                         if item.name.startswith("_"):
                             continue
                         methods[item.name] = ast_signature(item)

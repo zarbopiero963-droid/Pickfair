@@ -3,7 +3,7 @@ import json
 import pytest
 
 from circuit_breaker import PermanentError
-from core.safety_layer import SafetyLayer, RiskInvariantError
+from core.safety_layer import RiskInvariantError, SafetyLayer
 from core.trading_engine import TradingEngine
 from pnl_engine import PnLEngine
 

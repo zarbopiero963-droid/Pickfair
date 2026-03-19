@@ -9,7 +9,6 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +50,8 @@ class TickStorage:
         """
         self.max_ticks = max_ticks
         self.ohlc_interval = ohlc_interval_sec
-        self.ticks: Dict[int, deque] = {}
-        self.ohlc_cache: Dict[int, List[OHLC]] = {}
+        self.ticks: dict[int, deque] = {}
+        self.ohlc_cache: dict[int, list[OHLC]] = {}
         self.lock = threading.RLock()
 
     def push_tick(
@@ -83,14 +82,14 @@ class TickStorage:
 
             self.ticks[selection_id].append(tick)
 
-    def get_ticks(self, selection_id: int, limit: int = 100) -> List[Tick]:
+    def get_ticks(self, selection_id: int, limit: int = 100) -> list[Tick]:
         """Ritorna ultimi N tick."""
         with self.lock:
             if selection_id not in self.ticks:
                 return []
             return list(self.ticks[selection_id])[-limit:]
 
-    def get_last_tick(self, selection_id: int) -> Optional[Dict]:
+    def get_last_tick(self, selection_id: int) -> dict | None:
         """
         Ritorna ultimo tick come dict per fallback P&L.
 
@@ -109,12 +108,12 @@ class TickStorage:
                 "timestamp": last.timestamp,
             }
 
-    def get_ltp_history(self, selection_id: int, limit: int = 100) -> List[float]:
+    def get_ltp_history(self, selection_id: int, limit: int = 100) -> list[float]:
         """Ritorna storico LTP per grafici."""
         ticks = self.get_ticks(selection_id, limit)
         return [t.ltp for t in ticks if t.ltp > 0]
 
-    def aggregate_ohlc(self, selection_id: int, interval_sec: int = 5) -> List[OHLC]:
+    def aggregate_ohlc(self, selection_id: int, interval_sec: int = 5) -> list[OHLC]:
         """Aggrega tick in candele OHLC."""
         with self.lock:
             if selection_id not in self.ticks or len(self.ticks[selection_id]) == 0:
@@ -143,7 +142,7 @@ class TickStorage:
 
             return candles
 
-    def _make_ohlc(self, timestamp: datetime, ticks: List[Tick]) -> OHLC:
+    def _make_ohlc(self, timestamp: datetime, ticks: list[Tick]) -> OHLC:
         """Crea candela da lista tick."""
         prices = [t.ltp for t in ticks if t.ltp > 0]
         if not prices:
@@ -160,7 +159,7 @@ class TickStorage:
             volume=sum(volumes) if volumes else 0,
         )
 
-    def get_spread_history(self, selection_id: int, limit: int = 100) -> List[float]:
+    def get_spread_history(self, selection_id: int, limit: int = 100) -> list[float]:
         """Ritorna storico spread BACK-LAY."""
         ticks = self.get_ticks(selection_id, limit)
         return [
@@ -169,7 +168,7 @@ class TickStorage:
             if t.back_price > 0 and t.lay_price > 0
         ]
 
-    def clear(self, selection_id: Optional[int] = None):
+    def clear(self, selection_id: int | None = None):
         """Pulisce storage."""
         with self.lock:
             if selection_id:

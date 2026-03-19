@@ -1,14 +1,13 @@
 import json
 import random
-import time
 import threading
+import time
 
 import pytest
 
+from core.safety_layer import SafetyLayer
 from core.trading_engine import TradingEngine
 from pnl_engine import PnLEngine
-from core.safety_layer import SafetyLayer
-
 
 # ----------------------------------------------------
 # Event Store (event sourcing simulation)
@@ -202,7 +201,7 @@ def test_event_store_replay_deterministic():
 
     store = EventStore()
 
-    for i in range(10):
+    for _i in range(10):
 
         event = {
             "price": random.uniform(1.5, 3),

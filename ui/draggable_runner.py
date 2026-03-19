@@ -5,7 +5,7 @@ UX professionale per riordinare visivamente i runner nella lista dutching.
 Zero impatto sui calcoli matematici.
 """
 
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import customtkinter as ctk
 
@@ -25,10 +25,10 @@ class DraggableRunner(ctk.CTkFrame):
     def __init__(
         self,
         parent,
-        runner: Dict,
+        runner: dict,
         index: int,
-        on_move: Optional[Callable] = None,
-        on_select: Optional[Callable] = None,
+        on_move: Callable | None = None,
+        on_select: Callable | None = None,
     ):
         """
         Args:
@@ -186,7 +186,7 @@ class DraggableRunner(ctk.CTkFrame):
                 self.on_select(self.runner)
                 self.set_selected(not self._selected)
 
-    def update_runner(self, runner: Dict, index: int):
+    def update_runner(self, runner: dict, index: int):
         """
         Aggiorna dati runner.
 
@@ -246,8 +246,8 @@ class DraggableRunnerList(ctk.CTkFrame):
         self,
         parent,
         runners: list,
-        on_order_change: Optional[Callable] = None,
-        on_runner_select: Optional[Callable] = None,
+        on_order_change: Callable | None = None,
+        on_runner_select: Callable | None = None,
     ):
         """
         Args:
@@ -279,7 +279,7 @@ class DraggableRunnerList(ctk.CTkFrame):
             widget.pack(fill="x", pady=2)
             self.runner_widgets.append(widget)
 
-    def _on_runner_move(self, runner: Dict, old_index: int, new_index: int):
+    def _on_runner_move(self, runner: dict, old_index: int, new_index: int):
         """
         Handler per spostamento runner.
 

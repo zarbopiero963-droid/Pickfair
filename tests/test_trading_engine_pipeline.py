@@ -1,5 +1,3 @@
-import pytest
-from core.trading_engine import TradingEngine
 
 
 def test_signal_to_order_pipeline(engine):

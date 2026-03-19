@@ -11,7 +11,6 @@ Verifica:
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List
 
 from automation_engine import get_auto_green_remaining_delay, should_auto_green
 from dutching import calculate_ai_mixed_stakes, calculate_dutching_stakes
@@ -91,7 +90,7 @@ class TestAICalculationPerformance:
             {"selectionId": 3, "runnerName": "Away", "price": 3.8},
         ]
 
-        results_list: List[bool] = []
+        results_list: list[bool] = []
         lock = threading.Lock()
 
         def calculate():
@@ -141,12 +140,12 @@ class TestTickReplayWithAutoGreen:
         start = time.perf_counter()
 
         eligible_count = 0
-        for tick in range(1000):
+        for _tick in range(1000):
             for order in orders:
                 if should_auto_green(order, "OPEN"):
                     eligible_count += 1
 
-                remaining = get_auto_green_remaining_delay(order)
+                get_auto_green_remaining_delay(order)
 
         elapsed = time.perf_counter() - start
 
@@ -249,10 +248,8 @@ class TestSafeModePerformance:
 
         start = time.perf_counter()
 
-        triggered_at = None
         for i in range(100):
             if manager.report_error("TestError", f"Error {i}"):
-                triggered_at = i
                 break
             manager.report_success()
 
@@ -303,7 +300,7 @@ class TestSafeModePerformance:
         start = time.perf_counter()
 
         for _ in range(10000):
-            status = manager.get_status_info()
+            manager.get_status_info()
             _ = manager.is_safe_mode_active
             _ = manager.consecutive_errors
 

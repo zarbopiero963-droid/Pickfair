@@ -1,4 +1,3 @@
-import pytest
 
 from plugin_manager import PluginManager
 

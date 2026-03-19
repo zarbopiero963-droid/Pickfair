@@ -1,7 +1,7 @@
 import ast
 import json
+from collections import Counter, defaultdict
 from pathlib import Path
-from collections import defaultdict, Counter
 
 ROOT = Path(".")
 ARTIFACTS = ROOT / "artifacts"
@@ -97,7 +97,7 @@ def get_functions(tree: ast.Module):
     funcs = []
 
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             funcs.append(
                 {
                     "name": node.name,
@@ -117,7 +117,7 @@ def get_classes(tree: ast.Module):
             methods = []
 
             for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                     methods.append(
                         {
                             "name": item.name,
@@ -281,7 +281,7 @@ def load_tests():
 
         test_names = []
         for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_"):
                 test_names.append(node.name)
 
         tests.append(

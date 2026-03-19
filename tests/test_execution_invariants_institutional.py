@@ -1,11 +1,10 @@
 import json
 import threading
-import time
 
 import pytest
 
-from core.trading_engine import TradingEngine
 from core.safety_layer import SafetyLayer
+from core.trading_engine import TradingEngine
 from pnl_engine import PnLEngine
 
 

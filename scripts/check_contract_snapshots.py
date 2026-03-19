@@ -1,4 +1,3 @@
-import json
 
 
 def validate_payload(payload):

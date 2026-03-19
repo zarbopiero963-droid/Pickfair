@@ -10,10 +10,11 @@ Thread-safe e integrato con SafetyLogger.
 """
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Optional
 
 from safety_logger import get_safety_logger
 
@@ -34,7 +35,7 @@ class ErrorRecord:
     timestamp: datetime
     error_type: str
     message: str
-    market_id: Optional[str] = None
+    market_id: str | None = None
 
 
 @dataclass
@@ -43,9 +44,9 @@ class SafeModeState:
 
     status: SafeModeStatus = SafeModeStatus.NORMAL
     consecutive_errors: int = 0
-    error_history: List[ErrorRecord] = field(default_factory=list)
-    triggered_at: Optional[datetime] = None
-    last_reset_at: Optional[datetime] = None
+    error_history: list[ErrorRecord] = field(default_factory=list)
+    triggered_at: datetime | None = None
+    last_reset_at: datetime | None = None
 
 
 class SafeModeManager:
@@ -74,7 +75,7 @@ class SafeModeManager:
         self._state_lock = threading.Lock()
         self._state = SafeModeState()
         self._threshold = CONSECUTIVE_ERRORS_THRESHOLD
-        self._on_safe_mode_callbacks: List[Callable[[], None]] = []
+        self._on_safe_mode_callbacks: list[Callable[[], None]] = []
         self._logger = get_safety_logger()
 
     @property
@@ -105,7 +106,7 @@ class SafeModeManager:
             self._on_safe_mode_callbacks.append(callback)
 
     def report_error(
-        self, error_type: str, message: str, market_id: Optional[str] = None
+        self, error_type: str, message: str, market_id: str | None = None
     ) -> bool:
         """
         Segnala un errore al SafeModeManager.
@@ -118,7 +119,7 @@ class SafeModeManager:
         Returns:
             True se Safe Mode è stato attivato con questo errore
         """
-        callbacks: List[Callable[[], None]] = []
+        callbacks: list[Callable[[], None]] = []
         triggered = False
 
         with self._state_lock:
@@ -218,7 +219,7 @@ class SafeModeManager:
             }
 
 
-_safe_mode_manager: Optional[SafeModeManager] = None
+_safe_mode_manager: SafeModeManager | None = None
 
 
 def get_safe_mode_manager() -> SafeModeManager:

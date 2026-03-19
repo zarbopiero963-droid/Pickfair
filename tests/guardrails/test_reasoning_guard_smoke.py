@@ -1,6 +1,5 @@
 from tools.ai_reasoning_guard import run_guard
 
-
 KNOWN_FILES = [
     "controllers/dutching_controller.py",
     "telegram_listener.py",

@@ -13,7 +13,6 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +30,8 @@ class MarketCache:
             ttl: Time-to-live in secondi (default 1.0s)
             max_size: Numero massimo di market in cache
         """
-        self._cache: Dict[str, Dict] = {}
-        self._timestamps: Dict[str, float] = {}
+        self._cache: dict[str, dict] = {}
+        self._timestamps: dict[str, float] = {}
         self._lock = threading.RLock()
         self.ttl = ttl
         self.max_size = max_size
@@ -41,7 +40,7 @@ class MarketCache:
         self._misses = 0
         self._api_calls_saved = 0
 
-    def get(self, market_id: str) -> Optional[Dict]:
+    def get(self, market_id: str) -> dict | None:
         """
         Recupera market book dalla cache se valido.
 
@@ -64,7 +63,7 @@ class MarketCache:
             self._api_calls_saved += 1
             return self._cache[market_id].copy()
 
-    def set(self, market_id: str, data: Dict):
+    def set(self, market_id: str, data: dict):
         """Salva market book in cache."""
         with self._lock:
             if len(self._cache) >= self.max_size and self._timestamps:
@@ -87,7 +86,7 @@ class MarketCache:
             self._cache.clear()
             self._timestamps.clear()
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Statistiche cache."""
         with self._lock:
             total = self._hits + self._misses
@@ -123,7 +122,7 @@ class DeltaDetector:
             min_price_change: Variazione minima prezzo per trigger (default 1 tick)
             min_volume_change: Variazione minima volume (default 1 unita)
         """
-        self._last_prices: Dict[str, Dict[int, Dict]] = defaultdict(dict)
+        self._last_prices: dict[str, dict[int, dict]] = defaultdict(dict)
         self._lock = threading.RLock()
         self.min_price_change = min_price_change
         self.min_volume_change = min_volume_change
@@ -139,7 +138,7 @@ class DeltaDetector:
         lay_price: float,
         back_size: float = 0,
         lay_size: float = 0,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Verifica se i prezzi sono cambiati significativamente.
 
@@ -147,7 +146,6 @@ class DeltaDetector:
             (changed, reason)
         """
         with self._lock:
-            key = f"{market_id}_{selection_id}"
             last = self._last_prices.get(market_id, {}).get(selection_id, {})
 
             if not last:
@@ -194,7 +192,7 @@ class DeltaDetector:
             self._changes_skipped += 1
             return False, "Nessun cambiamento significativo"
 
-    def get_last_price(self, market_id: str, selection_id: int) -> Optional[Dict]:
+    def get_last_price(self, market_id: str, selection_id: int) -> dict | None:
         """Ultimo prezzo registrato."""
         with self._lock:
             return self._last_prices.get(market_id, {}).get(selection_id)
@@ -204,7 +202,7 @@ class DeltaDetector:
         with self._lock:
             self._last_prices.pop(market_id, None)
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Statistiche delta detection."""
         total = self._changes_detected + self._changes_skipped
         return {
@@ -236,12 +234,12 @@ class MarketTracker:
         self.delta = DeltaDetector(min_price_change=min_price_change)
         self._lock = threading.RLock()
 
-        self._active_markets: Dict[str, Dict] = {}
-        self._last_refresh: Dict[str, float] = {}
+        self._active_markets: dict[str, dict] = {}
+        self._last_refresh: dict[str, float] = {}
 
     def get_market_book(
         self, market_id: str, force_refresh: bool = False
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """
         Recupera market book con caching intelligente.
 
@@ -267,7 +265,7 @@ class MarketTracker:
             logger.error(f"[MARKET_TRACKER] Error fetching {market_id}: {e}")
             return None
 
-    def get_best_prices(self, market_id: str) -> Dict[int, Dict]:
+    def get_best_prices(self, market_id: str) -> dict[int, dict]:
         """
         Estrae best back/lay per ogni selezione.
 
@@ -299,7 +297,7 @@ class MarketTracker:
 
         return prices
 
-    def get_changed_prices(self, market_id: str) -> Dict[int, Dict]:
+    def get_changed_prices(self, market_id: str) -> dict[int, dict]:
         """
         Recupera solo i prezzi che sono cambiati significativamente.
 
@@ -322,7 +320,7 @@ class MarketTracker:
 
         return changed
 
-    def track_market(self, market_id: str, metadata: Dict = None):
+    def track_market(self, market_id: str, metadata: dict = None):
         """Inizia tracking di un market."""
         with self._lock:
             self._active_markets[market_id] = {
@@ -337,12 +335,12 @@ class MarketTracker:
             self.cache.invalidate(market_id)
             self.delta.clear_market(market_id)
 
-    def get_active_markets(self) -> List[str]:
+    def get_active_markets(self) -> list[str]:
         """Lista market attivi."""
         with self._lock:
             return list(self._active_markets.keys())
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Statistiche complete tracker."""
         return {
             "cache": self.cache.get_stats(),

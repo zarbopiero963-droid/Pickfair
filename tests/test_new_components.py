@@ -977,7 +977,7 @@ class TestWoMEngine:
 
         engine = WoMEngine()
 
-        for i in range(5):
+        for _i in range(5):
             engine.record_tick(
                 selection_id=1,
                 back_price=2.0,
@@ -1009,7 +1009,7 @@ class TestWoMEngine:
 
         engine = WoMEngine()
 
-        for i in range(10):
+        for _i in range(10):
             engine.record_tick(1, 2.0, 200, 2.02, 10)
 
         result = engine.calculate_wom(1)

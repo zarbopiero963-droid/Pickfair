@@ -4,8 +4,8 @@ Finestra separata per conferma e gestione dutching avanzato.
 """
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox
-from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
@@ -34,8 +34,8 @@ class DutchingConfirmationWindow:
         self,
         parent,
         state: DutchingState,
-        on_submit: Callable[[List[Dict]], None],
-        on_refresh_odds: Optional[Callable] = None,
+        on_submit: Callable[[list[dict]], None],
+        on_refresh_odds: Callable | None = None,
     ):
         """
         Args:
@@ -83,19 +83,19 @@ class DutchingConfirmationWindow:
         )
 
         # Mappa checkbox per runner (modalità normale)
-        self._runner_checkboxes: Dict[int, tk.BooleanVar] = {}
-        self._runner_swap_vars: Dict[int, tk.BooleanVar] = {}
-        self._runner_offset_vars: Dict[int, tk.StringVar] = {}
-        self._runner_odds_vars: Dict[int, tk.StringVar] = {}
+        self._runner_checkboxes: dict[int, tk.BooleanVar] = {}
+        self._runner_swap_vars: dict[int, tk.BooleanVar] = {}
+        self._runner_offset_vars: dict[int, tk.StringVar] = {}
+        self._runner_odds_vars: dict[int, tk.StringVar] = {}
 
         # Mappa checkbox per modalità Mixed (BACK e LAY separati)
-        self._runner_back_vars: Dict[int, tk.BooleanVar] = {}
-        self._runner_lay_vars: Dict[int, tk.BooleanVar] = {}
-        self._runner_back_stake_vars: Dict[int, tk.StringVar] = {}
-        self._runner_lay_stake_vars: Dict[int, tk.StringVar] = {}
+        self._runner_back_vars: dict[int, tk.BooleanVar] = {}
+        self._runner_lay_vars: dict[int, tk.BooleanVar] = {}
+        self._runner_back_stake_vars: dict[int, tk.StringVar] = {}
+        self._runner_lay_stake_vars: dict[int, tk.StringVar] = {}
 
         # Mappa widget righe per aggiornamento
-        self._runner_widgets: Dict[int, Dict] = {}
+        self._runner_widgets: dict[int, dict] = {}
 
         # Costruisci UI
         self._build_ui()
@@ -296,7 +296,7 @@ class DutchingConfirmationWindow:
         )
         header_frame.pack(fill=tk.X)
 
-        for i, (header, width) in enumerate(zip(headers, widths)):
+        for i, (header, width) in enumerate(zip(headers, widths, strict=False)):
             lbl = ctk.CTkLabel(
                 header_frame,
                 text=header,
@@ -1316,7 +1316,6 @@ class DutchingConfirmationWindow:
         guaranteed_profit = min(profits)
 
         # Worst case = se nessuna vince (perdi tutto lo stake)
-        worst_case = -total_stake
 
         # Colore basato sul profitto garantito
         if guaranteed_profit > 0:
@@ -1371,10 +1370,10 @@ class DutchingConfirmationWindow:
 
 def open_dutching_window(
     parent,
-    market_data: Dict,
-    runners: List[Dict],
+    market_data: dict,
+    runners: list[dict],
     on_submit: Callable,
-    on_refresh: Optional[Callable] = None,
+    on_refresh: Callable | None = None,
 ):
     """
     Helper per aprire finestra dutching.

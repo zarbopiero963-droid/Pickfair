@@ -1,8 +1,7 @@
-import time
 
-from core.tick_ring_buffer import TickRingBuffer
 from core.fast_analytics import FastWoMState
 from core.perf_counters import now_ns
+from core.tick_ring_buffer import TickRingBuffer
 
 
 def test_pipeline_latency_under_1ms_average():
@@ -14,7 +13,7 @@ def test_pipeline_latency_under_1ms_average():
 
     total_ns = 0
 
-    for i in range(loops):
+    for _i in range(loops):
 
         t0 = now_ns()
 

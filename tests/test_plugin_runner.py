@@ -1,4 +1,3 @@
-import pytest
 
 from plugin_runner import PluginRunner
 

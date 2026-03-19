@@ -22,8 +22,8 @@ def test_dutching_back_math_preserves_total_stake():
     assert math.isclose(total_calculated, 10.0, abs_tol=0.02)
     assert len(results) == 2
     assert all(float(r["stake"]) > 0 for r in results)
-    assert isinstance(profit, (int, float))
-    assert isinstance(implied_prob, (int, float))
+    assert isinstance(profit, int | float)
+    assert isinstance(implied_prob, int | float)
 
 
 def test_dutching_lay_math_returns_positive_stakes():
@@ -41,13 +41,13 @@ def test_dutching_lay_math_returns_positive_stakes():
     assert len(results) == 2
     assert all(float(r["stake"]) > 0 for r in results)
     assert all(float(r["price"]) > 1.0 for r in results)
-    assert isinstance(profit, (int, float))
-    assert isinstance(implied_prob, (int, float))
+    assert isinstance(profit, int | float)
+    assert isinstance(implied_prob, int | float)
 
 
 def test_risk_middleware_forwards_only_one_duplicate_request():
     bus = EventBus()
-    gate = RiskMiddleware(bus, None, None)
+    RiskMiddleware(bus, None, None)
 
     published = []
     bus.subscribe("CMD_PLACE_DUTCHING", lambda payload: published.append(payload))

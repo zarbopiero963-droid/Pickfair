@@ -185,7 +185,7 @@ def test_build_populates_app_variables_from_settings():
         }
     )
 
-    ui = TelegramTabUI(parent_frame=object(), app=app)
+    TelegramTabUI(parent_frame=object(), app=app)
 
     assert app.tg_api_id_var.get() == "999"
     assert app.tg_api_hash_var.get() == "abc123"

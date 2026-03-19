@@ -3,7 +3,6 @@ Market Validator - Verifica mercati compatibili con AI Dutching.
 Solo mercati winner-takes-all sono dutching-ready.
 """
 
-from typing import List, Set
 
 
 class MarketValidationError(Exception):
@@ -15,7 +14,7 @@ class MarketValidationError(Exception):
 class MarketValidator:
     """Validatore per mercati Betfair compatibili con dutching."""
 
-    DUTCHING_READY_MARKETS: Set[str] = {
+    DUTCHING_READY_MARKETS: set[str] = {
         "MATCH_ODDS",
         "WINNER",
         "MONEYLINE",
@@ -35,7 +34,7 @@ class MarketValidator:
         "MATCH_RESULT_AND_BTTS",
     }
 
-    NON_DUTCHING_MARKETS: Set[str] = {
+    NON_DUTCHING_MARKETS: set[str] = {
         "OVER_UNDER_05",
         "OVER_UNDER_15",
         "OVER_UNDER_25",
@@ -121,7 +120,7 @@ class MarketValidator:
         return "Mercato NON DUTCHING-READY\nAI disabilitata automaticamente"
 
     @classmethod
-    def get_compatible_markets(cls) -> List[str]:
+    def get_compatible_markets(cls) -> list[str]:
         """Restituisce lista mercati compatibili."""
         return sorted(list(cls.DUTCHING_READY_MARKETS))
 

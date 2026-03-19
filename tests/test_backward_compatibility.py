@@ -1,4 +1,3 @@
-import pytest
 
 
 def test_kwargs_backward_compatibility():

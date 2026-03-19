@@ -11,14 +11,14 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 @dataclass
 class CachedDutchResult:
     """Risultato dutching cached."""
 
-    stakes: List[Dict]
+    stakes: list[dict]
     profit: float
     book_percentage: float
     timestamp: float
@@ -44,7 +44,7 @@ class DutchingCache:
 
     def _compute_key(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         total_stake: float,
         bet_type: str,
         commission: float,
@@ -64,11 +64,11 @@ class DutchingCache:
 
     def get(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         total_stake: float,
         bet_type: str = "BACK",
         commission: float = 4.5,
-    ) -> Optional[Tuple[List[Dict], float, float]]:
+    ) -> tuple[list[dict], float, float] | None:
         """
         Ottiene risultato dalla cache se presente e valido.
 
@@ -102,11 +102,11 @@ class DutchingCache:
 
     def put(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         total_stake: float,
         bet_type: str,
         commission: float,
-        stakes: List[Dict],
+        stakes: list[dict],
         profit: float,
         book_percentage: float,
     ):
@@ -141,7 +141,7 @@ class DutchingCache:
         with self._lock:
             self._cache.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Statistiche della cache."""
         with self._lock:
             total = self._stats["hits"] + self._stats["misses"]
@@ -153,7 +153,7 @@ class DutchingCache:
             }
 
 
-_dutching_cache: Optional[DutchingCache] = None
+_dutching_cache: DutchingCache | None = None
 
 
 def get_dutching_cache() -> DutchingCache:
@@ -166,11 +166,11 @@ def get_dutching_cache() -> DutchingCache:
 
 def cached_dutching_stakes(
     calculate_fn,
-    selections: List[Dict],
+    selections: list[dict],
     total_stake: float,
     bet_type: str = "BACK",
     commission: float = 4.5,
-) -> Tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     """
     Wrapper per calcolo dutching con caching.
 

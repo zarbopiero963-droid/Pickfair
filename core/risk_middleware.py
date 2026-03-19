@@ -18,7 +18,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class RiskMiddleware:
         self.guardrail = guardrail
         self.wom_engine = wom_engine
 
-        self._recent_requests: Dict[str, float] = {}
+        self._recent_requests: dict[str, float] = {}
         self._duplicate_window_sec = 2.0
         self._gc_window_sec = 15.0
         self._lock = threading.Lock()
@@ -58,11 +58,11 @@ class RiskMiddleware:
             return [self._make_hashable_payload(v) for v in payload]
         if isinstance(payload, tuple):
             return [self._make_hashable_payload(v) for v in payload]
-        if isinstance(payload, (str, int, float, bool)) or payload is None:
+        if isinstance(payload, str | int | float | bool) or payload is None:
             return payload
         return str(payload)
 
-    def _request_hash(self, payload: Dict[str, Any]) -> str:
+    def _request_hash(self, payload: dict[str, Any]) -> str:
         safe_payload = self._make_hashable_payload(payload)
         encoded = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -75,7 +75,7 @@ class RiskMiddleware:
             if now - ts <= self._gc_window_sec
         }
 
-    def _is_duplicate(self, payload: Dict[str, Any]) -> bool:
+    def _is_duplicate(self, payload: dict[str, Any]) -> bool:
         try:
             req_hash = self._request_hash(payload)
             now = time.time()
@@ -99,7 +99,7 @@ class RiskMiddleware:
     # REQ -> CMD
     # =========================================================
 
-    def _handle_quick_bet(self, payload: Dict[str, Any]) -> None:
+    def _handle_quick_bet(self, payload: dict[str, Any]) -> None:
         if self._is_duplicate(payload):
             logger.warning("[RiskMiddleware] REQ_QUICK_BET duplicata ignorata.")
             return
@@ -130,7 +130,7 @@ class RiskMiddleware:
         logger.info("[RiskMiddleware] Forward REQ_QUICK_BET -> CMD_QUICK_BET")
         self.bus.publish("CMD_QUICK_BET", normalized)
 
-    def _handle_dutching(self, payload: Dict[str, Any]) -> None:
+    def _handle_dutching(self, payload: dict[str, Any]) -> None:
         if self._is_duplicate(payload):
             logger.warning("[RiskMiddleware] REQ_PLACE_DUTCHING duplicata ignorata.")
             return
@@ -196,7 +196,7 @@ class RiskMiddleware:
         logger.info("[RiskMiddleware] Forward REQ_PLACE_DUTCHING -> CMD_PLACE_DUTCHING")
         self.bus.publish("CMD_PLACE_DUTCHING", normalized)
 
-    def _handle_cashout(self, payload: Dict[str, Any]) -> None:
+    def _handle_cashout(self, payload: dict[str, Any]) -> None:
         if self._is_duplicate(payload):
             logger.warning("[RiskMiddleware] REQ_EXECUTE_CASHOUT duplicata ignorata.")
             return
@@ -222,7 +222,7 @@ class RiskMiddleware:
         logger.info("[RiskMiddleware] Forward REQ_EXECUTE_CASHOUT -> CMD_EXECUTE_CASHOUT")
         self.bus.publish("CMD_EXECUTE_CASHOUT", normalized)
 
-    def _handle_cancel_order(self, payload: Dict[str, Any]) -> None:
+    def _handle_cancel_order(self, payload: dict[str, Any]) -> None:
         if self._is_duplicate(payload):
             logger.warning("[RiskMiddleware] REQ_CANCEL_ORDER duplicata ignorata.")
             return
@@ -243,7 +243,7 @@ class RiskMiddleware:
         logger.info("[RiskMiddleware] Forward REQ_CANCEL_ORDER -> CMD_CANCEL_ORDER")
         self.bus.publish("CMD_CANCEL_ORDER", normalized)
 
-    def _handle_replace_order(self, payload: Dict[str, Any]) -> None:
+    def _handle_replace_order(self, payload: dict[str, Any]) -> None:
         if self._is_duplicate(payload):
             logger.warning("[RiskMiddleware] REQ_REPLACE_ORDER duplicata ignorata.")
             return

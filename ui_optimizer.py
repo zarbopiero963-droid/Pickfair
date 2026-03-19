@@ -9,7 +9,7 @@ Impatto: percezione reattività +100%, nessun flicker
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -19,7 +19,7 @@ class WidgetState:
     """Stato cached di un widget."""
 
     widget_id: str
-    last_values: Dict[str, Any] = field(default_factory=dict)
+    last_values: dict[str, Any] = field(default_factory=dict)
     update_count: int = 0
     skip_count: int = 0
 
@@ -35,7 +35,7 @@ class UIOptimizer:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._states: Dict[str, WidgetState] = {}
+        self._states: dict[str, WidgetState] = {}
         self._stats = {"total_updates": 0, "actual_updates": 0, "skipped_updates": 0}
 
     def _get_widget_id(self, widget: Any) -> str:
@@ -115,7 +115,7 @@ class UIOptimizer:
         return False
 
     def set_if_changed(
-        self, var: Any, new_value: Any, var_id: Optional[str] = None
+        self, var: Any, new_value: Any, var_id: str | None = None
     ) -> bool:
         """
         Chiama var.set() solo se valore cambiato.
@@ -167,7 +167,7 @@ class UIOptimizer:
         with self._lock:
             self._states.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Statistiche dell'optimizer."""
         with self._lock:
             total = self._stats["total_updates"]
@@ -178,7 +178,7 @@ class UIOptimizer:
             }
 
 
-_ui_optimizer: Optional[UIOptimizer] = None
+_ui_optimizer: UIOptimizer | None = None
 
 
 def get_ui_optimizer() -> UIOptimizer:
@@ -194,7 +194,7 @@ def optimized_configure(widget: Any, **kwargs) -> bool:
     return get_ui_optimizer().configure_if_changed(widget, **kwargs)
 
 
-def optimized_set(var: Any, value: Any, var_id: Optional[str] = None) -> bool:
+def optimized_set(var: Any, value: Any, var_id: str | None = None) -> bool:
     """Shortcut per set ottimizzato."""
     return get_ui_optimizer().set_if_changed(var, value, var_id)
 

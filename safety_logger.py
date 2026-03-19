@@ -15,7 +15,7 @@ import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 class SafetyEventType(Enum):
@@ -56,8 +56,8 @@ class SafetyLogger:
         self._initialized = True
         self._log_lock = threading.Lock()
         self._log_dir = self._get_log_directory()
-        self._current_date: Optional[str] = None
-        self._file_handler: Optional[logging.FileHandler] = None
+        self._current_date: str | None = None
+        self._file_handler: logging.FileHandler | None = None
         self._logger = logging.getLogger("pickfair.safety")
         self._logger.setLevel(logging.INFO)
         self._logger.propagate = False
@@ -111,7 +111,7 @@ class SafetyLogger:
         self,
         event_type: SafetyEventType,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ):
         """
         Registra un evento di sicurezza.
@@ -134,9 +134,9 @@ class SafetyLogger:
     def log_mixed_dutching_error(
         self,
         error_message: str,
-        market_id: Optional[str] = None,
-        stake: Optional[float] = None,
-        selections_count: Optional[int] = None,
+        market_id: str | None = None,
+        stake: float | None = None,
+        selections_count: int | None = None,
     ):
         """Logga errore MixedDutchingError."""
         self.log_event(
@@ -152,7 +152,7 @@ class SafetyLogger:
     def log_ai_blocked(
         self,
         market_type: str,
-        market_id: Optional[str] = None,
+        market_id: str | None = None,
         reason: str = "Mercato non compatibile con AI Mixed",
     ):
         """Logga AI bloccata per mercato non compatibile."""
@@ -165,9 +165,9 @@ class SafetyLogger:
     def log_auto_green_denied(
         self,
         reason: str,
-        order_id: Optional[str] = None,
-        market_status: Optional[str] = None,
-        elapsed_seconds: Optional[float] = None,
+        order_id: str | None = None,
+        market_status: str | None = None,
+        elapsed_seconds: float | None = None,
     ):
         """Logga auto-green negato con motivo."""
         details = {"order_id": order_id or "N/A"}
@@ -188,7 +188,7 @@ class SafetyLogger:
         )
 
     def log_profit_validation_failed(
-        self, variance: float, threshold: float, market_id: Optional[str] = None
+        self, variance: float, threshold: float, market_id: str | None = None
     ):
         """Logga fallimento validazione profitto uniforme."""
         self.log_event(
@@ -198,7 +198,7 @@ class SafetyLogger:
         )
 
     def log_market_validation_failed(
-        self, market_type: str, market_id: Optional[str] = None
+        self, market_type: str, market_id: str | None = None
     ):
         """Logga fallimento validazione mercato."""
         self.log_event(
@@ -270,7 +270,7 @@ class SafetyLogger:
         return self._log_dir / self._get_log_filename()
 
 
-_safety_logger: Optional[SafetyLogger] = None
+_safety_logger: SafetyLogger | None = None
 
 
 def get_safety_logger() -> SafetyLogger:
@@ -294,10 +294,10 @@ def evaluate_runner_liquidity(
     available_liquidity: float,
     side: str = "BACK",
     price: float = 1.0,
-    multiplier: Optional[float] = None,
-    min_absolute: Optional[float] = None,
-    warning_only: Optional[bool] = None,
-) -> Dict[str, Any]:
+    multiplier: float | None = None,
+    min_absolute: float | None = None,
+    warning_only: bool | None = None,
+) -> dict[str, Any]:
     """
     Valuta lo status liquidita di un runner per UI indicator.
 

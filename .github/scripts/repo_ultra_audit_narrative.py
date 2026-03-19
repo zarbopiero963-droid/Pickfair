@@ -185,7 +185,7 @@ def analyze_python_file(path: Path) -> dict:
             if_count += 1
         elif isinstance(node, ast.Try):
             try_count += 1
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        elif isinstance(node, ast.Import | ast.ImportFrom):
             import_count += 1
 
     result["class_count"] = class_count
@@ -227,7 +227,7 @@ def rank_fragile_files(file_stats: list[dict]) -> list[dict]:
 def detect_contracts_missing(contracts: list) -> list[list[str]]:
     cleaned = []
     for item in contracts:
-        if not isinstance(item, (list, tuple)) or len(item) < 2:
+        if not isinstance(item, list | tuple) or len(item) < 2:
             continue
         file_path = normalize_path(item[0])
         symbol = str(item[1]).strip()

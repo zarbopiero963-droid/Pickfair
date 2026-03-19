@@ -7,7 +7,6 @@ Zero esecuzione ordini diretta: solo validazione, calcolo, preflight e publish R
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 from ai.ai_guardrail import get_guardrail
 from ai.ai_pattern_engine import AIPatternEngine
@@ -37,15 +36,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PreflightResult:
     is_valid: bool = True
-    warnings: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     liquidity_ok: bool = True
     liquidity_guard_ok: bool = True
     spread_ok: bool = True
     stake_ok: bool = True
     price_ok: bool = True
     book_ok: bool = True
-    details: Dict = field(default_factory=dict)
+    details: dict = field(default_factory=dict)
 
 
 class DutchingController:
@@ -100,7 +99,7 @@ class DutchingController:
         self,
         market_id: str,
         market_type: str,
-        selections: List[Dict],
+        selections: list[dict],
         total_stake: float,
         mode: str = "BACK",
         ai_enabled: bool = False,
@@ -108,11 +107,11 @@ class DutchingController:
         auto_green: bool = False,
         commission: float = 4.5,
         use_best_price: bool = False,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        trailing: Optional[float] = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        trailing: float | None = None,
         dry_run: bool = False,
-    ) -> Dict:
+    ) -> dict:
         market_id = str(market_id or "").strip()
         market_type = str(market_type or "").strip()
         selections = list(selections or [])
@@ -318,7 +317,7 @@ class DutchingController:
             },
         }
 
-    def validate_selections(self, selections: List[Dict]) -> List[str]:
+    def validate_selections(self, selections: list[dict]) -> list[str]:
         errors = []
         selections = list(selections or [])
 
@@ -341,7 +340,7 @@ class DutchingController:
     def set_simulation(self, enabled: bool):
         self.simulation = bool(enabled)
 
-    def get_ai_analysis(self, selections: List[Dict]) -> List[Dict]:
+    def get_ai_analysis(self, selections: list[dict]) -> list[dict]:
         try:
             return self.ai_engine.get_wom_analysis(selections or [])
         except Exception:
@@ -350,7 +349,7 @@ class DutchingController:
 
     def preflight_check(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         total_stake: float,
         mode: str = "BACK",
     ) -> PreflightResult:
@@ -453,10 +452,10 @@ class DutchingController:
 
     def _check_liquidity_guard(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         mode: str = "BACK",
         market_id: str = "",
-    ) -> Tuple[bool, List[str]]:
+    ) -> tuple[bool, list[str]]:
         if not LIQUIDITY_GUARD_ENABLED:
             return True, []
 
@@ -507,9 +506,9 @@ class DutchingController:
 
     def _merge_ladders_to_results(
         self,
-        results: List[Dict],
-        selections: List[Dict],
-    ) -> List[Dict]:
+        results: list[dict],
+        selections: list[dict],
+    ) -> list[dict]:
         sel_by_id = {s.get("selectionId"): s for s in (selections or [])}
         merged = []
 
@@ -549,9 +548,9 @@ class DutchingController:
 
     def get_wom_analysis(
         self,
-        selections: List[Dict],
+        selections: list[dict],
         use_historical: bool = True,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         try:
             if use_historical:
                 return self.ai_engine.get_enhanced_analysis(
@@ -563,7 +562,7 @@ class DutchingController:
             logger.exception("Errore get_wom_analysis")
             return []
 
-    def get_wom_stats(self) -> Dict:
+    def get_wom_stats(self) -> dict:
         try:
             return self.wom_engine.get_stats()
         except Exception:
@@ -576,7 +575,7 @@ class DutchingController:
         tick_count: int = 10,
         wom_confidence: float = 0.5,
         volatility: float = 0.0,
-    ) -> Dict:
+    ) -> dict:
         return self.guardrail.full_check(
             market_type=market_type,
             tick_count=tick_count,
@@ -590,8 +589,8 @@ class DutchingController:
     def register_for_auto_green(self, bet_id: str):
         self.guardrail.register_order_for_auto_green(bet_id)
 
-    def get_time_window_signal(self, selection_id: int) -> Dict:
+    def get_time_window_signal(self, selection_id: int) -> dict:
         return self.wom_engine.get_time_window_signal(selection_id)
 
-    def get_guardrail_status(self) -> Dict:
+    def get_guardrail_status(self) -> dict:
         return self.guardrail.get_status()

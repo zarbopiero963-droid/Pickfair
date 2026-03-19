@@ -1,4 +1,3 @@
-import pytest
 
 from telegram_listener import parse_signal_message
 

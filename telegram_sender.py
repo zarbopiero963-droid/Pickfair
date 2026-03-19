@@ -11,9 +11,9 @@ HEDGE-FUND STABLE:
 import asyncio
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import Callable, Dict, Optional
 
 logger = logging.getLogger("TG_SENDER")
 
@@ -57,9 +57,9 @@ def format_bet_message(
 @dataclass
 class SendResult:
     success: bool = False
-    message_id: Optional[int] = None
-    error: Optional[str] = None
-    flood_wait: Optional[int] = None
+    message_id: int | None = None
+    error: str | None = None
+    flood_wait: int | None = None
 
 
 @dataclass
@@ -67,7 +67,7 @@ class QueuedMessage:
     chat_id: str
     text: str
     max_retries: int = 3
-    callback: Optional[Callable] = None
+    callback: Callable | None = None
     message_type: str = "GENERIC"
 
 
@@ -123,7 +123,7 @@ class TelegramSender:
         client,
         base_delay: float = 0.5,
         event_bus=None,
-        default_chat_id: Optional[str] = None,
+        default_chat_id: str | None = None,
         db=None,
     ):
         self.client = client
@@ -299,7 +299,7 @@ class TelegramSender:
         chat_id: str,
         text: str,
         max_retries: int = 3,
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
         message_type: str = "GENERIC",
     ):
         msg = QueuedMessage(
@@ -329,7 +329,7 @@ class TelegramSender:
         self,
         text: str,
         max_retries: int = 3,
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
         message_type: str = "GENERIC",
     ):
         if not self.default_chat_id:
@@ -420,7 +420,7 @@ class TelegramSender:
             status=status,
         )
 
-    def _format_dutching_signal(self, data: Dict) -> str:
+    def _format_dutching_signal(self, data: dict) -> str:
         event_name = self._escape(data.get("event_name", ""))
         market_name = self._escape(data.get("market_name", ""))
         market_id = self._escape(data.get("market_id", ""))
@@ -458,7 +458,7 @@ class TelegramSender:
 
         return "\n".join(lines)
 
-    def _on_quick_bet_success(self, data: Dict):
+    def _on_quick_bet_success(self, data: dict):
         if data.get("sim", False):
             return
         if not self.default_chat_id:
@@ -485,7 +485,7 @@ class TelegramSender:
         )
         self.queue_default_message(text, message_type="MASTER_SIGNAL_SINGLE")
 
-    def _on_dutching_success(self, data: Dict):
+    def _on_dutching_success(self, data: dict):
         if data.get("sim", False):
             return
         if not self.default_chat_id:
@@ -494,7 +494,7 @@ class TelegramSender:
         text = self._format_dutching_signal(data)
         self.queue_default_message(text, message_type="MASTER_SIGNAL_DUTCHING")
 
-    def _on_cashout_success(self, data: Dict):
+    def _on_cashout_success(self, data: dict):
         if not self.default_chat_id:
             return
 
@@ -511,7 +511,7 @@ class TelegramSender:
     def get_queue_size(self) -> int:
         return self._queue.qsize()
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         return {
             "rate_limiter": self.rate_limiter.get_stats(),
             "queue_size": self.get_queue_size(),
@@ -535,9 +535,9 @@ def get_telegram_sender(
     client=None,
     base_delay: float = 0.5,
     event_bus=None,
-    default_chat_id: Optional[str] = None,
+    default_chat_id: str | None = None,
     db=None,
-) -> Optional[TelegramSender]:
+) -> TelegramSender | None:
     global _global_sender
     if _global_sender is None and client is not None:
         _global_sender = TelegramSender(
@@ -554,7 +554,7 @@ def init_telegram_sender(
     client,
     base_delay: float = 0.5,
     event_bus=None,
-    default_chat_id: Optional[str] = None,
+    default_chat_id: str | None = None,
     db=None,
 ) -> TelegramSender:
     global _global_sender

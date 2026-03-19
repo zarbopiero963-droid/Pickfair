@@ -1,5 +1,5 @@
-from core.trading_engine import TradingEngine
 from circuit_breaker import PermanentError
+from core.trading_engine import TradingEngine
 
 
 class DummyBus:

@@ -1,5 +1,4 @@
 import json
-import threading
 import time
 
 import pytest
@@ -81,7 +80,7 @@ class InstrumentedDB:
         status,
     ):
         if self.raise_on_save_bet:
-            raise IOError("partial write on save_bet")
+            raise OSError("partial write on save_bet")
 
         self.saved_bets.append(
             {
@@ -359,7 +358,7 @@ def test_duplicate_messages_same_payload_should_not_create_two_effects(engine, d
 def test_payload_corruption_is_rejected_by_safety_layer():
     safety = SafetyLayer()
 
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, TypeError)):
         safety.validate_quick_bet_request(
             {
                 "market_id": "1.1",

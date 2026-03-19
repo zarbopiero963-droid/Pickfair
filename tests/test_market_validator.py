@@ -1,4 +1,3 @@
-import pytest
 
 from market_validator import MarketValidator
 

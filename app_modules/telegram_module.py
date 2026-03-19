@@ -270,6 +270,7 @@ class TelegramModule:
         """
 
         def safe_process_signal():
+            nonlocal signal
             signal = signal or {}
 
             action = self._normalize_signal_action(signal)
