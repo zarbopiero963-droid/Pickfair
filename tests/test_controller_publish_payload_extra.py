@@ -79,11 +79,12 @@ def _build_controller(monkeypatch):
 def test_controller_publish_payload_contains_core_runtime_fields(monkeypatch):
     controller, bus = _build_controller(monkeypatch)
 
+    controller.current_event_name = "Juve - Milan"
+    controller.current_market_name = "Match Odds"
+
     res = controller.submit_dutching(
         market_id="1.123",
         market_type="MATCH_ODDS",
-        event_name="Juve - Milan",
-        market_name="Match Odds",
         selections=[
             {"selectionId": 11, "runnerName": "Juve", "price": 2.0},
             {"selectionId": 22, "runnerName": "Milan", "price": 3.0},
