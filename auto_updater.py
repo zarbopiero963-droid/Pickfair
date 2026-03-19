@@ -3,12 +3,15 @@ Auto-Update System for Pickfair
 Checks GitHub releases for new versions and allows one-click updates.
 """
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 import webbrowser
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -31,6 +34,52 @@ def compare_versions(current, latest):
     current_tuple = parse_version(current)
     latest_tuple = parse_version(latest)
     return latest_tuple > current_tuple
+
+
+def _safe_filename_from_url(download_url, fallback="pickfair_update.bin"):
+    """
+    Deriva un filename locale sicuro da una URL.
+    Non si fida del nome remoto.
+    """
+    try:
+        raw_name = download_url.split("/")[-1].split("?")[0].strip()
+    except Exception:
+        raw_name = fallback
+
+    if not raw_name:
+        raw_name = fallback
+
+    raw_name = os.path.basename(raw_name)
+
+    # consenti solo caratteri sicuri
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw_name)
+
+    if not safe or safe in {".", ".."}:
+        safe = fallback
+
+    # limita lunghezza
+    root, ext = os.path.splitext(safe)
+    root = root[:80] if root else "pickfair_update"
+    ext = ext[:10]
+
+    return f"{root}{ext}"
+
+
+def _cmd_safe_path(path):
+    """
+    Escaping minimo per batch Windows:
+    - raddoppia %
+    - mantiene il path tra doppi apici
+    """
+    return str(path).replace("%", "%%")
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def check_for_updates(current_version, callback=None, update_url=None):
@@ -62,10 +111,18 @@ def check_for_updates(current_version, callback=None, update_url=None):
 
             if compare_versions(current_version, latest_version):
                 download_url = None
+                expected_sha256 = None
+
                 for asset in data.get("assets", []):
                     name = asset.get("name", "").lower()
+                    browser_download_url = asset.get("browser_download_url", "")
+
                     if name.endswith(".exe") or name.endswith(".zip"):
-                        download_url = asset.get("browser_download_url")
+                        download_url = browser_download_url
+                    elif "sha256" in name or name.endswith(".sha256"):
+                        expected_sha256 = browser_download_url
+
+                    if download_url:
                         break
 
                 if not download_url:
@@ -79,6 +136,7 @@ def check_for_updates(current_version, callback=None, update_url=None):
                     "release_notes": data.get("body", ""),
                     "release_page": data.get("html_url", ""),
                     "published_at": data.get("published_at", ""),
+                    "sha256_url": expected_sha256,
                 }
 
                 if callback:
@@ -126,8 +184,10 @@ def download_update(download_url, progress_callback=None):
 
         with urlopen(req, timeout=60) as response:
             total_size = int(response.headers.get("content-length", 0))
-            filename = download_url.split("/")[-1]
-            download_path = os.path.join(tempfile.gettempdir(), filename)
+            filename = _safe_filename_from_url(download_url, fallback="pickfair_update.bin")
+
+            unique_name = f"{uuid.uuid4().hex}_{filename}"
+            download_path = os.path.join(tempfile.gettempdir(), unique_name)
 
             downloaded = 0
             chunk_size = 8192
@@ -150,16 +210,40 @@ def download_update(download_url, progress_callback=None):
         return None
 
 
+def verify_download_hash(downloaded_path, expected_sha256=None):
+    """
+    Verifica SHA256 se fornito.
+    Se expected_sha256 non c'è, ritorna True per compatibilità.
+    """
+    if not expected_sha256:
+        return True
+
+    try:
+        actual = _sha256_file(downloaded_path).lower().strip()
+        expected = str(expected_sha256).lower().strip()
+        return actual == expected
+    except Exception:
+        return False
+
+
 def install_update(update_path, current_exe_path=None):
     """
     Install the downloaded update and restart the app.
     For .exe files, replace current exe and restart.
     """
     try:
+        update_path = os.path.abspath(update_path)
+
         if update_path.endswith(".exe") and current_exe_path:
+            current_exe_path = os.path.abspath(current_exe_path)
             backup_path = current_exe_path + ".backup"
 
+            safe_update_path = _cmd_safe_path(update_path)
+            safe_current_exe_path = _cmd_safe_path(current_exe_path)
+            safe_backup_path = _cmd_safe_path(backup_path)
+
             batch_content = f"""@echo off
+setlocal enableextensions
 echo Aggiornamento in corso...
 echo Attendere la chiusura dell'applicazione...
 timeout /t 5 /nobreak > nul
@@ -170,38 +254,46 @@ for /d %%i in ("%TEMP%\\_MEI*") do rd /s /q "%%i" 2>nul
 REM Attendi ancora per sicurezza
 timeout /t 2 /nobreak > nul
 
-if exist "{backup_path}" del /f "{backup_path}"
-if exist "{current_exe_path}" move /y "{current_exe_path}" "{backup_path}"
-move /y "{update_path}" "{current_exe_path}"
+if exist "{safe_backup_path}" del /f /q "{safe_backup_path}"
+if exist "{safe_current_exe_path}" move /y "{safe_current_exe_path}" "{safe_backup_path}"
+move /y "{safe_update_path}" "{safe_current_exe_path}"
 
-if exist "{current_exe_path}" (
+if exist "{safe_current_exe_path}" (
     echo Avvio nuova versione...
     timeout /t 2 /nobreak > nul
-    start "" "{current_exe_path}"
+    start "" "{safe_current_exe_path}"
     timeout /t 5 /nobreak > nul
-    if exist "{backup_path}" del /f "{backup_path}"
+    if exist "{safe_backup_path}" del /f /q "{safe_backup_path}"
 ) else (
     echo Errore aggiornamento, ripristino backup...
-    if exist "{backup_path}" move /y "{backup_path}" "{current_exe_path}"
+    if exist "{safe_backup_path}" move /y "{safe_backup_path}" "{safe_current_exe_path}"
 )
+
 del "%~f0"
+endlocal
 """
 
-            batch_path = os.path.join(tempfile.gettempdir(), "pickfair_update.bat")
-            with open(batch_path, "w", encoding="utf-8") as f:
+            batch_name = f"pickfair_update_{uuid.uuid4().hex}.bat"
+            batch_path = os.path.join(tempfile.gettempdir(), batch_name)
+
+            with open(batch_path, "w", encoding="utf-8", newline="\r\n") as f:
                 f.write(batch_content)
 
             create_no_window = 0x08000000
-            subprocess.Popen(["cmd", "/c", batch_path], creationflags=create_no_window)
+            subprocess.Popen(
+                ["cmd.exe", "/c", batch_path],
+                creationflags=create_no_window,
+                shell=False,
+            )
             return True
 
         if update_path.endswith(".exe"):
-            subprocess.Popen([update_path], shell=True)
+            subprocess.Popen([update_path], shell=False)
             return True
 
         folder = os.path.dirname(update_path)
         if sys.platform == "win32":
-            subprocess.run(["explorer", folder], check=False)
+            subprocess.run(["explorer", folder], check=False, shell=False)
         return True
 
     except Exception as e:
@@ -265,7 +357,6 @@ class _AutoUpdaterFacade:
         return install_update(update_path, current_exe_path=current_exe_path)
 
 
-# Runtime alias for backward compatibility.
 AutoUpdater = _AutoUpdaterFacade
 
 
