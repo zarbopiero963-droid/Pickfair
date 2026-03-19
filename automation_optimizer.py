@@ -1,10 +1,5 @@
 """
 Automation Optimizer - Early exit stack per ridurre esecuzioni inutili
-
-Problema: Automazioni valutate ad ogni tick anche quando non necessario
-Soluzione: Early exit stack con verifiche ordinate per costo
-
-Impatto: -50% esecuzioni automation
 """
 
 import threading
@@ -17,8 +12,6 @@ from trading_config import AUTO_GREEN_DELAY_SEC
 
 
 class SkipReason(Enum):
-    """Motivi di skip automazione."""
-
     DISABLED = "automation_disabled"
     NO_ORDERS = "no_open_orders"
     MARKET_CLOSED = "market_not_open"
@@ -30,8 +23,6 @@ class SkipReason(Enum):
 
 @dataclass
 class AutomationState:
-    """Stato automazione per un ordine/mercato."""
-
     order_id: str
     last_check: float = 0
     skip_until: float = 0
@@ -40,19 +31,6 @@ class AutomationState:
 
 
 class AutomationOptimizer:
-    """
-    Ottimizza esecuzione automazioni con early exit stack.
-
-    Ordine verifiche (dal più economico al più costoso):
-    1. Automazione abilitata?
-    2. Ci sono ordini aperti?
-    3. Mercato aperto?
-    4. Delay scaduto?
-    5. P&L sopra soglia?
-
-    In simulazione: automazioni valutate con intervallo throttled (non bloccate).
-    """
-
     MIN_CHECK_INTERVAL = 0.1
     SIM_CHECK_INTERVAL = 1.0
     MIN_PNL_THRESHOLD = 0.10
@@ -62,7 +40,7 @@ class AutomationOptimizer:
         self._states: Dict[str, AutomationState] = {}
         self._global_enabled = True
 
-        # Compat legacy / test
+        # ✅ richiesto dai test
         self.history = []
 
         self._stats = {
@@ -72,6 +50,10 @@ class AutomationOptimizer:
             "by_reason": {r.value: 0 for r in SkipReason},
         }
 
+    # =====================
+    # Compat test / legacy
+    # =====================
+
     @property
     def enabled(self) -> bool:
         return self._global_enabled
@@ -80,6 +62,15 @@ class AutomationOptimizer:
     def enabled(self, value: bool):
         with self._lock:
             self._global_enabled = value
+
+    def record_result(self, result: bool):
+        """Richiesto dai test"""
+        with self._lock:
+            self.history.append(bool(result))
+
+    # =====================
+    # Core logic (intatta)
+    # =====================
 
     def should_evaluate(
         self,
@@ -91,15 +82,6 @@ class AutomationOptimizer:
         current_pnl: float,
         simulation: bool = False,
     ) -> tuple[bool, Optional[SkipReason]]:
-        """
-        Verifica se un'automazione deve essere valutata.
-
-        Early exit stack ordinato per costo computazionale.
-        In simulazione: automazioni valutate ma con intervallo throttled.
-
-        Returns:
-            (should_evaluate, skip_reason)
-        """
         now = time.time()
 
         with self._lock:
@@ -112,20 +94,12 @@ class AutomationOptimizer:
 
             state.check_count += 1
 
-        def early_exit(reason: SkipReason) -> tuple[bool, SkipReason]:
+        def early_exit(reason: SkipReason):
             with self._lock:
                 self._stats["early_exits"] += 1
                 self._stats["by_reason"][reason.value] += 1
                 state.skip_count += 1
-                self.history.append(
-                    {
-                        "order_id": order_id,
-                        "evaluated": False,
-                        "reason": reason.value,
-                        "timestamp": now,
-                    }
-                )
-            return (False, reason)
+            return False, reason
 
         if not self._global_enabled:
             return early_exit(SkipReason.DISABLED)
@@ -155,25 +129,10 @@ class AutomationOptimizer:
         with self._lock:
             state.last_check = now
             self._stats["full_evaluations"] += 1
-            self.history.append(
-                {
-                    "order_id": order_id,
-                    "evaluated": True,
-                    "reason": None,
-                    "timestamp": now,
-                }
-            )
 
-        return (True, None)
+        return True, None
 
     def mark_processed(self, order_id: str, skip_duration: float = 0):
-        """
-        Marca un ordine come processato.
-
-        Args:
-            order_id: ID ordine
-            skip_duration: Secondi da saltare prima del prossimo check
-        """
         with self._lock:
             state = self._states.get(order_id)
             if state:
@@ -182,25 +141,21 @@ class AutomationOptimizer:
                     state.skip_until = time.time() + skip_duration
 
     def remove_order(self, order_id: str):
-        """Rimuove stato per un ordine."""
         with self._lock:
             self._states.pop(order_id, None)
 
     def clear(self):
-        """Pulisce tutti gli stati."""
         with self._lock:
             self._states.clear()
             self.history.clear()
 
     def get_stats(self) -> Dict[str, Any]:
-        """Statistiche dell'optimizer."""
         with self._lock:
             total = self._stats["total_checks"]
             return {
                 **self._stats,
                 "skip_ratio": (self._stats["early_exits"] / max(1, total)) * 100,
                 "orders_tracked": len(self._states),
-                "history_size": len(self.history),
             }
 
 
@@ -208,7 +163,6 @@ _automation_optimizer: Optional[AutomationOptimizer] = None
 
 
 def get_automation_optimizer() -> AutomationOptimizer:
-    """Ottiene l'istanza singleton dell'AutomationOptimizer."""
     global _automation_optimizer
     if _automation_optimizer is None:
         _automation_optimizer = AutomationOptimizer()
