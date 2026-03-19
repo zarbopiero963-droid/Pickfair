@@ -64,7 +64,13 @@ jobs:
           print("telegram_controller.py exists =", os.path.isfile("telegram_controller.py"))
           print("core/tick_dispatcher.py exists =", os.path.isfile("core/tick_dispatcher.py"))
           print("core/market_tracker.py exists =", os.path.isfile("core/market_tracker.py"))
+          print("guardrails/public_api_snapshot.json exists =", os.path.isfile("guardrails/public_api_snapshot.json"))
+          print("guardrails/allowed_dependencies.json exists =", os.path.isfile("guardrails/allowed_dependencies.json"))
           PY
+
+      - name: Update public API snapshot in workspace
+        run: |
+          python tools/repo_guardrail.py snapshot-api
 
       - name: Compile all Python files
         run: |
