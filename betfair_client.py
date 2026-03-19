@@ -1310,4 +1310,3 @@ class BetfairClient:
                 "sizeMatched": 0,
                 "averagePriceMatched": None,
             }
-```
