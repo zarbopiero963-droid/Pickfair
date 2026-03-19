@@ -6,7 +6,7 @@ Gestisce l'automazione, gli stop loss e previene double-triggers.
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger("AUTO_ENGINE")
 
@@ -18,6 +18,15 @@ class AutomationEngine:
         self._last_action_time = {}
         self._cooldown_ms = 1500
         self._global_lock = threading.Lock()
+        self.running = False
+
+    def start(self):
+        """Compatibilità legacy."""
+        self.running = True
+
+    def stop(self):
+        """Compatibilità legacy."""
+        self.running = False
 
     def _is_on_cooldown(self, market_id: str) -> bool:
         """Verifica se il mercato è in cooldown per evitare double triggers."""
