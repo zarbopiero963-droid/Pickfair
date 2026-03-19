@@ -21,15 +21,17 @@ class CircuitBreaker:
         failure_threshold: int | None = None,
         max_failures: int | None = None,
         recovery_timeout: int | float | None = None,
+        recovery_time: int | float | None = None,
         reset_timeout: int | float = 30,
     ):
         """
         Circuit breaker compatibile con naming legacy e attuale.
 
         Supporta:
-        - failure_threshold (atteso dai test)
-        - max_failures (usato dal codice attuale)
+        - failure_threshold
+        - max_failures
         - recovery_timeout
+        - recovery_time
         - reset_timeout
         """
         if failure_threshold is not None:
@@ -39,7 +41,9 @@ class CircuitBreaker:
         else:
             self.max_failures = 3
 
-        if recovery_timeout is not None:
+        if recovery_time is not None:
+            self.reset_timeout = float(recovery_time)
+        elif recovery_timeout is not None:
             self.reset_timeout = float(recovery_timeout)
         else:
             self.reset_timeout = float(reset_timeout)
