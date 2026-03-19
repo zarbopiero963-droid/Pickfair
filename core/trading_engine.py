@@ -20,15 +20,31 @@ import logging
 import threading
 import time
 import uuid
+from enum import Enum
 
 from circuit_breaker import PermanentError
 
 logger = logging.getLogger(__name__)
 
 
+class MicroStakePhase(Enum):
+    """Stati del micro-stake workflow."""
+    PREPARED = "PREPARED"
+    STUB_PLACED = "STUB_PLACED"
+    STUB_REDUCED = "STUB_REDUCED"
+    STUB_REPLACED = "STUB_REPLACED"
+    ROLLBACK_PENDING = "ROLLBACK_PENDING"
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
+    ROLLED_BACK = "ROLLED_BACK"
+
+
 class TradingEngine:
     MIN_EXCHANGE_STAKE = 2.0
     MICRO_MIN_STAKE = 0.10
+    
+    # Retry config per cleanup stub
+    MAX_CLEANUP_RETRIES = 3
+    CLEANUP_RETRY_DELAY = 2.0
 
     def __init__(self, bus, db, client_getter, executor):
         self.bus = bus
@@ -45,6 +61,7 @@ class TradingEngine:
         self.bus.subscribe("CMD_EXECUTE_CASHOUT", self._handle_cashout)
         self.bus.subscribe("STATE_UPDATE_SAFE_MODE", self._toggle_kill_switch)
         self.bus.subscribe("CLIENT_CONNECTED", lambda _: self._recover_pending_sagas())
+        self.bus.subscribe("CLIENT_CONNECTED", lambda _: self._cleanup_orphan_stubs())
 
     # =========================================================
     # BASIC INTERNALS
@@ -133,29 +150,37 @@ class TradingEngine:
 
         return abs(price - 1.01) < 0.0001 or abs(price - 1000.0) < 0.0001
 
-    def _cancel_stub_orders(self, client, market_id, recovered_reports):
+    def _cancel_stub_orders(self, client, market_id, recovered_reports, force=False):
         stub_orders = [
             order
             for order in (recovered_reports or [])
-            if self._is_stub_micro_order(order)
+            if force or self._is_stub_micro_order(order)
         ]
         if not stub_orders:
-            return False
+            return True, []
 
         instructions = []
         for order in stub_orders:
-            bet_id = order.get("betId")
+            # FIX: supporta anche bet_id (snake_case)
+            bet_id = order.get("betId") or order.get("bet_id")
             if bet_id:
                 instructions.append({"betId": str(bet_id)})
 
         if not instructions:
-            return False
+            return True, []
 
-        logger.warning(
-            "[Recovery] Trovati %s stub micro-stake su market_id=%s. Cleanup automatico.",
-            len(instructions),
-            market_id,
-        )
+        if not force:
+            logger.warning(
+                "[Recovery] Trovati %s stub micro-stake su market_id=%s. Cleanup automatico.",
+                len(instructions),
+                market_id,
+            )
+        else:
+            logger.warning(
+                "[Recovery] Force cleanup di %s ordini su market_id=%s.",
+                len(instructions),
+                market_id,
+            )
 
         try:
             self._call_cancel_orders(
@@ -163,14 +188,14 @@ class TradingEngine:
                 market_id=market_id,
                 instructions=instructions,
             )
-            return True
+            return True, [i["betId"] for i in instructions]
         except Exception as e:
             logger.error(
                 "[Recovery] Cleanup stub fallito su market_id=%s: %s",
                 market_id,
                 e,
             )
-            return False
+            return False, []
 
     # =========================================================
     # SAGA PAYLOAD HELPERS
@@ -185,35 +210,39 @@ class TradingEngine:
         if not customer_ref or not isinstance(patch, dict):
             return False
 
-        try:
-            updater = getattr(self.db, "update_pending_saga_payload", None)
-            if callable(updater):
-                updater(customer_ref, patch)
-                return True
-        except Exception:
-            logger.exception(
-                "[Saga] update_pending_saga_payload fallita customer_ref=%s",
-                customer_ref,
-            )
-
-        try:
-            updater = getattr(self.db, "update_saga_payload", None)
-            if callable(updater):
-                updater(customer_ref, patch)
-                return True
-        except Exception:
-            logger.exception(
-                "[Saga] update_saga_payload fallita customer_ref=%s",
-                customer_ref,
-            )
+        for method_name in [
+            "update_pending_saga_payload",
+            "update_saga_payload", 
+            "update_saga"
+        ]:
+            try:
+                updater = getattr(self.db, method_name, None)
+                if callable(updater):
+                    updater(customer_ref, patch)
+                    return True
+            except Exception:
+                pass
 
         return False
 
     def _extract_micro_state(self, payload):
+        """Estrae __micro_state in modo robusto, gestendo sia dict che stringa JSON."""
         if not isinstance(payload, dict):
             return {}
+
         data = payload.get("__micro_state")
-        return data if isinstance(data, dict) else {}
+
+        if isinstance(data, dict):
+            return data
+
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+
+        return {}
 
     def _patch_micro_state(
         self,
@@ -239,7 +268,10 @@ class TradingEngine:
         state = dict(self._extract_micro_state(payload))
 
         if phase is not None:
-            state["phase"] = phase
+            try:
+                state["phase"] = MicroStakePhase(phase).value
+            except ValueError:
+                state["phase"] = phase
         if stub_bet_id is not None:
             state["stub_bet_id"] = str(stub_bet_id) if stub_bet_id else ""
         if replaced_bet_id is not None:
@@ -262,8 +294,11 @@ class TradingEngine:
             state["market_id"] = str(market_id)
         if side is not None:
             state["side"] = str(side).upper()
+            
+        state["updated_at"] = time.time()
 
         payload["__micro_state"] = state
+        
         self._safe_update_saga_payload(customer_ref, {"__micro_state": state})
 
     def _extract_recovery_bet_ids(self, payload):
@@ -285,6 +320,22 @@ class TradingEngine:
                 seen.add(bet_id)
                 unique.append(bet_id)
         return unique
+    
+    def _get_all_pending_stub_bet_ids(self):
+        """Estrae tutti i stub_bet_id dalle saghe pendenti."""
+        bet_ids = set()
+        try:
+            pending = getattr(self.db, "get_pending_sagas", lambda: [])()
+            for saga in (pending or []):
+                raw_payload = saga.get("raw_payload", "{}")
+                try:
+                    payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+                except Exception:
+                    payload = {}
+                bet_ids.update(self._extract_recovery_bet_ids(payload))
+        except Exception:
+            logger.exception("[Engine] Errore recupero stub bet_ids")
+        return bet_ids
 
     # =========================================================
     # RESPONSE / CLIENT NORMALIZATION
@@ -449,31 +500,147 @@ class TradingEngine:
         }
 
     def _force_cancel_known_stub(self, client, market_id, payload):
+        """Forza cancel di stub noto, con retry."""
         micro_state = self._extract_micro_state(payload)
         stub_bet_id = micro_state.get("stub_bet_id")
         if not stub_bet_id:
             return False
 
-        try:
-            self._call_cancel_orders(
-                client=client,
-                market_id=market_id,
-                instructions=[self._build_cancel_instruction(stub_bet_id)],
-            )
+        for attempt in range(self.MAX_CLEANUP_RETRIES):
+            try:
+                self._call_cancel_orders(
+                    client=client,
+                    market_id=market_id,
+                    instructions=[self._build_cancel_instruction(stub_bet_id)],
+                )
+                logger.warning(
+                    "[Recovery] Cancel esplicito stub_bet_id=%s market_id=%s eseguito (attempt %s).",
+                    stub_bet_id,
+                    market_id,
+                    attempt + 1,
+                )
+                return True
+            except Exception as e:
+                logger.warning(
+                    "[Recovery] Cancel esplicito stub_bet_id=%s fallito (attempt %s/%s): %s",
+                    stub_bet_id,
+                    attempt + 1,
+                    self.MAX_CLEANUP_RETRIES,
+                    e,
+                )
+                if attempt < self.MAX_CLEANUP_RETRIES - 1:
+                    time.sleep(self.CLEANUP_RETRY_DELAY)
+                    
+        logger.critical(
+            "[Recovery] CANCEL DEFINITIVAMENTE FALLITO stub_bet_id=%s market_id=%s",
+            stub_bet_id,
+            market_id,
+        )
+        self._publish_orphan_stub_alarm(stub_bet_id, market_id, str(micro_state))
+        return False
+    
+    def _publish_orphan_stub_alarm(self, bet_id, market_id, micro_state):
+        """Pubblica allarme per stub orfano irrecuperabile."""
+        self.bus.publish(
+            "ORPHAN_STUB_ALARM",
+            {
+                "bet_id": bet_id,
+                "market_id": market_id,
+                "micro_state": micro_state,
+                "timestamp": time.time(),
+                "severity": "CRITICAL",
+            },
+        )
+        logger.critical(
+            "[ALARM] ORPHAN STUB bet_id=%s market_id=%s - INTERVENTO MANUALE RICHIESTO!",
+            bet_id,
+            market_id,
+        )
+
+    def _cleanup_orphan_stubs(self):
+        """
+        Cleanup asincrono di tutti gli stub orfani.
+        Chiamato al riavvio dopo CLIENT_CONNECTED.
+        """
+        def task():
+            client = self.client_getter()
+            if not client:
+                return
+                
+            pending_stub_ids = self._get_all_pending_stub_bet_ids()
+            if not pending_stub_ids:
+                return
+                
             logger.warning(
-                "[Recovery] Cancel esplicito stub_bet_id=%s market_id=%s eseguito.",
-                stub_bet_id,
-                market_id,
+                "[Cleanup] Avvio cleanup stub orfani. BetIDs: %s",
+                list(pending_stub_ids),
             )
-            return True
-        except Exception as e:
-            logger.error(
-                "[Recovery] Cancel esplicito stub_bet_id=%s market_id=%s fallito: %s",
-                stub_bet_id,
-                market_id,
-                e,
+            
+            try:
+                orders = client.get_current_orders()
+                current_orders = (
+                    orders.get("currentOrders", [])
+                    or orders.get("current_orders", [])
+                    or orders.get("unmatched", [])
+                    or []
+                )
+            except Exception as e:
+                logger.error("[Cleanup] Errore recupero ordini: %s", e)
+                return
+            
+            orphan_stubs = []
+            for order in current_orders:
+                bet_id = str(order.get("betId", "") or order.get("bet_id", ""))
+                if bet_id in pending_stub_ids and self._is_stub_micro_order(order):
+                    orphan_stubs.append(order)
+            
+            if not orphan_stubs:
+                logger.info("[Cleanup] Nessuno stub orfano trovato.")
+                return
+            
+            logger.warning("[Cleanup] Trovati %s stub orfani da pulire.", len(orphan_stubs))
+            
+            market_ids = set()
+            for stub in orphan_stubs:
+                market_id = stub.get("marketId", "")
+                if market_id:
+                    market_ids.add(market_id)
+                    
+            for market_id in market_ids:
+                stubs_in_market = [
+                    o for o in orphan_stubs 
+                    if str(o.get("marketId", "")) == str(market_id)
+                ]
+                # FIX: supporta anche bet_id (snake_case)
+                instructions = [
+                    {"betId": str(o.get("betId") or o.get("bet_id") or "")}
+                    for o in stubs_in_market
+                    if (o.get("betId") or o.get("bet_id"))
+                ]
+                
+                try:
+                    self._call_cancel_orders(
+                        client=client,
+                        market_id=market_id,
+                        instructions=instructions,
+                    )
+                    logger.info("[Cleanup] Cleanup completato per market_id=%s", market_id)
+                except Exception as e:
+                    logger.error(
+                        "[Cleanup] Cleanup fallito per market_id=%s: %s",
+                        market_id,
+                        e,
+                    )
+                    for stub in stubs_in_market:
+                        bet_id = stub.get("betId") or stub.get("bet_id") or "UNKNOWN"
+                        self._publish_orphan_stub_alarm(bet_id, market_id, "CLEANUP_FAILED")
+            
+            self.bus.publish(
+                "ORPHAN_STUB_CLEANUP_COMPLETE",
+                {"cleaned": len(orphan_stubs), "timestamp": time.time()},
             )
-            return False
+        
+        self.executor.submit("stub_cleanup", task)
 
     def _execute_micro_stake(
         self,
@@ -501,7 +668,7 @@ class TradingEngine:
             self._patch_micro_state(
                 customer_ref,
                 saga_payload,
-                phase="PREPARED",
+                phase=MicroStakePhase.PREPARED,
                 rollback_pending=False,
                 rollback_error="",
                 stub_price=stub_price,
@@ -541,7 +708,7 @@ class TradingEngine:
             self._patch_micro_state(
                 customer_ref,
                 saga_payload,
-                phase="STUB_PLACED",
+                phase=MicroStakePhase.STUB_PLACED,
                 stub_bet_id=bet_id,
                 rollback_pending=False,
                 rollback_error="",
@@ -567,7 +734,7 @@ class TradingEngine:
                 self._patch_micro_state(
                     customer_ref,
                     saga_payload,
-                    phase="STUB_REDUCED",
+                    phase=MicroStakePhase.STUB_REDUCED,
                     stub_bet_id=bet_id,
                     rollback_pending=False,
                     rollback_error="",
@@ -596,7 +763,7 @@ class TradingEngine:
                 self._patch_micro_state(
                     customer_ref,
                     saga_payload,
-                    phase="STUB_REPLACED",
+                    phase=MicroStakePhase.STUB_REPLACED,
                     stub_bet_id=bet_id,
                     replaced_bet_id=final_bet_id,
                     rollback_pending=False,
@@ -618,46 +785,65 @@ class TradingEngine:
                 self._patch_micro_state(
                     customer_ref,
                     saga_payload,
-                    phase="ROLLBACK_PENDING",
+                    phase=MicroStakePhase.ROLLBACK_PENDING,
                     stub_bet_id=bet_id,
                     rollback_pending=True,
                     rollback_error=str(micro_error),
                 )
 
-            try:
-                self._call_cancel_orders(
-                    client=client,
-                    market_id=market_id,
-                    instructions=[self._build_cancel_instruction(bet_id)],
-                )
+            cleanup_success = False
+            for attempt in range(self.MAX_CLEANUP_RETRIES):
+                try:
+                    self._call_cancel_orders(
+                        client=client,
+                        market_id=market_id,
+                        instructions=[self._build_cancel_instruction(bet_id)],
+                    )
+                    cleanup_success = True
+                    logger.info(
+                        "[MicroStake] Rollback ok bet_id=%s market_id=%s (attempt %s)",
+                        bet_id,
+                        market_id,
+                        attempt + 1,
+                    )
+                    break
+                except Exception as rollback_error:
+                    logger.warning(
+                        "[MicroStake] Rollback attempt %s/%s fallito: %s",
+                        attempt + 1,
+                        self.MAX_CLEANUP_RETRIES,
+                        rollback_error,
+                    )
+                    if attempt < self.MAX_CLEANUP_RETRIES - 1:
+                        time.sleep(self.CLEANUP_RETRY_DELAY * (attempt + 1))
 
+            if cleanup_success:
                 if saga_payload is not None:
                     self._patch_micro_state(
                         customer_ref,
                         saga_payload,
-                        phase="ROLLED_BACK",
+                        phase=MicroStakePhase.ROLLED_BACK,
                         stub_bet_id=bet_id,
                         rollback_pending=False,
                         rollback_error="",
                     )
-
-            except Exception as rollback_error:
+            else:
+                logger.critical(
+                    "[MicroStake] ROLLBACK DEFINITIVAMENTE FALLITO bet_id=%s market_id=%s",
+                    bet_id,
+                    market_id,
+                )
                 if saga_payload is not None:
                     self._patch_micro_state(
                         customer_ref,
                         saga_payload,
-                        phase="ROLLBACK_FAILED",
+                        phase=MicroStakePhase.ROLLBACK_FAILED,
                         stub_bet_id=bet_id,
                         rollback_pending=True,
-                        rollback_error=str(rollback_error),
+                        rollback_error="MAX_RETRIES_EXCEEDED",
                     )
-
-                logger.critical(
-                    "[MicroStake] Rollback fallito bet_id=%s market_id=%s err=%s",
-                    bet_id,
-                    market_id,
-                    rollback_error,
-                )
+                self._publish_orphan_stub_alarm(bet_id, market_id, str(micro_error))
+                
             raise
 
     # =========================================================
@@ -685,7 +871,7 @@ class TradingEngine:
                 raw_payload = saga.get("raw_payload", "{}")
 
                 try:
-                    payload = json.loads(raw_payload)
+                    payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
                 except Exception:
                     payload = {}
 
@@ -718,12 +904,13 @@ class TradingEngine:
                     )
                     continue
 
-                cleaned_stub = self._cancel_stub_orders(
+                # FIX: usa unpack corretto della tupla
+                cleaned_stub_ok, _cleaned_ids = self._cancel_stub_orders(
                     client,
                     market_id,
                     recovered_reports,
                 )
-                if cleaned_stub:
+                if cleaned_stub_ok:
                     _, recovered_reports = self._reconcile_orders(
                         client,
                         market_id,
