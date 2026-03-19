@@ -132,6 +132,17 @@ def _install_ui_and_external_stubs():
     ttk.Scrollbar = DummyScrollbar
     sys.modules["tkinter.ttk"] = ttk
 
+    messagebox = types.ModuleType("tkinter.messagebox")
+    messagebox.showinfo = lambda *a, **kw: None
+    messagebox.showwarning = lambda *a, **kw: None
+    messagebox.showerror = lambda *a, **kw: None
+    messagebox.askyesno = lambda *a, **kw: True
+    messagebox.askokcancel = lambda *a, **kw: True
+    messagebox.askquestion = lambda *a, **kw: "yes"
+    messagebox.askretrycancel = lambda *a, **kw: True
+    sys.modules["tkinter.messagebox"] = messagebox
+    tk.messagebox = messagebox
+
     if "telethon" not in sys.modules:
         telethon_mod = types.ModuleType("telethon")
         telethon_mod.TelegramClient = object
