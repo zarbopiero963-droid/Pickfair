@@ -1,0 +1,20 @@
+{
+  "allowed_dependencies": [
+    "ai",
+    "app_modules",
+    "controllers",
+    "core",
+    "database",
+    "dutching",
+    "event_bus",
+    "telegram_listener",
+    "telegram_sender",
+    "theme",
+    "utils",
+
+    "core.market_tracker",
+    "core.tick_dispatcher",
+    "safe_mode_manager",
+    "telegram_controller"
+  ]
+}
