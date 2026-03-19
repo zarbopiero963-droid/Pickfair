@@ -6,8 +6,7 @@ Non esegue ordini direttamente.
 Pubblica soltanto intenti REQ_QUICK_BET sull'EventBus.
 """
 
-import tkinter as tk
-from tkinter import messagebox
+from ui.tk_safe import tk, messagebox
 
 import customtkinter as ctk
 
@@ -212,4 +211,3 @@ class MiniLadder(ctk.CTkFrame):
                 )
             else:
                 self.btn_lay.configure(text="-", command=lambda: None)
-
