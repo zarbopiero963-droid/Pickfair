@@ -17,29 +17,29 @@ import betfairlightweight
 from betfairlightweight import filters
 from betfairlightweight.streaming import StreamListener
 
-# Import Circuit Breaker (ensure circuit_breaker.py exists in same package)
+# --- HEDGE-FUND STABLE FIX ---
 from circuit_breaker import CircuitBreaker
 
-# -------------------------------------------------------------------------
-# Custom exception for transient (retry‑able) errors
-# -------------------------------------------------------------------------
+# -----------------------------
+
+logger = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0  # seconds
+
+# Transient Error Class
 class TransientError(Exception):
     """Errore temporaneo/retriable lato rete, SDK o integrazione."""
     pass
 
-logger = logging.getLogger(__name__)
-
-# -----------------------------
-# Retry configuration
-# -----------------------------
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0  # seconds
 
 def with_retry(func):
     """
     Decorator to add retry logic for IDEMPOTENT API calls.
     NOTE: Do NOT use this decorator on non-idempotent operations like place_orders or replace_orders!
     """
+
     def wrapper(*args, **kwargs):
         last_error = None
         for attempt in range(MAX_RETRIES):
@@ -59,11 +59,10 @@ def with_retry(func):
                 # Don't retry on other errors
                 raise
         raise last_error
+
     return wrapper
 
-# -------------------------------------------------------------------------
-# Constants
-# -------------------------------------------------------------------------
+
 FOOTBALL_ID = "1"
 
 MARKET_TYPES = {
@@ -114,9 +113,7 @@ MARKET_TYPES = {
     "SENDING_OFF": "Espulsione",
 }
 
-# -------------------------------------------------------------------------
-# Streaming Listener
-# -------------------------------------------------------------------------
+
 class PriceStreamListener(StreamListener):
     """Custom listener for processing streaming price updates."""
 
@@ -151,9 +148,7 @@ class PriceStreamListener(StreamListener):
         except Exception as e:
             print(f"Stream data error: {e}")
 
-# -------------------------------------------------------------------------
-# Betfair Client
-# -------------------------------------------------------------------------
+
 class BetfairClient:
     def __init__(self, username, app_key, cert_pem, key_pem):
         # Aggressive cleaning of all string values to remove newlines/whitespace
@@ -175,9 +170,6 @@ class BetfairClient:
         # Ensure certs are cleaned up if process exits unexpectedly
         atexit.register(self._cleanup_temp_files)
 
-    # -------------------------------------------------------------------------
-    # Helper methods
-    # -------------------------------------------------------------------------
     @staticmethod
     def _clean_string(value):
         """Remove all whitespace, newlines, and control characters from a string."""
@@ -213,9 +205,6 @@ class BetfairClient:
             finally:
                 self.temp_certs_dir = None
 
-    # -------------------------------------------------------------------------
-    # Authentication
-    # -------------------------------------------------------------------------
     def login(self, password):
         """
         Login to Betfair Italy using SSL certificate authentication.
@@ -270,14 +259,11 @@ class BetfairClient:
         if self.client:
             try:
                 self.client.logout()
-            except Exception:
+            except:
                 pass
         self._cleanup_temp_files()
         self.client = None
 
-    # -------------------------------------------------------------------------
-    # Account
-    # -------------------------------------------------------------------------
     @with_retry
     def get_account_funds(self):
         """Get account balance."""
@@ -291,9 +277,6 @@ class BetfairClient:
             "total": account.available_to_bet_balance + abs(account.exposure),
         }
 
-    # -------------------------------------------------------------------------
-    # Events & Markets
-    # -------------------------------------------------------------------------
     @with_retry
     def get_football_events(self, include_inplay=True):
         """Get upcoming and in-play football events."""
@@ -320,7 +303,7 @@ class BetfairClient:
                         event_type_ids=[FOOTBALL_ID], in_play_only=True
                     )
                 )
-            except Exception:
+            except:
                 pass
 
         # Combine events (avoid duplicates)
@@ -504,9 +487,6 @@ class BetfairClient:
             "inPlay": is_inplay,
         }
 
-    # -------------------------------------------------------------------------
-    # Market data helpers
-    # -------------------------------------------------------------------------
     def get_market_book(self, market_id):
         """Get current market prices (for refreshing best prices before placing bets)."""
         if not self.client:
@@ -565,9 +545,6 @@ class BetfairClient:
 
         return self.get_market_with_prices(markets[0].market_id)
 
-    # -------------------------------------------------------------------------
-    # Streaming
-    # -------------------------------------------------------------------------
     def start_streaming(self, market_ids, price_callback):
         """
         Start streaming price updates for specified markets.
@@ -618,7 +595,7 @@ class BetfairClient:
         if self.stream:
             try:
                 self.stream.stop()
-            except Exception:
+            except:
                 pass
             self.stream = None
         self.stream_thread = None
@@ -627,9 +604,15 @@ class BetfairClient:
         """Check if streaming is active."""
         return self.streaming_active and self.stream is not None
 
-    # -------------------------------------------------------------------------
-    # Order Management – place_bets (transient‑error wrapper)
-    # -------------------------------------------------------------------------
+    def place_bet(
+        self, market_id, selection_id, side, price, size, persistence_type="LAPSE"
+    ):
+        """Place a single bet on Betfair."""
+        instructions = [
+            {"selectionId": selection_id, "side": side, "price": price, "size": size}
+        ]
+        return self.place_bets(market_id, instructions)
+
     def place_bets(self, market_id, instructions):
         """
         Place bets on Betfair. Protected by Circuit Breaker.
@@ -639,32 +622,55 @@ class BetfairClient:
             raise Exception("Non connesso a Betfair")
 
         try:
+            limit_order_factory = getattr(filters, "limit_order", None)
+            place_instruction_factory = getattr(filters, "place_instruction", None)
+
             limit_orders = []
             for inst in instructions:
-                limit_orders.append(
-                    betfairlightweight.filters.limit_order(
-                        size=inst["size"],
-                        price=inst["price"],
-                        persistence_type="LAPSE",
+                if callable(limit_order_factory):
+                    limit_orders.append(
+                        limit_order_factory(
+                            size=inst["size"],
+                            price=inst["price"],
+                            persistence_type="LAPSE",
+                        )
                     )
-                )
+                else:
+                    limit_orders.append(
+                        {
+                            "size": inst["size"],
+                            "price": inst["price"],
+                            "persistence_type": "LAPSE",
+                        }
+                    )
 
             place_instructions = []
             for i, inst in enumerate(instructions):
-                place_instructions.append(
-                    betfairlightweight.filters.place_instruction(
-                        selection_id=inst["selectionId"],
-                        side=inst["side"],
-                        order_type="LIMIT",
-                        limit_order=limit_orders[i],
+                if callable(place_instruction_factory):
+                    place_instructions.append(
+                        place_instruction_factory(
+                            selection_id=inst["selectionId"],
+                            side=inst["side"],
+                            order_type="LIMIT",
+                            limit_order=limit_orders[i],
+                        )
                     )
-                )
+                else:
+                    place_instructions.append(
+                        {
+                            "selection_id": inst["selectionId"],
+                            "side": inst["side"],
+                            "order_type": "LIMIT",
+                            "limit_order": limit_orders[i],
+                        }
+                    )
 
             result = self._cb.call(
                 self.client.betting.place_orders,
                 market_id=market_id,
                 instructions=place_instructions,
             )
+
         except TransientError:
             raise
         except Exception as e:
@@ -701,9 +707,46 @@ class BetfairClient:
             "instructionReports": reports,
         }
 
-    # -------------------------------------------------------------------------
-    # Order Management – cancel_orders (transient‑error wrapper)
-    # -------------------------------------------------------------------------
+    @with_retry
+    def get_current_orders(self, market_ids=None):
+        """Get current unmatched and partially matched orders."""
+        if not self.client:
+            raise Exception("Non connesso a Betfair")
+
+        order_filter = {}
+        if market_ids:
+            order_filter["market_ids"] = market_ids
+
+        orders = self.client.betting.list_current_orders(**order_filter)
+
+        result = {"matched": [], "unmatched": [], "partiallyMatched": []}
+
+        for order in orders.orders if orders.orders else []:
+            order_data = {
+                "betId": order.bet_id,
+                "marketId": order.market_id,
+                "selectionId": order.selection_id,
+                "side": order.side,
+                "price": order.price_size.price if order.price_size else None,
+                "size": order.price_size.size if order.price_size else None,
+                "sizeMatched": order.size_matched,
+                "sizeRemaining": order.size_remaining,
+                "averagePriceMatched": order.average_price_matched,
+                "status": order.status,
+                "placedDate": (
+                    order.placed_date.isoformat() if order.placed_date else None
+                ),
+            }
+
+            if order.size_remaining == 0 and order.size_matched > 0:
+                result["matched"].append(order_data)
+            elif order.size_remaining > 0 and order.size_matched > 0:
+                result["partiallyMatched"].append(order_data)
+            elif order.size_remaining > 0:
+                result["unmatched"].append(order_data)
+
+        return result
+
     def cancel_orders(self, market_id, bet_ids=None):
         """Cancel unmatched orders."""
         if not self.client:
@@ -748,9 +791,16 @@ class BetfairClient:
             "instructionReports": reports,
         }
 
-    # -------------------------------------------------------------------------
-    # Order Management – replace_orders (transient‑error wrapper)
-    # -------------------------------------------------------------------------
+    def get_markets(self, event_id):
+        """Alias for get_available_markets - get all markets for an event."""
+        return self.get_available_markets(event_id)
+
+    def place_back_bet(self, market_id, selection_id, price, size):
+        return self.place_bet(market_id, selection_id, "BACK", price, size)
+
+    def place_lay_bet(self, market_id, selection_id, price, size):
+        return self.place_bet(market_id, selection_id, "LAY", price, size)
+
     def replace_orders(self, market_id, bet_id, new_price):
         """Replace an existing order with a new price."""
         if not self.client:
@@ -798,26 +848,6 @@ class BetfairClient:
             "status": getattr(result, "status", "UNKNOWN"),
             "instructionReports": reports,
         }
-
-    # -------------------------------------------------------------------------
-    # Helper methods for market lookup / cashout etc.
-    # -------------------------------------------------------------------------
-    def get_markets(self, event_id):
-        """Alias for get_available_markets - get all markets for an event."""
-        return self.get_available_markets(event_id)
-
-    def place_back_bet(self, market_id, selection_id, price, size):
-        return self.place_bet(market_id, selection_id, "BACK", price, size)
-
-    def place_lay_bet(self, market_id, selection_id, price, size):
-        return self.place_bet(market_id, selection_id, "LAY", price, size)
-
-    def place_bet(self, market_id, selection_id, side, price, size, persistence_type="LAPSE"):
-        """Place a single bet on Betfair."""
-        instructions = [
-            {"selectionId": selection_id, "side": side, "price": price, "size": size}
-        ]
-        return self.place_bets(market_id, instructions)
 
     def cashout(self, market_id, selection_id, side, price, size):
         opposite_side = "LAY" if side == "BACK" else "BACK"
@@ -959,134 +989,6 @@ class BetfairClient:
 
         return market_pnl
 
-    # -------------------------------------------------------------------------
-    # Current orders
-    # -------------------------------------------------------------------------
-    @with_retry
-    def get_current_orders(self, market_ids=None):
-        """Get current unmatched and partially matched orders."""
-        if not self.client:
-            raise Exception("Non connesso a Betfair")
-
-        order_filter = {}
-        if market_ids:
-            order_filter["market_ids"] = market_ids
-
-        orders = self.client.betting.list_current_orders(**order_filter)
-
-        result = {"matched": [], "unmatched": [], "partiallyMatched": []}
-
-        for order in orders.orders if orders.orders else []:
-            order_data = {
-                "betId": order.bet_id,
-                "marketId": order.market_id,
-                "selectionId": order.selection_id,
-                "side": order.side,
-                "price": order.price_size.price if order.price_size else None,
-                "size": order.price_size.size if order.price_size else None,
-                "sizeMatched": order.size_matched,
-                "sizeRemaining": order.size_remaining,
-                "averagePriceMatched": order.average_price_matched,
-                "status": order.status,
-                "placedDate": (
-                    order.placed_date.isoformat() if order.placed_date else None
-                ),
-            }
-
-            if order.size_remaining == 0 and order.size_matched > 0:
-                result["matched"].append(order_data)
-            elif order.size_remaining > 0 and order.size_matched > 0:
-                result["partiallyMatched"].append(order_data)
-            elif order.size_remaining > 0:
-                result["unmatched"].append(order_data)
-
-        return result
-
-    # -------------------------------------------------------------------------
-    # Live data helpers
-    # -------------------------------------------------------------------------
-    @with_retry
-    def get_live_events(self, event_type_id="1"):
-        if not self.client:
-            raise Exception("Non connesso a Betfair")
-
-        inplay_events = self.client.betting.list_events(
-            filter=filters.market_filter(
-                event_type_ids=[event_type_id], in_play_only=True
-            )
-        )
-
-        result = []
-        for event in inplay_events:
-            result.append(
-                {
-                    "id": event.event.id,
-                    "name": event.event.name,
-                    "countryCode": event.event.country_code,
-                    "openDate": (
-                        event.event.open_date.isoformat()
-                        if event.event.open_date
-                        else None
-                    ),
-                    "marketCount": event.market_count,
-                    "inPlay": True,
-                }
-            )
-
-        return result
-
-    def get_live_events_only(self):
-        return self.get_live_events(FOOTBALL_ID)
-
-    @with_retry
-    def get_live_markets(self, event_id=None):
-        if not self.client:
-            raise Exception("Non connesso a Betfair")
-
-        market_filter_params = {"event_type_ids": [FOOTBALL_ID], "in_play_only": True}
-        if event_id:
-            market_filter_params["event_ids"] = [event_id]
-
-        markets = self.client.betting.list_market_catalogue(
-            filter=filters.market_filter(**market_filter_params),
-            market_projection=["RUNNER_DESCRIPTION", "MARKET_START_TIME", "EVENT"],
-            max_results=100,
-        )
-
-        result = []
-        for market in markets:
-            market_type = market.market_type if hasattr(market, "market_type") else None
-            display_name = MARKET_TYPES.get(market_type, market.market_name)
-            event_name = (
-                market.event.name if hasattr(market, "event") and market.event else ""
-            )
-
-            result.append(
-                {
-                    "marketId": market.market_id,
-                    "marketName": market.market_name,
-                    "marketType": market_type,
-                    "displayName": display_name,
-                    "eventId": (
-                        market.event.id
-                        if hasattr(market, "event") and market.event
-                        else None
-                    ),
-                    "eventName": event_name,
-                    "startTime": (
-                        market.market_start_time.isoformat()
-                        if market.market_start_time
-                        else None
-                    ),
-                    "inPlay": True,
-                }
-            )
-
-        return result
-
-    # -------------------------------------------------------------------------
-    # Cashout execution helpers (internal)
-    # -------------------------------------------------------------------------
     def _get_fresh_price(self, market_id, selection_id, side):
         try:
             price_data = self.client.betting.list_market_book(
@@ -1109,7 +1011,7 @@ class BetfairClient:
                             return runner.ex.available_to_lay[0].price
                     break
             return None
-        except Exception:
+        except:
             return None
 
     def _adjust_price_with_slippage(self, price, side, slippage_ticks=1):
@@ -1249,7 +1151,7 @@ class BetfairClient:
                     instruction_reports = getattr(result, attr_name, None)
                     if instruction_reports:
                         break
-                except Exception:
+                except:
                     pass
 
             if not instruction_reports and hasattr(result, "__getitem__"):
@@ -1257,7 +1159,7 @@ class BetfairClient:
                     instruction_reports = result.get(
                         "instructionReports"
                     ) or result.get("instruction_reports")
-                except Exception:
+                except:
                     pass
 
             bet_id = None
@@ -1310,3 +1212,82 @@ class BetfairClient:
                 "sizeMatched": 0,
                 "averagePriceMatched": None,
             }
+
+    @with_retry
+    def get_live_events(self, event_type_id="1"):
+        if not self.client:
+            raise Exception("Non connesso a Betfair")
+
+        inplay_events = self.client.betting.list_events(
+            filter=filters.market_filter(
+                event_type_ids=[event_type_id], in_play_only=True
+            )
+        )
+
+        result = []
+        for event in inplay_events:
+            result.append(
+                {
+                    "id": event.event.id,
+                    "name": event.event.name,
+                    "countryCode": event.event.country_code,
+                    "openDate": (
+                        event.event.open_date.isoformat()
+                        if event.event.open_date
+                        else None
+                    ),
+                    "marketCount": event.market_count,
+                    "inPlay": True,
+                }
+            )
+
+        return result
+
+    def get_live_events_only(self):
+        return self.get_live_events(FOOTBALL_ID)
+
+    @with_retry
+    def get_live_markets(self, event_id=None):
+        if not self.client:
+            raise Exception("Non connesso a Betfair")
+
+        market_filter_params = {"event_type_ids": [FOOTBALL_ID], "in_play_only": True}
+        if event_id:
+            market_filter_params["event_ids"] = [event_id]
+
+        markets = self.client.betting.list_market_catalogue(
+            filter=filters.market_filter(**market_filter_params),
+            market_projection=["RUNNER_DESCRIPTION", "MARKET_START_TIME", "EVENT"],
+            max_results=100,
+        )
+
+        result = []
+        for market in markets:
+            market_type = market.market_type if hasattr(market, "market_type") else None
+            display_name = MARKET_TYPES.get(market_type, market.market_name)
+            event_name = (
+                market.event.name if hasattr(market, "event") and market.event else ""
+            )
+
+            result.append(
+                {
+                    "marketId": market.market_id,
+                    "marketName": market.market_name,
+                    "marketType": market_type,
+                    "displayName": display_name,
+                    "eventId": (
+                        market.event.id
+                        if hasattr(market, "event") and market.event
+                        else None
+                    ),
+                    "eventName": event_name,
+                    "startTime": (
+                        market.market_start_time.isoformat()
+                        if market.market_start_time
+                        else None
+                    ),
+                    "inPlay": True,
+                }
+            )
+
+        return result
