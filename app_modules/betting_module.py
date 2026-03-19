@@ -1,11 +1,6 @@
-from ui.tk_safe import tk, messagebox
-
-from datetime import datetime
-
 from betfair_client import BetfairClient
-from dutching import calculate_dutching_stakes, format_currency, validate_selections
-from dutching_ui import open_dutching_window
 from theme import COLORS
+from ui.tk_safe import messagebox, tk
 
 
 class BettingModule:
@@ -19,12 +14,14 @@ class BettingModule:
 
     def _on_goal_hedge(self, match_id):
         import logging
+
         logging.getLogger("PickfairApp").info(f"HEDGE START match={match_id}")
         if hasattr(self, "trading_engine"):
             pass
 
     def _on_goal_reopen(self, match_id):
         import logging
+
         logging.getLogger("PickfairApp").info(f"REOPEN positions match={match_id}")
         if hasattr(self, "trading_engine"):
             pass
@@ -38,12 +35,14 @@ class BettingModule:
     def _connect(self):
         settings = self.db.get_settings()
 
-        if not all([
-            settings.get("username"),
-            settings.get("app_key"),
-            settings.get("certificate"),
-            settings.get("private_key"),
-        ]):
+        if not all(
+            [
+                settings.get("username"),
+                settings.get("app_key"),
+                settings.get("certificate"),
+                settings.get("private_key"),
+            ]
+        ):
             messagebox.showerror("Errore", "Configura prima le credenziali dal menu File")
             return
 
@@ -72,7 +71,9 @@ class BettingModule:
         pwd_entry.focus()
 
         save_pwd_var = tk.BooleanVar(value=bool(saved_password))
-        ttk.Checkbutton(frame, text="Salva Password", variable=save_pwd_var).pack(anchor=tk.W, pady=5)
+        ttk.Checkbutton(frame, text="Salva Password", variable=save_pwd_var).pack(
+            anchor=tk.W, pady=5
+        )
 
         def do_login():
             password = pwd_var.get()
@@ -109,9 +110,7 @@ class BettingModule:
         ttk.Button(frame, text="Connetti", command=do_login).pack(pady=10)
 
     def _on_connected(self):
-        self.status_label.configure(
-            text="Connesso a Betfair Italia", text_color=COLORS["success"]
-        )
+        self.status_label.configure(text="Connesso a Betfair Italia", text_color=COLORS["success"])
         self.connect_btn.configure(text="Disconnetti", state=tk.NORMAL)
         self.refresh_btn.configure(state=tk.NORMAL)
 
