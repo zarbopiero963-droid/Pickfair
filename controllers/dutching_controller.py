@@ -147,7 +147,9 @@ class DutchingController:
                 if first_sel_id:
                     wom_result = self.wom_engine.calculate_enhanced_wom(first_sel_id)
                     if wom_result:
-                        tick_count = self._safe_int(getattr(wom_result, "tick_count", 10), 10)
+                        tick_count = self._safe_int(
+                            getattr(wom_result, "tick_count", 10), 10
+                        )
                         wom_confidence = self._safe_float(
                             getattr(wom_result, "confidence", 0.5), 0.5
                         )
@@ -307,6 +309,7 @@ class DutchingController:
         return {
             "status": "SUBMITTED",
             "async": True,
+            "orders": [],
             "preflight": {
                 "is_valid": preflight.is_valid,
                 "warnings": preflight.warnings,
@@ -477,12 +480,8 @@ class DutchingController:
             back_ladder = back_ladder or []
             lay_ladder = lay_ladder or []
 
-            back_liq = sum(
-                self._safe_float(p.get("size", 0), 0.0) for p in back_ladder
-            )
-            lay_liq = sum(
-                self._safe_float(p.get("size", 0), 0.0) for p in lay_ladder
-            )
+            back_liq = sum(self._safe_float(p.get("size", 0), 0.0) for p in back_ladder)
+            lay_liq = sum(self._safe_float(p.get("size", 0), 0.0) for p in lay_ladder)
 
             if side == "BACK":
                 available = back_liq
