@@ -5,37 +5,34 @@ Run this on Windows: python build.py
 
 import os
 
-import PyInstaller.__main__
-
 
 def build():
     """Build the Windows executable."""
+    try:
+        import PyInstaller.__main__
+    except ImportError as e:
+        raise RuntimeError(
+            "PyInstaller non installato. Installa PyInstaller per eseguire build.py."
+        ) from e
 
-    # Get the directory of this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     main_script = os.path.join(script_dir, "main.py")
 
-    # PyInstaller arguments
     args = [
         main_script,
         "--name=Pickfair",
-        "--onefile",  # Single executable
-        "--windowed",  # No console window
-        "--clean",  # Clean build
-        # Add icon if exists
-        # "--icon=icon.ico",
-        # Hidden imports for betfairlightweight
+        "--onefile",
+        "--windowed",
+        "--clean",
         "--hidden-import=betfairlightweight",
         "--hidden-import=betfairlightweight.streaming",
         "--hidden-import=requests",
         "--hidden-import=urllib3",
         "--hidden-import=certifi",
-        # Collect all data files
         "--collect-all=betfairlightweight",
         "--collect-all=certifi",
     ]
 
-    # Check for icon
     icon_path = os.path.join(script_dir, "icon.ico")
     if os.path.exists(icon_path):
         args.append(f"--icon={icon_path}")
@@ -45,7 +42,6 @@ def build():
     print("=" * 50)
     print()
 
-    # Run PyInstaller
     PyInstaller.__main__.run(args)
 
     print()
@@ -59,4 +55,3 @@ def build():
 
 if __name__ == "__main__":
     build()
-
