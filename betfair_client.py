@@ -1,4 +1,3 @@
-```python
 """
 Betfair API client using betfairlightweight library.
 Handles SSL certificate authentication for Betfair Italy.
