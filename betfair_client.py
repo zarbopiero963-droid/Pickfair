@@ -27,7 +27,7 @@ class TransientError(Exception):
     """Errore temporaneo/retriable lato rete, SDK o integrazione."""
     pass
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # Retry configuration
