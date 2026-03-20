@@ -1,3 +1,4 @@
+import math
 from collections import deque
 
 
@@ -13,6 +14,11 @@ class FastWoMState:
         self.sum_back = 0.0
         self.sum_lay = 0.0
 
+    def _recompute_sums(self):
+        """Recompute sums from scratch using math.fsum to eliminate accumulated drift."""
+        self.sum_back = math.fsum(t["back_volume"] for t in self.ticks)
+        self.sum_lay = math.fsum(t["lay_volume"] for t in self.ticks)
+
     def push(self, tick: dict):
         """
         Add tick with fields:
@@ -22,15 +28,23 @@ class FastWoMState:
         }
         """
 
-        if len(self.ticks) == self.ticks.maxlen:
-            old = self.ticks[0]
-            self.sum_back -= old["back_volume"]
-            self.sum_lay -= old["lay_volume"]
+        evicting = len(self.ticks) == self.ticks.maxlen
 
         self.ticks.append(tick)
 
-        self.sum_back += tick["back_volume"]
-        self.sum_lay += tick["lay_volume"]
+        if evicting:
+            # Recompute from scratch to eliminate accumulated floating-point drift.
+            # Triggered at most once per maxlen pushes, so amortised cost is O(1).
+            self._recompute_sums()
+        else:
+            self.sum_back += tick["back_volume"]
+            self.sum_lay += tick["lay_volume"]
+
+        # Guard against negative sums caused by residual floating-point error.
+        if self.sum_back < 0.0:
+            self.sum_back = 0.0
+        if self.sum_lay < 0.0:
+            self.sum_lay = 0.0
 
     def wom(self) -> float:
         """
