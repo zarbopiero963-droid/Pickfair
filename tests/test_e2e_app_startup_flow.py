@@ -112,10 +112,14 @@ def _install_ui_and_external_stubs():
     tk.BOTH = "both"
     tk.LEFT = "left"
     tk.RIGHT = "right"
+    tk.TOP = "top"
     tk.VERTICAL = "vertical"
     tk.W = "w"
     tk.X = "x"
     tk.Y = "y"
+    tk.NORMAL = "normal"
+    tk.DISABLED = "disabled"
+    tk.END = "end"
 
     ttk = types.ModuleType("tkinter.ttk")
 
@@ -131,6 +135,23 @@ def _install_ui_and_external_stubs():
 
     ttk.Scrollbar = DummyScrollbar
     sys.modules["tkinter.ttk"] = ttk
+
+    # Stub tkinter.messagebox (used by dutching_ui, betting_module, etc.)
+    msgbox = types.ModuleType("tkinter.messagebox")
+    msgbox.showwarning = lambda *a, **kw: None
+    msgbox.showerror = lambda *a, **kw: None
+    msgbox.showinfo = lambda *a, **kw: None
+    msgbox.askyesno = lambda *a, **kw: False
+    tk.messagebox = msgbox
+    sys.modules["tkinter.messagebox"] = msgbox
+
+    # Stub tkinter.simpledialog (used by telegram_module, simulation_module)
+    sdialog = types.ModuleType("tkinter.simpledialog")
+    sdialog.askstring = lambda *a, **kw: None
+    sdialog.askinteger = lambda *a, **kw: None
+    sdialog.askfloat = lambda *a, **kw: None
+    tk.simpledialog = sdialog
+    sys.modules["tkinter.simpledialog"] = sdialog
 
     if "telethon" not in sys.modules:
         telethon_mod = types.ModuleType("telethon")
