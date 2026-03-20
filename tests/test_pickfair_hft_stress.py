@@ -313,7 +313,7 @@ def test_hft_controller_publish_burst_100_requests():
             market_id=f"2.{2000 + i}",
             market_type="MATCH_ODDS",
             selections=selections,
-            total_stake=4.0,
+            total_stake=5.0,
             mode="BACK",
         )
         assert result["status"] == "SUBMITTED"
@@ -476,7 +476,7 @@ def test_hft_combined_tick_to_controller_pipeline():
             market_id="7.1",
             market_type="MATCH_ODDS",
             selections=selections,
-            total_stake=6.0,
+            total_stake=7.0,
             mode="BACK",
         )
         assert result["status"] == "SUBMITTED"

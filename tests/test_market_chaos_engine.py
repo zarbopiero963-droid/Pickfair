@@ -313,7 +313,7 @@ def test_chaos_recovery_after_network_exception():
 
     original_reconcile = engine._reconcile_orders
 
-    def fake_reconcile(_client, market_id, customer_ref):
+    def fake_reconcile(_client, market_id, customer_ref, known_bet_ids=None):
         return (
             True,
             [
@@ -436,7 +436,7 @@ def test_chaos_stub_cleanup_detects_micro_orders():
         },
     ]
 
-    ok = engine._cancel_stub_orders(client, "1.7", recovered)
+    ok, _cancelled = engine._cancel_stub_orders(client, "1.7", recovered)
     assert ok is True
     assert len(client.cancel_orders_calls) == 1
 

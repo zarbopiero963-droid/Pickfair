@@ -5,8 +5,9 @@ Questo modulo calcola il profitto/perdita in tempo reale per ogni selezione,
 utilizzando le quote live e la formula di cashout dinamico.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Dict, Optional
 
 from dutching import dynamic_cashout_single
 
@@ -23,12 +24,12 @@ class PnLEngine:
         """
         self.commission = commission
 
-    def calculate_back_pnl(self, order: Dict, best_lay_price: float) -> float:
+    def calculate_back_pnl(self, order: dict, best_lay_price: float) -> float:
         """
         Calcola P&L live per una posizione BACK.
 
         Args:
-            order: Dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
+            order: dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
             best_lay_price: Miglior quota LAY live
 
         Returns:
@@ -59,7 +60,7 @@ class PnLEngine:
             logger.error(f"Errore calcolo P&L BACK: {e}")
             return 0.0
 
-    def calculate_lay_pnl(self, order: Dict, best_back_price: float) -> float:
+    def calculate_lay_pnl(self, order: dict, best_back_price: float) -> float:
         """
         Calcola P&L live per una posizione LAY.
         
@@ -74,7 +75,7 @@ class PnLEngine:
         Se B < P (price sceso): perdita
 
         Args:
-            order: Dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
+            order: dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
             best_back_price: Miglior quota BACK live
 
         Returns:
@@ -112,7 +113,7 @@ class PnLEngine:
             return 0.0
 
     def calculate_order_pnl(
-        self, order: Dict, best_back: float, best_lay: float
+        self, order: dict, best_back: float, best_lay: float
     ) -> float:
         """
         Calcola P&L per qualsiasi ordine (BACK o LAY).
@@ -156,7 +157,7 @@ class PnLEngine:
 
     @staticmethod
     def is_auto_green_eligible(
-        order: Dict, current_time: Optional[float] = None
+        order: dict, current_time: float | None = None
     ) -> bool:
         """
         Verifica se un ordine è idoneo per auto-green.
@@ -167,7 +168,7 @@ class PnLEngine:
         - È passato il grace period (AUTO_GREEN_DELAY_SEC)
 
         Args:
-            order: Dict con metadata ordine
+            order: dict con metadata ordine
             current_time: Timestamp corrente (default: time.time())
 
         Returns:
@@ -198,7 +199,7 @@ class PnLEngine:
 
         return True
 
-    def calculate_preview(self, selection: Dict, side: str = "BACK") -> float:
+    def calculate_preview(self, selection: dict, side: str = "BACK") -> float:
         """
         Calcola P&L preview per un singolo runner (prima del piazzamento).
         
@@ -207,7 +208,7 @@ class PnLEngine:
         - Se side == LAY: profitto se la selezione perde
 
         Args:
-            selection: Dict con stake, price
+            selection: dict con stake, price
             side: 'BACK' o 'LAY'
 
         Returns:
