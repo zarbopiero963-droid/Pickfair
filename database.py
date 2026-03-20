@@ -490,43 +490,44 @@ class Database:
             payload.update(settings)
         payload.update(kwargs)
 
-        current = self.get_telegram_settings()
-        current.update(payload)
+        with self._write_lock:
+            current = self.get_telegram_settings()
+            current.update(payload)
 
-        self._execute(
-            """
-            INSERT INTO telegram_settings (
-                id, api_id, api_hash, session_string, phone_number,
-                enabled, auto_bet, require_confirmation, auto_stake,
-                master_chat_id, publisher_chat_id
+            self._execute(
+                """
+                INSERT INTO telegram_settings (
+                    id, api_id, api_hash, session_string, phone_number,
+                    enabled, auto_bet, require_confirmation, auto_stake,
+                    master_chat_id, publisher_chat_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    api_id=excluded.api_id,
+                    api_hash=excluded.api_hash,
+                    session_string=excluded.session_string,
+                    phone_number=excluded.phone_number,
+                    enabled=excluded.enabled,
+                    auto_bet=excluded.auto_bet,
+                    require_confirmation=excluded.require_confirmation,
+                    auto_stake=excluded.auto_stake,
+                    master_chat_id=excluded.master_chat_id,
+                    publisher_chat_id=excluded.publisher_chat_id
+                """,
+                (
+                    1,
+                    str(current.get("api_id", "") or ""),
+                    str(current.get("api_hash", "") or ""),
+                    str(current.get("session_string", "") or ""),
+                    str(current.get("phone_number", "") or ""),
+                    self._as_bool_int(current.get("enabled", 0)),
+                    self._as_bool_int(current.get("auto_bet", 0)),
+                    self._as_bool_int(current.get("require_confirmation", 1), 1),
+                    self._as_float(current.get("auto_stake", 1.0), 1.0),
+                    str(current.get("master_chat_id", "") or ""),
+                    str(current.get("publisher_chat_id", "") or ""),
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                api_id=excluded.api_id,
-                api_hash=excluded.api_hash,
-                session_string=excluded.session_string,
-                phone_number=excluded.phone_number,
-                enabled=excluded.enabled,
-                auto_bet=excluded.auto_bet,
-                require_confirmation=excluded.require_confirmation,
-                auto_stake=excluded.auto_stake,
-                master_chat_id=excluded.master_chat_id,
-                publisher_chat_id=excluded.publisher_chat_id
-            """,
-            (
-                1,
-                str(current.get("api_id", "") or ""),
-                str(current.get("api_hash", "") or ""),
-                str(current.get("session_string", "") or ""),
-                str(current.get("phone_number", "") or ""),
-                self._as_bool_int(current.get("enabled", 0)),
-                self._as_bool_int(current.get("auto_bet", 0)),
-                self._as_bool_int(current.get("require_confirmation", 1), 1),
-                self._as_float(current.get("auto_stake", 1.0), 1.0),
-                str(current.get("master_chat_id", "") or ""),
-                str(current.get("publisher_chat_id", "") or ""),
-            ),
-        )
 
     # =========================================================
     # TELEGRAM CHATS
