@@ -2,11 +2,11 @@
 PnL Engine - Calcolo P&L live per selezione
 
 Questo modulo calcola il profitto/perdita in tempo reale per ogni selezione,
-utilizzando le quote live e formule coerenti di green-up/cashout.
+utilizzando le quote live e la formula di cashout dinamico.
 """
 
 import logging
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 
 from dutching import dynamic_cashout_single
 
@@ -23,16 +23,26 @@ class PnLEngine:
         """
         self.commission = commission
 
-    # =========================================================
-    # BACK / LAY LIVE PnL
-    # =========================================================
-
     def calculate_back_pnl(self, order: Dict, best_lay_price: float) -> float:
-        if order.get("side") != "BACK":
+        """
+        Calcola P&L live per una posizione BACK.
+
+        Args:
+            order: Dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
+            best_lay_price: Miglior quota LAY live
+
+        Returns:
+            P&L netto arrotondato a 2 decimali
+        """
+        # FIX: Normalize side for consistency
+        side = str(order.get("side", "") or "").upper().strip()
+        if side != "BACK":
             return 0.0
 
+        # FIX: Cast to float for robustness
         stake = float(order.get("sizeMatched", order.get("stake", 0)) or 0)
         price = float(order.get("averagePriceMatched", order.get("price", 0)) or 0)
+        best_lay_price = float(best_lay_price or 0)
 
         if stake <= 0 or price <= 1 or best_lay_price <= 1:
             return 0.0
@@ -44,33 +54,59 @@ class PnLEngine:
                 lay_price=best_lay_price,
                 commission=self.commission,
             )
-            return round(float(result.get("net_profit", 0) or 0), 2)
+            return round(result.get("net_profit", 0), 2)
         except Exception as e:
             logger.error(f"Errore calcolo P&L BACK: {e}")
             return 0.0
 
     def calculate_lay_pnl(self, order: Dict, best_back_price: float) -> float:
-        if order.get("side") != "LAY":
+        """
+        Calcola P&L live per una posizione LAY.
+        
+        Formula corretta per LAY green-up:
+        - LAY a prezzo P, stake S
+        - Liability = S * (P - 1)
+        - Per chiudere, BACK a prezzo B
+        - BACK stake = Liability / (B - 1) per green completo
+        
+        P&L = S - (S * P / B) = S * (1 - P/B)
+        Se B >= P (price salito): profitto positivo
+        Se B < P (price sceso): perdita
+
+        Args:
+            order: Dict con 'side', 'stake'/'sizeMatched', 'price'/'averagePriceMatched'
+            best_back_price: Miglior quota BACK live
+
+        Returns:
+            P&L netto arrotondato a 2 decimali
+        """
+        # FIX: Normalize side for consistency
+        side = str(order.get("side", "") or "").upper().strip()
+        if side != "LAY":
             return 0.0
 
+        # FIX: Cast to float for robustness
         stake = float(order.get("sizeMatched", order.get("stake", 0)) or 0)
         price = float(order.get("averagePriceMatched", order.get("price", 0)) or 0)
+        best_back_price = float(best_back_price or 0)
 
         if stake <= 0 or price <= 1 or best_back_price <= 1:
             return 0.0
 
         try:
-            back_stake = (stake * price) / float(best_back_price)
+            # FIX: Formula corretta per LAY P&L
+            # P&L = stake * (1 - price/best_back_price)
+            profit = stake * (1 - price / best_back_price)
 
-            pnl_if_win = stake - (back_stake * float(best_back_price))
-            pnl_if_lose = stake - back_stake
+            # Commissione applicata solo sul profitto
+            commission_mult = 1 - (self.commission / 100.0)
+            if profit > 0:
+                net_profit = profit * commission_mult
+            else:
+                # Perdita: nessuna commissione
+                net_profit = profit
 
-            green = min(pnl_if_win, pnl_if_lose)
-
-            if green > 0:
-                green *= 1 - (self.commission / 100.0)
-
-            return round(green, 2)
+            return round(net_profit, 2)
         except Exception as e:
             logger.error(f"Errore calcolo P&L LAY: {e}")
             return 0.0
@@ -78,7 +114,19 @@ class PnLEngine:
     def calculate_order_pnl(
         self, order: Dict, best_back: float, best_lay: float
     ) -> float:
-        side = order.get("side", "")
+        """
+        Calcola P&L per qualsiasi ordine (BACK o LAY).
+
+        Args:
+            order: Ordine con side, stake, price
+            best_back: Miglior BACK live
+            best_lay: Miglior LAY live
+
+        Returns:
+            P&L netto
+        """
+        # FIX: Normalize side
+        side = str(order.get("side", "") or "").upper().strip()
 
         if side == "BACK":
             return self.calculate_back_pnl(order, best_lay)
@@ -88,22 +136,45 @@ class PnLEngine:
         return 0.0
 
     def calculate_selection_pnl(
-        self, orders: List[Dict], best_back: float, best_lay: float
+        self, orders: list, best_back: float, best_lay: float
     ) -> float:
+        """
+        Calcola P&L totale per una selezione (somma tutti gli ordini matched).
+
+        Args:
+            orders: Lista di ordini per la selezione
+            best_back: Miglior BACK live
+            best_lay: Miglior LAY live
+
+        Returns:
+            P&L totale per la selezione
+        """
         total_pnl = 0.0
         for order in orders:
             total_pnl += self.calculate_order_pnl(order, best_back, best_lay)
         return round(total_pnl, 2)
 
-    # =========================================================
-    # AUTO GREEN
-    # =========================================================
-
     @staticmethod
     def is_auto_green_eligible(
         order: Dict, current_time: Optional[float] = None
     ) -> bool:
+        """
+        Verifica se un ordine è idoneo per auto-green.
+
+        Requisiti:
+        - Ordine ha flag auto_green=True
+        - Non è in modalità simulazione
+        - È passato il grace period (AUTO_GREEN_DELAY_SEC)
+
+        Args:
+            order: Dict con metadata ordine
+            current_time: Timestamp corrente (default: time.time())
+
+        Returns:
+            True se l'ordine può essere auto-greened
+        """
         import time
+
         from trading_config import AUTO_GREEN_DELAY_SEC
 
         if not order.get("auto_green", False):
@@ -127,147 +198,38 @@ class PnLEngine:
 
         return True
 
-    # =========================================================
-    # PREVIEW SINGLE
-    # =========================================================
+    def calculate_preview(self, selection: Dict, side: str = "BACK") -> float:
+        """
+        Calcola P&L preview per un singolo runner (prima del piazzamento).
+        
+        Mostra il profitto/perdita stimato PER SCENARIO:
+        - Se side == BACK: profitto se la selezione vince
+        - Se side == LAY: profitto se la selezione perde
 
-    def calculate_preview(self, selection: Dict, side: str = "BACK") -> Dict:
+        Args:
+            selection: Dict con stake, price
+            side: 'BACK' o 'LAY'
+
+        Returns:
+            P&L stimato per lo scenario favorevole
+        """
+        # FIX: Convert to float for robustness
         stake = float(selection.get("stake", selection.get("presetStake", 5.0)) or 0)
         price = float(selection.get("price", 2.0) or 0)
-        commission_pct = self.commission / 100.0
         side = str(side or "BACK").upper().strip()
+        
+        commission_pct = self.commission / 100.0
 
-        if stake <= 0 or price <= 1:
-            return {
-                "profit_if_win": 0.0,
-                "profit_if_lose": 0.0,
-                "net_profit": 0.0,
-                "liability": 0.0,
-            }
+        if price <= 1:
+            return 0.0
 
         if side == "BACK":
+            # BACK: profitto = stake * (price - 1) se vinci
             gross_profit = stake * (price - 1)
-            profit_if_win = gross_profit * (1 - commission_pct)
-            profit_if_lose = -stake
-            liability = 0.0
-            net_profit = profit_if_win
+            net_profit = gross_profit * (1 - commission_pct)
+        else:
+            # LAY: profitto = stake se perdi (price non sale)
+            # La tua puntata vince quando la selezione perde
+            net_profit = stake * (1 - commission_pct)
 
-        else:  # LAY
-            liability = stake * (price - 1)
-            profit_if_win = -liability
-            profit_if_lose = stake * (1 - commission_pct)
-            net_profit = profit_if_lose
-
-        return {
-            "profit_if_win": round(profit_if_win, 2),
-            "profit_if_lose": round(profit_if_lose, 2),
-            "net_profit": round(net_profit, 2),
-            "liability": round(liability, 2),
-        }
-
-    # =========================================================
-    # PREVIEW MULTI-RUNNER (DUTCHING)
-    # =========================================================
-
-    def calculate_multi_runner_preview(
-        self,
-        selections: List[Dict],
-        mode: str = "BACK",
-    ) -> Dict:
-        mode = str(mode or "BACK").upper().strip()
-        commission_pct = self.commission / 100.0
-
-        if not selections:
-            return {
-                "scenarios": [],
-                "min_profit": 0.0,
-                "max_profit": 0.0,
-                "avg_profit": 0.0,
-                "total_stake": 0.0,
-                "total_liability": 0.0,
-                "implied_probability": 0.0,
-            }
-
-        normalized = []
-        total_stake = 0.0
-        total_liability = 0.0
-        implied_probability = 0.0
-
-        for sel in selections:
-            stake = float(sel.get("stake", sel.get("presetStake", 0.0)) or 0.0)
-            price = float(sel.get("price", 0.0) or 0.0)
-            selection_id = sel.get("selectionId")
-            runner_name = str(sel.get("runnerName", selection_id or "Runner"))
-
-            if stake <= 0 or price <= 1:
-                continue
-
-            side = str(
-                sel.get("side") or sel.get("effectiveType") or mode
-            ).upper().strip()
-
-            if side not in ("BACK", "LAY"):
-                side = "BACK"
-
-            liability = stake * (price - 1) if side == "LAY" else 0.0
-
-            normalized.append(
-                {
-                    "selectionId": selection_id,
-                    "runnerName": runner_name,
-                    "side": side,
-                    "stake": stake,
-                    "price": price,
-                    "liability": liability,
-                }
-            )
-
-            total_stake += stake
-            total_liability += liability
-            implied_probability += 1.0 / price
-
-        scenarios = []
-
-        for winner in normalized:
-            winner_id = winner["selectionId"]
-            pnl = 0.0
-
-            for sel in normalized:
-                stake = sel["stake"]
-                price = sel["price"]
-                side = sel["side"]
-                selection_id = sel["selectionId"]
-
-                if side == "BACK":
-                    if selection_id == winner_id:
-                        pnl += stake * (price - 1.0)
-                    else:
-                        pnl -= stake
-                else:
-                    if selection_id == winner_id:
-                        pnl -= stake * (price - 1.0)
-                    else:
-                        pnl += stake
-
-            if pnl > 0:
-                pnl *= (1.0 - commission_pct)
-
-            scenarios.append(
-                {
-                    "winner_selection_id": winner_id,
-                    "winner_runner_name": winner["runnerName"],
-                    "profit": round(pnl, 2),
-                }
-            )
-
-        profits = [row["profit"] for row in scenarios]
-
-        return {
-            "scenarios": scenarios,
-            "min_profit": round(min(profits), 2) if profits else 0.0,
-            "max_profit": round(max(profits), 2) if profits else 0.0,
-            "avg_profit": round(sum(profits) / len(profits), 2) if profits else 0.0,
-            "total_stake": round(total_stake, 2),
-            "total_liability": round(total_liability, 2),
-            "implied_probability": round(implied_probability * 100.0, 2),
-        }
+        return round(net_profit, 2)
