@@ -8,10 +8,15 @@ class TickRingBuffer:
     Uses deque for O(1) append / popleft operations.
     """
 
-    def __init__(self, maxlen: int = 10000):
-        self._buf = deque(maxlen=maxlen)
+    def __init__(self, maxlen: int = 10000, size: int = None):
+        effective = size if size is not None else maxlen
+        self._buf = deque(maxlen=effective)
 
     def push(self, item: Any) -> None:
+        self._buf.append(item)
+
+    def add_tick(self, item: Any) -> None:
+        """Alias for push."""
         self._buf.append(item)
 
     def pop(self) -> Any:
@@ -34,6 +39,10 @@ class TickRingBuffer:
 
     def clear(self) -> None:
         self._buf.clear()
+
+    def count(self) -> int:
+        """Return number of items in buffer."""
+        return len(self._buf)
 
     def __len__(self) -> int:
         return len(self._buf)

@@ -185,6 +185,30 @@ class SafeModeManager:
 
             return True
 
+    def trigger(self, reason: str = ""):
+        """Activate safe mode immediately with a given reason."""
+        self.activate_safe_mode(reason)
+
+    def activate_safe_mode(self, reason: str = ""):
+        """Explicitly activate safe mode."""
+        with self._state_lock:
+            self._state.status = SafeModeStatus.TRIGGERED
+            self._state.triggered_at = datetime.now()
+            self._last_reason = str(reason or "")
+
+    def deactivate_safe_mode(self):
+        """Explicitly deactivate safe mode."""
+        self.reset()
+
+    def is_active(self) -> bool:
+        """Alias for is_safe_mode_active."""
+        return self.is_safe_mode_active
+
+    @property
+    def last_reason(self) -> str:
+        """Return the last trigger reason."""
+        return getattr(self, "_last_reason", "")
+
     def get_status_info(self) -> dict:
         """
         Ottiene informazioni sullo stato corrente.

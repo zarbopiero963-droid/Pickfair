@@ -116,13 +116,29 @@ def calculate_dutching_stakes(
 
 
 def calculate_dutching(
-    selections: List[Dict],
+    selections,
     total_stake: float,
     bet_type: str = "BACK",
     commission: float = 4.5,
     side: str = None,
     **kwargs,
-) -> Tuple[List[Dict], float, float]:
+):
+    # Legacy mode: accept plain odds list e.g. [2.0, 3.0]
+    if selections and isinstance(selections[0], (int, float)):
+        odds_list = [float(o) for o in selections]
+        for o in odds_list:
+            if o <= 1.0:
+                raise ValueError(f"Odds non valide: {o}")
+        total = float(total_stake)
+        inv_sum = sum(1.0 / o for o in odds_list)
+        stakes = [round((total * (1.0 / o)) / inv_sum, 2) for o in odds_list]
+        # Adjust last stake to match total
+        diff = round(total - sum(stakes), 2)
+        if stakes:
+            stakes[-1] = round(stakes[-1] + diff, 2)
+        profits = [round(s * (o - 1) - (total - s), 2) for s, o in zip(stakes, odds_list)]
+        return {"stakes": stakes, "profits": profits}
+
     return calculate_dutching_stakes(
         selections=selections,
         total_stake=total_stake,

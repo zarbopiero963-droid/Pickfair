@@ -112,6 +112,20 @@ class TickDispatcher:
         with self._lock:
             self._automation_callbacks.append(callback)
 
+    def subscribe(self, callback):
+        """Generic subscribe: registers callback for storage (full-speed) delivery."""
+        self.register_storage_callback(callback)
+
+    def dispatch(self, tick_data):
+        """Simplified dispatch that directly calls all storage callbacks."""
+        with self._lock:
+            cbs = list(self._storage_callbacks)
+        for cb in cbs:
+            try:
+                cb(tick_data)
+            except Exception:
+                pass
+
     def dispatch_tick(self, tick: TickData):
         """
         Processa un tick in arrivo.

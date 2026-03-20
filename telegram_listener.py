@@ -591,9 +591,9 @@ class TelegramListener:
 class SignalQueue:
     """Thread-safe queue for betting signals."""
 
-    def __init__(self, max_size: int = 100):
+    def __init__(self, max_size: int = 100, maxsize: int = None):
         self.queue: List[Dict] = []
-        self.max_size = max_size
+        self.max_size = maxsize if maxsize is not None else max_size
         self.lock = threading.Lock()
 
     def add(self, signal: Dict):
@@ -602,6 +602,22 @@ class SignalQueue:
             self.queue.append(signal)
             if len(self.queue) > self.max_size:
                 self.queue.pop(0)
+
+    def push(self, signal):
+        """Alias for add."""
+        self.add(signal)
+
+    def pop(self):
+        """Remove and return the oldest signal, or None."""
+        with self.lock:
+            if self.queue:
+                return self.queue.pop(0)
+            return None
+
+    def size(self) -> int:
+        """Return the number of pending signals."""
+        with self.lock:
+            return len(self.queue)
 
     def get_pending(self) -> List[Dict]:
         """Get all pending signals."""

@@ -10,6 +10,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +53,29 @@ class Database:
             self._local.conn = conn
             self._local.transaction_depth = 0
         return self._local.conn
+
+    @contextmanager
+    def transaction(self):
+        """Public transaction context manager with savepoint-based rollback."""
+        conn = self._get_connection()
+        depth = getattr(self._local, "transaction_depth", 0) + 1
+        self._local.transaction_depth = depth
+        sp_name = f"sp_tx_{depth}"
+        conn.execute(f"SAVEPOINT {sp_name}")
+        try:
+            yield conn
+            conn.execute(f"RELEASE {sp_name}")
+            if depth == 1:
+                conn.commit()
+        except Exception:
+            try:
+                conn.execute(f"ROLLBACK TO {sp_name}")
+                conn.execute(f"RELEASE {sp_name}")
+            except Exception:
+                pass
+            raise
+        finally:
+            self._local.transaction_depth = max(depth - 1, 0)
 
     def _execute(
         self,
@@ -760,6 +784,15 @@ class Database:
             ),
         )
 
+    def log_telegram_outbox(self, message: str):
+        """Simple wrapper to log a telegram outbox message."""
+        self.save_telegram_outbox_log(
+            chat_id="",
+            message_type="log",
+            text=str(message or ""),
+            status="SENT",
+        )
+
     def get_telegram_outbox_log(self, limit=100) -> List[Dict[str, Any]]:
         rows = self._execute(
             """
@@ -780,6 +813,15 @@ class Database:
     # =========================================================
     # SAGA
     # =========================================================
+
+    def save_saga(self, customer_ref, market_id, selection_id, status="PENDING", payload=None):
+        """Alias for create_pending_saga with optional status."""
+        self.create_pending_saga(
+            customer_ref=customer_ref,
+            market_id=market_id,
+            selection_id=selection_id,
+            payload=payload or {},
+        )
 
     def create_pending_saga(self, customer_ref, market_id, selection_id, payload):
         raw_payload = (

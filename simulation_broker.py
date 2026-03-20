@@ -395,6 +395,34 @@ class SimulationBroker:
 
             return result
 
+    def place_bet(self, market_id, selection_id, side, price, size, **kwargs) -> Dict:
+        """Alias for place_order. Normalizes status to SUCCESS."""
+        result = self.place_order(
+            market_id=str(market_id),
+            selection_id=int(selection_id),
+            side=str(side),
+            price=float(price),
+            size=float(size),
+            **kwargs,
+        )
+        if result.get("status") in ("EXECUTION_COMPLETE", "EXECUTABLE"):
+            result["status"] = "SUCCESS"
+        return result
+
+    def cancel_orders(self, market_id: str) -> Dict:
+        """Cancel all orders for a market."""
+        with self.lock:
+            cancelled = 0
+            for order in list(self.orders.values()):
+                if order.market_id == str(market_id) and order.status != "CANCELLED":
+                    order.status = "CANCELLED"
+                    cancelled += 1
+            return {"status": "SUCCESS", "cancelled": cancelled}
+
+    def get_current_orders(self) -> Dict:
+        """Return all current orders as a dict."""
+        return {"orders": self.list_bets()}
+
     def get_order(self, bet_id: str) -> Optional[Dict]:
         """Ritorna singolo ordine."""
         with self.lock:

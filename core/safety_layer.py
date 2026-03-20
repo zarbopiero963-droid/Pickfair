@@ -178,6 +178,25 @@ class SafetyLayer:
         self._watchdog_stop = threading.Event()
         self._watchdog_interval_sec = 1.0
         self._watchdog_callback: Optional[Callable[[str, str], None]] = None
+        self._safe_mode_active = False
+        self._safe_mode_reason = ""
+
+    def activate_safe_mode(self, reason: str = ""):
+        """Activate safe mode."""
+        with self._lock:
+            self._safe_mode_active = True
+            self._safe_mode_reason = str(reason or "")
+
+    def deactivate_safe_mode(self):
+        """Deactivate safe mode."""
+        with self._lock:
+            self._safe_mode_active = False
+            self._safe_mode_reason = ""
+
+    def is_blocked(self) -> bool:
+        """Check if safe mode is blocking."""
+        with self._lock:
+            return self._safe_mode_active
 
     # =========================================================
     # SAFE CASTS

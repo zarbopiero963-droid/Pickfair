@@ -83,7 +83,14 @@ class TickStorage:
 
             self.ticks[selection_id].append(tick)
 
-    def get_ticks(self, selection_id: int, limit: int = 100) -> List[Tick]:
+    def add_tick(self, key, tick_data=None):
+        """Simplified add: store a tick by arbitrary key."""
+        with self.lock:
+            if key not in self.ticks:
+                self.ticks[key] = deque(maxlen=self.max_ticks)
+            self.ticks[key].append(tick_data or {})
+
+    def get_ticks(self, selection_id, limit: int = 100):
         """Ritorna ultimi N tick."""
         with self.lock:
             if selection_id not in self.ticks:

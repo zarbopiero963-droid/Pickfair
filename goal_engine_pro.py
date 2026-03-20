@@ -76,11 +76,11 @@ class APIFootballClient:
 class GoalEnginePro:
     def __init__(
         self,
-        api_client,
-        betfair_stream,
-        hedge_callback,
-        reopen_callback,
-        ui_queue,
+        api_client=None,
+        betfair_stream=None,
+        hedge_callback=None,
+        reopen_callback=None,
+        ui_queue=None,
     ):
         self.api = api_client
         self.stream = betfair_stream
@@ -97,7 +97,13 @@ class GoalEnginePro:
         self.hedged_matches = set()
 
         self.confirm_mode = False
+        self.enabled = True
+        self.current_goal = None
         self.hedge_delay_ms = 0.0
+
+    def set_goal(self, goal):
+        """Set the current goal target."""
+        self.current_goal = goal
 
     def set_delay(self, mode: str):
         if mode == "0ms":

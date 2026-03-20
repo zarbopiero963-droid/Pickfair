@@ -328,6 +328,25 @@ class DutchingController:
             },
         }
 
+    def execute(self, payload: Dict) -> Dict:
+        """Convenience method: unpack a dict and delegate to submit_dutching."""
+        # Auto-detect if broker is actually a bus (has publish method)
+        if self.bus is None and self.broker is not None and hasattr(self.broker, "publish"):
+            self.bus = self.broker
+
+        market_id = str(payload.get("market_id", ""))
+        market_type = str(payload.get("market_type", ""))
+        selections = list(payload.get("results") or payload.get("selections") or [])
+        total_stake = sum(
+            float(s.get("stake", 0) or 0) for s in selections
+        )
+        return self.submit_dutching(
+            market_id=market_id,
+            market_type=market_type,
+            selections=selections,
+            total_stake=total_stake,
+        )
+
     def validate_selections(self, selections: List[Dict]) -> List[str]:
         errors = []
         selections = list(selections or [])

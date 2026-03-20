@@ -198,6 +198,35 @@ class PnLEngine:
 
         return True
 
+    def calculate_profit(self, stake: float, odds: float, side: str = "BACK") -> float:
+        """
+        Calcola profitto semplice per una scommessa.
+
+        Args:
+            stake: Importo scommesso
+            odds: Quota decimale
+            side: 'BACK' o 'LAY'
+
+        Returns:
+            Profitto lordo (senza commissione)
+
+        Raises:
+            ValueError: se side non è BACK o LAY
+        """
+        side = str(side or "BACK").upper().strip()
+        stake = float(stake or 0)
+        odds = float(odds or 0)
+
+        if odds <= 1.0:
+            return 0
+
+        if side == "BACK":
+            return round(stake * (odds - 1), 2)
+        elif side == "LAY":
+            return round(stake * (odds - 1), 2)
+        else:
+            raise ValueError(f"Side non supportato: {side}")
+
     def calculate_preview(self, selection: Dict, side: str = "BACK") -> float:
         """
         Calcola P&L preview per un singolo runner (prima del piazzamento).
