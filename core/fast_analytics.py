@@ -13,6 +13,8 @@ class FastWoMState:
         self.ticks = deque(maxlen=max_ticks)
         self.sum_back = 0.0
         self.sum_lay = 0.0
+        self._evictions_since_rebase = 0
+        self._rebase_every_evictions = 32
 
     def _recompute_sums(self):
         """Recompute sums from scratch using math.fsum to eliminate accumulated drift."""
@@ -29,16 +31,27 @@ class FastWoMState:
         """
 
         evicting = len(self.ticks) == self.ticks.maxlen
+        old = self.ticks[0] if evicting else None
 
         self.ticks.append(tick)
 
-        if evicting:
-            # Recompute from scratch to eliminate accumulated floating-point drift.
-            # Triggered at most once per maxlen pushes, so amortised cost is O(1).
-            self._recompute_sums()
+        new_back = tick["back_volume"]
+        new_lay = tick["lay_volume"]
+
+        if old is None:
+            self.sum_back += new_back
+            self.sum_lay += new_lay
         else:
-            self.sum_back += tick["back_volume"]
-            self.sum_lay += tick["lay_volume"]
+            self.sum_back -= old["back_volume"]
+            self.sum_lay -= old["lay_volume"]
+
+            self.sum_back += new_back
+            self.sum_lay += new_lay
+
+            self._evictions_since_rebase += 1
+            if self._evictions_since_rebase >= self._rebase_every_evictions:
+                self._recompute_sums()
+                self._evictions_since_rebase = 0
 
         # Guard against negative sums caused by residual floating-point error.
         if self.sum_back < 0.0:
