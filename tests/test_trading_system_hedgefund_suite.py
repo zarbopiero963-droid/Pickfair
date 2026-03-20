@@ -55,6 +55,10 @@ class DummyBus:
 
     def __init__(self):
         self.events = []
+        self._handlers = {}
+
+    def subscribe(self, event, handler):
+        self._handlers.setdefault(event, []).append(handler)
 
     def publish(self, event, payload):
         self.events.append((event, payload))
@@ -329,9 +333,14 @@ def test_global_safety_invariant():
 
     assert safety.validate_quick_bet_success(
         {
-            "status": "MATCHED",
-            "matched": 5,
+            "market_id": "1.100",
+            "selection_id": 5,
+            "bet_type": "BACK",
+            "price": 2.0,
             "stake": 5,
+            "matched": 5,
+            "status": "MATCHED",
+            "sim": False,
         }
     )
 
