@@ -569,6 +569,46 @@ def calculate_dutching_stakes(
     raise ValueError(f"bet_type/side non supportato: {mode}")
 
 
+def calculate_dutching(
+    selections,
+    total_stake: float,
+    bet_type: str = "BACK",
+    commission: float = 4.5,
+    side: str = None,
+    **kwargs,
+):
+    """
+    Legacy entry point.
+    Accepts either a plain list of odds (e.g. [2.0, 3.0]) or the standard
+    selections-dict format used by calculate_dutching_stakes.
+    Returns a plain dict {"stakes": [...], "profits": [...]} for the legacy
+    plain-odds path, or delegates to calculate_dutching_stakes for dict input.
+    """
+    # Legacy mode: plain list of odds
+    if selections and isinstance(selections[0], (int, float)):
+        odds_list = [float(o) for o in selections]
+        for o in odds_list:
+            if o <= 1.0:
+                raise ValueError(f"Odds non valide: {o}")
+        total = float(total_stake)
+        inv_sum = sum(1.0 / o for o in odds_list)
+        stakes = [round((total * (1.0 / o)) / inv_sum, 2) for o in odds_list]
+        diff = round(total - sum(stakes), 2)
+        if stakes:
+            stakes[-1] = round(stakes[-1] + diff, 2)
+        profits = [round(s * (o - 1) - (total - s), 2) for s, o in zip(stakes, odds_list)]
+        return {"stakes": stakes, "profits": profits}
+
+    return calculate_dutching_stakes(
+        selections=selections,
+        total_stake=total_stake,
+        bet_type=bet_type,
+        commission=commission,
+        side=side,
+        **kwargs,
+    )
+
+
 def calculate_mixed_dutching(
     selections: List[Dict],
     amount: float,
