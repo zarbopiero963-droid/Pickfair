@@ -319,31 +319,437 @@ class BetfairClient:
                         else None
                     ),
                     "marketCount": event.market_count,
-                    "inPlay": True,
+                     "inPlay": True,
                 }
             )
 
-        # Add upcoming events
-        for event in events:
-            if event.event.id not in event_ids:
-                result.append(
-                    {
-                        "id": event.event.id,
-                        "name": event.event.name,
-                        "countryCode": event.event.country_code,
-                        "openDate": (
-                            event.event.open_date.isoformat()
-                            if event.event.open_date
-                            else None
-                        ),
-                        "marketCount": event.market_count,
-                        "inPlay": False,
-                    }
-                )
-
-        # Sort: in-play first, then by date
-        result.sort(key=lambda x: (not x.get("inPlay", False), x["openDate"] or ""))
         return result
+
+
+# =============================================================================
+# Dutching math — restored exports required by current callers.
+#
+# Required by:
+#   controllers/dutching_controller.py: calculate_dutching_stakes,
+#                                        calculate_mixed_dutching
+#   app_modules/betting_module.py:       calculate_dutching_stakes,
+#                                        format_currency, validate_selections
+#   dutching_ui.py:                      calculate_ai_mixed_stakes,
+#                                        calculate_dutching_stakes,
+#                                        calculate_mixed_dutching,
+#                                        validate_selections
+#   pnl_engine.py:                       dynamic_cashout_single
+#
+# Issue #3 fix: _lay_dutching uses correct inverse-price weighting so that
+# stake_i * price_i = constant, producing equal profit on every outcome
+# rather than the flat-stake bug that was present in the lost commit.
+# =============================================================================
+
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, getcontext as _getcontext
+from typing import Dict, List, Tuple
+
+_getcontext().prec = 18
+
+_MIN_STAKE = Decimal("0.10")
+_STEP = Decimal("0.01")
+_MAX_WIN = Decimal("10000.00")
+
+
+def _d(value, default: str = "0") -> Decimal:
+    """Safe Decimal coercion."""
+    if value is None:
+        return Decimal(default)
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(default)
+
+
+def _round_step(value: Decimal) -> Decimal:
+    return (value / _STEP).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * _STEP
+
+
+def _norm_price(value) -> Decimal:
+    price = _d(value, "0")
+    if price <= Decimal("1.01"):
+        raise ValueError(f"Quota non valida (<= 1.01): {value}")
+    return price
+
+
+def _norm_side(selection: Dict, default: str = "BACK") -> str:
+    side = (
+        selection.get("effectiveType")
+        or selection.get("side")
+        or default
+    )
+    side = str(side).upper().strip()
+    return side if side in ("BACK", "LAY") else "BACK"
+
+
+def _apply_commission(net_profit: Decimal, commission: float) -> Decimal:
+    """Betfair charges commission only on positive net profit."""
+    if net_profit <= Decimal("0"):
+        return net_profit
+    mult = Decimal("1") - (_d(commission, "0") / Decimal("100"))
+    return net_profit * mult
+
+
+def format_currency(value) -> str:
+    amount = _d(value, "0")
+    return f"\u20ac{amount:.2f}"
+
+
+def validate_selections(results: List[Dict], bet_type: str = "BACK") -> List[str]:
+    errors: List[str] = []
+    for r in results:
+        runner = str(r.get("runnerName", str(r.get("selectionId", "?"))))
+        stake = _d(r.get("stake", 0), "0")
+        if stake < _MIN_STAKE:
+            errors.append(f"{runner}: stake troppo basso ({stake:.2f} EUR)")
+        price = _d(r.get("price", 0), "0")
+        if price <= Decimal("1.01"):
+            errors.append(f"{runner}: quota non valida ({price})")
+        win = _d(r.get("profitIfWins", r.get("profit_if_win", 0)), "0")
+        if win > _MAX_WIN:
+            errors.append(f"{runner}: vincita massima superata ({win:.2f})")
+    return errors
+
+
+def _back_dutching(
+    selections: List[Dict],
+    total_stake: float,
+    commission: float,
+) -> Tuple[List[Dict], float, float]:
+    """
+    BACK dutching: proportional stake allocation by implied probability.
+    stake_i = total_stake * (1/price_i) / sum(1/price_j)
+    All winning scenarios produce the same net profit.
+    """
+    total_dec = _d(total_stake, "0")
+    if total_dec <= 0:
+        return [], 0.0, 0.0
+
+    prices = [_norm_price(s.get("price", 0)) for s in selections]
+    implied_probs = [Decimal("1") / p for p in prices]
+    book_value = sum(implied_probs)
+    if book_value <= 0:
+        raise ValueError("Book value non valido")
+
+    raw_stakes = []
+    for prob in implied_probs:
+        stake = _round_step((total_dec * prob) / book_value)
+        raw_stakes.append(max(stake, _MIN_STAKE))
+
+    total_actual = sum(raw_stakes)
+    delta = _round_step(total_dec - total_actual)
+    if raw_stakes:
+        raw_stakes[-1] = _round_step(max(raw_stakes[-1] + delta, _MIN_STAKE))
+    total_actual = sum(raw_stakes)
+
+    results = []
+    scenario_profits = []
+    for i, sel in enumerate(selections):
+        stake = raw_stakes[i]
+        price = prices[i]
+        gross_return = stake * price
+        raw_profit = gross_return - total_actual
+        net_profit = _round_step(_apply_commission(raw_profit, commission))
+        scenario_profits.append(net_profit)
+        results.append({
+            "selectionId": sel["selectionId"],
+            "runnerName": str(sel.get("runnerName", str(sel["selectionId"]))),
+            "price": float(price),
+            "stake": float(stake),
+            "side": "BACK",
+            "effectiveType": "BACK",
+            "profitIfWins": float(net_profit),
+            "grossReturn": float(_round_step(gross_return)),
+        })
+
+    avg_profit = (
+        sum(scenario_profits) / Decimal(str(len(scenario_profits)))
+        if scenario_profits else Decimal("0")
+    )
+    return results, float(_round_step(avg_profit)), float(book_value * 100)
+
+
+def _lay_dutching(
+    selections: List[Dict],
+    total_stake: float,
+    commission: float,
+) -> Tuple[List[Dict], float, float]:
+    """
+    LAY dutching — FIXED (issue #3).
+
+    Equal-profit condition for LAY dutching requires:
+        stake_i * price_i = constant  C
+
+    Derivation:
+        profit when selection i loses = total_stake - stake_i * price_i
+        For this to be equal across all i:  stake_i * price_i = C (constant)
+        => stake_i = C / price_i
+        => sum(C / price_i) = total_stake
+        => C = total_stake / sum(1 / price_i)
+
+    OLD BUG: every selection received the same flat stake
+    (equal to rounded target profit), which only holds when all prices are
+    identical. With mixed odds this produces unequal per-outcome profit.
+    """
+    total_dec = _d(total_stake, "0")
+    if total_dec <= 0:
+        return [], 0.0, 0.0
+
+    prices = [_norm_price(s.get("price", 0)) for s in selections]
+    inv_prices = [Decimal("1") / p for p in prices]
+    sum_inv = sum(inv_prices)
+    if sum_inv <= 0:
+        raise ValueError("Book value non valido")
+
+    # C = total_stake / sum(1/price_i)
+    C = total_dec / sum_inv
+
+    raw_stakes = []
+    for price in prices:
+        stake = _round_step(C / price)
+        raw_stakes.append(max(stake, _MIN_STAKE))
+
+    total_actual = sum(raw_stakes)
+    delta = _round_step(total_dec - total_actual)
+    if raw_stakes:
+        raw_stakes[-1] = _round_step(max(raw_stakes[-1] + delta, _MIN_STAKE))
+    total_actual = sum(raw_stakes)
+
+    # profit when selection i loses = total_actual - price_i * stake_i
+    constants = [p * s for p, s in zip(prices, raw_stakes)]
+    raw_profits = [total_actual - c for c in constants]
+    net_profits = [_round_step(_apply_commission(p, commission)) for p in raw_profits]
+
+    results = []
+    for i, sel in enumerate(selections):
+        price = prices[i]
+        stake = raw_stakes[i]
+        liability = _round_step(stake * (price - Decimal("1")))
+        results.append({
+            "selectionId": sel["selectionId"],
+            "runnerName": str(sel.get("runnerName", str(sel["selectionId"]))),
+            "price": float(price),
+            "stake": float(stake),
+            "side": "LAY",
+            "effectiveType": "LAY",
+            "liability": float(liability),
+            "profitIfWins": float(net_profits[i]),
+        })
+
+    avg_profit = (
+        sum(net_profits) / Decimal(str(len(net_profits)))
+        if net_profits else Decimal("0")
+    )
+    return results, float(_round_step(avg_profit)), float(sum_inv * 100)
+
+
+def calculate_dutching_stakes(
+    selections: List[Dict],
+    total_stake: float,
+    bet_type: str = "BACK",
+    commission: float = 4.5,
+    side: str = None,
+    **kwargs,
+) -> Tuple[List[Dict], float, float]:
+    """
+    Main dutching entry point.
+    Returns (results, avg_profit, implied_book_pct).
+    """
+    if not selections:
+        return [], 0.0, 0.0
+    mode = str(side or bet_type or "BACK").upper().strip()
+    if mode == "BACK":
+        return _back_dutching(selections, total_stake, commission)
+    if mode == "LAY":
+        return _lay_dutching(selections, total_stake, commission)
+    raise ValueError(f"bet_type/side non supportato: {mode}")
+
+
+def calculate_dutching(
+    selections,
+    total_stake: float,
+    bet_type: str = "BACK",
+    commission: float = 4.5,
+    side: str = None,
+    **kwargs,
+):
+    """
+    Legacy entry point.
+    Accepts either a plain list of odds (e.g. [2.0, 3.0]) or the standard
+    selections-dict format used by calculate_dutching_stakes.
+    Returns a plain dict {"stakes": [...], "profits": [...]} for the legacy
+    plain-odds path, or delegates to calculate_dutching_stakes for dict input.
+    """
+    # Legacy mode: plain list of odds
+    if selections and isinstance(selections[0], (int, float)):
+        odds_list = [float(o) for o in selections]
+        for o in odds_list:
+            if o <= 1.0:
+                raise ValueError(f"Odds non valide: {o}")
+        total = float(total_stake)
+        inv_sum = sum(1.0 / o for o in odds_list)
+        stakes = [round((total * (1.0 / o)) / inv_sum, 2) for o in odds_list]
+        diff = round(total - sum(stakes), 2)
+        if stakes:
+            stakes[-1] = round(stakes[-1] + diff, 2)
+        profits = [round(s * (o - 1) - (total - s), 2) for s, o in zip(stakes, odds_list)]
+        return {"stakes": stakes, "profits": profits}
+
+    return calculate_dutching_stakes(
+        selections=selections,
+        total_stake=total_stake,
+        bet_type=bet_type,
+        commission=commission,
+        side=side,
+        **kwargs,
+    )
+
+
+def calculate_mixed_dutching(
+    selections: List[Dict],
+    amount: float,
+    commission: float = 4.5,
+    **kwargs,
+) -> Tuple[List[Dict], float, float]:
+    """
+    Mixed BACK/LAY dutching.
+    Returns (results, min_scenario_profit, total_weight_pct).
+    """
+    if not selections:
+        return [], 0.0, 0.0
+    total_dec = _d(amount, "0")
+    if total_dec <= 0:
+        return [], 0.0, 0.0
+
+    sides = []
+    prices_list = []
+    weights = []
+    for sel in selections:
+        side = _norm_side(sel, "BACK")
+        price = _norm_price(sel.get("price", 0))
+        sides.append(side)
+        prices_list.append(price)
+        if side == "BACK":
+            weights.append(Decimal("1") / price)
+        else:
+            denom = price - Decimal("1")
+            if denom <= 0:
+                raise ValueError("Quota LAY non valida per mixed dutching")
+            weights.append(Decimal("1") / denom)
+
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        raise ValueError("Peso totale non valido")
+
+    raw_stakes = []
+    for w in weights:
+        stake = _round_step((total_dec * w) / total_weight)
+        raw_stakes.append(max(stake, _MIN_STAKE))
+
+    total_actual = sum(raw_stakes)
+    delta = _round_step(total_dec - total_actual)
+    if raw_stakes:
+        raw_stakes[-1] = _round_step(max(raw_stakes[-1] + delta, _MIN_STAKE))
+
+    results = []
+    for i, sel in enumerate(selections):
+        price = prices_list[i]
+        stake = raw_stakes[i]
+        side = sides[i]
+        row = {
+            "selectionId": sel["selectionId"],
+            "runnerName": str(sel.get("runnerName", str(sel["selectionId"]))),
+            "price": float(price),
+            "stake": float(stake),
+            "side": side,
+            "effectiveType": side,
+        }
+        if side == "LAY":
+            row["liability"] = float(_round_step(stake * (price - Decimal("1"))))
+        results.append(row)
+
+    scenario_profits = []
+    for winner in results:
+        winner_id = winner["selectionId"]
+        pnl = Decimal("0")
+        for r in results:
+            p = _d(r["price"], "0")
+            s = _d(r["stake"], "0")
+            if r["effectiveType"] == "BACK":
+                pnl += s * (p - Decimal("1")) if r["selectionId"] == winner_id else -s
+            else:
+                pnl -= s * (p - Decimal("1")) if r["selectionId"] == winner_id else Decimal("0")
+                pnl += s if r["selectionId"] != winner_id else Decimal("0")
+        scenario_profits.append(_apply_commission(pnl, commission))
+
+    min_profit = min(scenario_profits) if scenario_profits else Decimal("0")
+    return results, float(_round_step(min_profit)), float(total_weight * 100)
+
+
+def calculate_ai_mixed_stakes(
+    selections: List[Dict],
+    amount: float = None,
+    commission: float = 4.5,
+    total_stake: float = None,
+    **kwargs,
+) -> Tuple[List[Dict], float, float]:
+    if amount is None:
+        amount = total_stake
+    if amount is None:
+        amount = kwargs.get("stake", 0.0)
+    return calculate_mixed_dutching(selections, amount, commission)
+
+
+def calculate_ai_mixed_dutching(
+    selections: List[Dict],
+    amount: float,
+    commission: float = 4.5,
+    **kwargs,
+) -> Tuple[List[Dict], float, float]:
+    return calculate_mixed_dutching(selections, amount, commission)
+
+
+def dynamic_cashout_single(
+    matched_stake: float = None,
+    matched_price: float = None,
+    current_price: float = None,
+    commission: float = 4.5,
+    **kwargs,
+) -> dict:
+    """
+    Calculate the green-up (cashout) lay stake and resulting equal profit.
+
+    Accepts both explicit parameters and legacy kwargs
+    (back_stake, back_price, lay_price) used by pnl_engine.
+    """
+    if matched_stake is None:
+        matched_stake = kwargs.get("back_stake", 0.0)
+    if matched_price is None:
+        matched_price = kwargs.get("back_price", 0.0)
+    if current_price is None:
+        current_price = kwargs.get("lay_price", 0.0)
+
+    ms = _d(matched_stake, "0")
+    mp = _d(matched_price, "0")
+    cp = _d(current_price, "0")
+
+    if ms <= Decimal("0") or mp <= Decimal("1.01") or cp <= Decimal("1.01"):
+        return {"lay_stake": 0.0, "green_up": 0.0, "net_profit": 0.0}
+
+    cashout_stake = _round_step((ms * mp) / cp)
+    profit_win = ms * (mp - Decimal("1")) - cashout_stake * (cp - Decimal("1"))
+    profit_lose = cashout_stake - ms
+    green = _round_step((profit_win + profit_lose) / Decimal("2"))
+
+    return {
+        "lay_stake": float(cashout_stake),
+        "green_up": float(green),
+        "net_profit": float(green),
+    }
 
     @with_retry
     def get_available_markets(self, event_id):
