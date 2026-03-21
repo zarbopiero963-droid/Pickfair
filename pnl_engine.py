@@ -231,8 +231,6 @@ class PnLEngine:
             # LAY: profitto = stake se la selezione perde (vinci tu)
             # Il profitto è esattamente lo stake (la tua puntata vince)
             # La responsabilità (liability) è stake * (price - 1) se perdi
-            liability = stake * (price - 1)
-            gross_profit = stake
-            net_profit = gross_profit * (1 - commission_pct)
+            net_profit = stake * (1 - commission_pct)
 
         return round(net_profit, 2)
