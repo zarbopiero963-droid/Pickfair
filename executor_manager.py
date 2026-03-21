@@ -10,6 +10,25 @@ class SafeExecutor:
         self.default_timeout = default_timeout
 
     def submit(self, name, fn, *args, timeout=None, **kwargs):
+        """
+        FIX #30: submit returns the Future immediately without blocking.
+
+        Old behaviour: future.result(timeout=...) was called immediately,
+        blocking the calling thread (typically the UI event loop) for up to
+        default_timeout seconds, defeating asynchronous execution.
+
+        New behaviour: the Future is returned to the caller. Callers that
+        need the result call .result() themselves; fire-and-forget callers
+        get no blocking. Use submit_sync() when a blocking result is needed.
+        """
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def submit_sync(self, name, fn, *args, timeout=None, **kwargs):
+        """
+        Synchronous blocking wrapper — preserves the old submit() behaviour
+        for callers that explicitly need to wait for the result (e.g. tests,
+        shutdown sequences, or non-UI background threads).
+        """
         future = self.executor.submit(fn, *args, **kwargs)
         try:
             return future.result(timeout=timeout or self.default_timeout)

@@ -21,9 +21,14 @@ class MarketValidator:
         "MONEYLINE",
         "WIN",
         "PLACE",
-        "EACH_WAY",
-        "FORECAST",
-        "TRICAST",
+        # FIX #28: EACH_WAY, FORECAST, TRICAST removed.
+        # These are NOT winner-takes-all markets:
+        #   EACH_WAY  — two sub-bets (win + place); proportional payouts
+        #   FORECAST  — ordered finish prediction; multiple selections matter
+        #   TRICAST   — top-3 ordered prediction; multiple selections matter
+        # Including them in the dutching-ready set allowed the system to
+        # attempt equal-profit dutching on markets where the payout structure
+        # is fundamentally different, producing incorrect stake calculations.
         "HALF_TIME",
         "HALF_TIME_FULL_TIME",
         "FIRST_GOAL_SCORER",
@@ -36,6 +41,12 @@ class MarketValidator:
     }
 
     NON_DUTCHING_MARKETS: Set[str] = {
+        # FIX #28: explicitly mark the removed markets as non-dutching so the
+        # fallback pattern-matching ("ODDS" in name, "WIN" in name) cannot
+        # accidentally re-admit them.
+        "EACH_WAY",
+        "FORECAST",
+        "TRICAST",
         "OVER_UNDER_05",
         "OVER_UNDER_15",
         "OVER_UNDER_25",

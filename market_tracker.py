@@ -67,7 +67,12 @@ class MarketCache:
     def set(self, market_id: str, data: Dict):
         """Salva market book in cache."""
         with self._lock:
-            if len(self._cache) >= self.max_size and self._timestamps:
+            # FIX #29: evict only when the key is NEW and would push the cache
+            # past its capacity.  The old condition `len >= max_size` triggered
+            # on every update of an EXISTING key, evicting a different entry
+            # even though the size had not actually grown.
+            is_new_key = market_id not in self._cache
+            if is_new_key and len(self._cache) >= self.max_size and self._timestamps:
                 oldest_key = min(self._timestamps, key=self._timestamps.get)
                 self._cache.pop(oldest_key, None)
                 self._timestamps.pop(oldest_key, None)

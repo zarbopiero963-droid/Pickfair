@@ -124,12 +124,10 @@ class TickDispatcher:
 
         with self._lock:
             self._tick_count += 1
-
-            for cb in self._storage_callbacks:
-                try:
-                    cb(tick)
-                except Exception:
-                    pass
+            # FIX #26: snapshot storage callbacks inside lock, call outside.
+            # Old code called potentially-slow storage callbacks while holding
+            # the lock, blocking every concurrent dispatch_tick call.
+            storage_cbs = list(self._storage_callbacks)
 
             self._pending_ticks[(tick.market_id, tick.selection_id)] = tick
 
@@ -153,6 +151,13 @@ class TickDispatcher:
                 self._last_automation_check = now
                 self._automation_dispatch_count += 1
                 self._pending_ticks.clear()
+
+        # Call storage callbacks outside the lock.
+        for cb in storage_cbs:
+            try:
+                cb(tick)
+            except Exception:
+                pass
 
         if ui_ticks:
             for cb in self._ui_callbacks:
