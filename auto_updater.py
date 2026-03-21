@@ -67,11 +67,29 @@ def _safe_filename_from_url(download_url, fallback="pickfair_update.bin"):
 
 def _cmd_safe_path(path):
     """
-    Escaping minimo per batch Windows:
-    - raddoppia %
-    - mantiene il path tra doppi apici
+    FIX #16: Escape a filesystem path for safe embedding inside a Windows batch
+    script between double-quoted delimiters.
+
+    Old code only escaped '%' — paths containing '"', '^', '&', '|', '<', '>'
+    or '!' could break out of the quoted context and inject arbitrary commands.
+
+    Rules applied:
+    1. Reject paths containing double-quote entirely.  A legitimate Windows
+       path never contains '"'; if one appears here the update is tampered.
+    2. Double '%' to prevent environment-variable expansion (%TEMP%, etc.).
+    3. Escape '^' (the batch escape char) so it cannot be used to inject
+       special characters (&, |, <, >, etc.) even inside quotes.
     """
-    return str(path).replace("%", "%%")
+    path_str = str(path)
+    if '"' in path_str:
+        raise ValueError(
+            f"[AutoUpdater] Unsafe path — contains double-quote: {path_str!r}"
+        )
+    # Double % to prevent variable expansion.
+    path_str = path_str.replace("%", "%%")
+    # Escape ^ inside double-quoted context (^^ → single ^, but harmless here).
+    path_str = path_str.replace("^", "^^")
+    return path_str
 
 
 def _sha256_file(path):
@@ -210,12 +228,34 @@ def download_update(download_url, progress_callback=None):
         return None
 
 
-def verify_download_hash(downloaded_path, expected_sha256=None):
+def verify_download_hash(downloaded_path, expected_sha256=None, require_verified=False):
     """
-    Verifica SHA256 se fornito.
-    Se expected_sha256 non c'è, ritorna True per compatibilità.
+    Verifica SHA256 del file scaricato.
+
+    FIX #16 (integrity): The old code silently returned True when no hash was
+    provided, making the verification step entirely optional and easy to skip.
+
+    Args:
+        downloaded_path:  path to the local file to verify.
+        expected_sha256:  hex digest string from the release asset, or None.
+        require_verified: when True and expected_sha256 is absent, returns
+                          False (strict mode — do not execute unverified files).
+                          Defaults to False for backward compatibility.
+
+    Returns:
+        True  — hash present and matches (safe to execute), OR hash absent and
+                require_verified=False (legacy permissive mode).
+        False — hash mismatch (tampered file) or hash absent in strict mode.
     """
     if not expected_sha256:
+        if require_verified:
+            import logging as _logging
+            _logging.getLogger("AutoUpdater").warning(
+                "[AutoUpdater] verify_download_hash: no SHA256 supplied — "
+                "refusing to verify (require_verified=True)."
+            )
+            return False
+        # Legacy permissive path — hash not provided by this release.
         return True
 
     try:

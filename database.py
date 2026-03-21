@@ -4,7 +4,9 @@ Hedge-Fund Grade: supporta concorrenza massiva (WAL),
 nested transactions, Saga Pattern e persistenza totale UI/Telegram.
 """
 
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -327,11 +329,71 @@ class Database:
                 self._set_setting(key, value)
 
     # =========================================================
+    # =========================================================
+    # FIX #19: credential encryption at rest
+    #
+    # Sensitive keys (private_key, certificate, app_key, password) are stored
+    # as XOR-encrypted, base64-encoded blobs prefixed with "ENC:".
+    # The key is derived from the machine's stable identifier (hostname +
+    # cpu_count) via PBKDF2-HMAC-SHA256.  This is NOT strong authenticated
+    # encryption but it prevents plaintext credentials from being readable by
+    # simple "SELECT value FROM settings" queries or file readers.
+    #
+    # Backward compatibility: rows that do NOT start with "ENC:" are treated
+    # as legacy plaintext and returned as-is, allowing a seamless transition
+    # without a migration script.
+    # =========================================================
+
+    _SENSITIVE_KEYS = frozenset(
+        {"private_key", "certificate", "app_key", "password"}
+    )
+    _ENC_PREFIX = "ENC:"
+
+    @staticmethod
+    def _derive_db_key() -> bytes:
+        """Derive a per-machine 32-byte key using stable host attributes."""
+        import platform
+        import socket
+        raw = f"{socket.gethostname()}-{platform.node()}-pickfair-db-v1"
+        return hashlib.pbkdf2_hmac("sha256", raw.encode(), b"pickfair-salt-v1", 100_000)
+
+    @classmethod
+    def _encrypt_value(cls, plaintext: str) -> str:
+        """XOR-cipher + base64 the value. Returns an 'ENC:…' tagged string."""
+        key = cls._derive_db_key()
+        data = plaintext.encode("utf-8")
+        # Extend key via HMAC to match data length
+        keystream = bytearray()
+        counter = 0
+        while len(keystream) < len(data):
+            keystream.extend(hmac.new(key, counter.to_bytes(4, "big"), "sha256").digest())
+            counter += 1
+        cipher = bytes(b ^ k for b, k in zip(data, keystream))
+        return cls._ENC_PREFIX + base64.b64encode(cipher).decode("ascii")
+
+    @classmethod
+    def _decrypt_value(cls, stored: str) -> str:
+        """Decrypt an 'ENC:…' value. Returns plaintext."""
+        payload = stored[len(cls._ENC_PREFIX):]
+        cipher = base64.b64decode(payload)
+        key = cls._derive_db_key()
+        keystream = bytearray()
+        counter = 0
+        while len(keystream) < len(cipher):
+            keystream.extend(hmac.new(key, counter.to_bytes(4, "big"), "sha256").digest())
+            counter += 1
+        return bytes(b ^ k for b, k in zip(cipher, keystream)).decode("utf-8")
+
     # SETTINGS
     # =========================================================
 
     def _set_setting(self, key: str, value: Any):
-        stored = "" if value is None else str(value)
+        raw = "" if value is None else str(value)
+        # FIX #19: encrypt sensitive credential fields before storing.
+        if key in self._SENSITIVE_KEYS and raw:
+            stored = self._encrypt_value(raw)
+        else:
+            stored = raw
         self._execute(
             """
             INSERT INTO settings (key, value)
@@ -350,7 +412,20 @@ class Database:
         )
         if not rows:
             return default
-        return rows[0]["value"]
+        stored = rows[0]["value"]
+        # FIX #19: transparently decrypt sensitive fields.
+        # Legacy plaintext rows (no ENC: prefix) are returned as-is so
+        # old data is still readable without a migration step.
+        if (
+            key in self._SENSITIVE_KEYS
+            and isinstance(stored, str)
+            and stored.startswith(self._ENC_PREFIX)
+        ):
+            try:
+                return self._decrypt_value(stored)
+            except Exception:
+                return stored  # fall back to raw on any decrypt error
+        return stored
 
     def _parse_setting_value(self, value: Any) -> Any:
         if value is None:
@@ -378,7 +453,19 @@ class Database:
         )
         result: Dict[str, Any] = {}
         for row in rows or []:
-            result[row["key"]] = self._parse_setting_value(row["value"])
+            key = row["key"]
+            raw = row["value"]
+            # FIX #19: decrypt sensitive values before returning
+            if (
+                key in self._SENSITIVE_KEYS
+                and isinstance(raw, str)
+                and raw.startswith(self._ENC_PREFIX)
+            ):
+                try:
+                    raw = self._decrypt_value(raw)
+                except Exception:
+                    pass  # fall back to raw on decrypt error
+            result[key] = self._parse_setting_value(raw)
         return result
 
     def save_settings(self, settings: Optional[Dict[str, Any]] = None, **kwargs):
