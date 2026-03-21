@@ -32,7 +32,14 @@ class AutomationEngine:
         self.running = False
 
     def _is_on_cooldown(self, market_id: str) -> bool:
-        """Verifica se il mercato è in cooldown per evitare double triggers."""
+        """
+        Check (read-only) whether market_id is within the cooldown window.
+
+        FIX #12: the old implementation recorded the current time
+        unconditionally every time someone called this method, resetting the
+        cooldown even when no action was taken.  Now this method is purely a
+        read; use _record_action_time() after the action actually executes.
+        """
         market_id = str(market_id or "").strip()
         if not market_id:
             return False
@@ -40,10 +47,15 @@ class AutomationEngine:
         with self._global_lock:
             now = time.time() * 1000
             last_time = self._last_action_time.get(market_id, 0)
-            if now - last_time < self._cooldown_ms:
-                return True
-            self._last_action_time[market_id] = now
-            return False
+            return (now - last_time) < self._cooldown_ms
+
+    def _record_action_time(self, market_id: str):
+        """Record that an action was taken for market_id, starting cooldown."""
+        market_id = str(market_id or "").strip()
+        if not market_id:
+            return
+        with self._global_lock:
+            self._last_action_time[market_id] = time.time() * 1000
 
     def _get_orders(self):
         if not self.controller:
@@ -88,6 +100,9 @@ class AutomationEngine:
         market_orders = [o for o in orders if str(o.get("marketId", "")) == market_id]
         if not market_orders:
             return
+
+        # Record the action time now that we are actually going to act.
+        self._record_action_time(market_id)
 
         for order in market_orders:
             self._evaluate_order(order, market_data or {})

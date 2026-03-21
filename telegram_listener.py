@@ -400,7 +400,11 @@ class TelegramListener:
                 signal["side"] = "BACK"
                 signal["action"] = "BACK"
 
-        if signal["event"] and signal["score_home"] is not None:
+        # FIX #11: only use the score-derived "Over" default when no explicit
+        # over/under signal was already parsed from the message text.
+        # Previously this block ran unconditionally, discarding an explicit
+        # "under" (or "over") keyword that had already been set above.
+        if signal["event"] and signal["score_home"] is not None and not signal["selection"]:
             signal["selection"] = f"Over {signal['over_line']}"
             signal["side"] = "BACK"
             signal["action"] = "BACK"

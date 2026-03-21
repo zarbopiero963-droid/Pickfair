@@ -54,8 +54,15 @@ class DutchingCache:
 
         Usa solo i campi rilevanti per il calcolo.
         """
+        # FIX #10: include side in key so BACK/LAY configurations at the same
+        # price do not collide. Use effectiveType if present, else side, else
+        # fall back to the top-level bet_type parameter.
         price_tuple = tuple(
-            (s.get("selectionId"), round(s.get("price", 0), 2))
+            (
+                s.get("selectionId"),
+                round(s.get("price", 0), 2),
+                str(s.get("effectiveType") or s.get("side") or bet_type).upper(),
+            )
             for s in sorted(selections, key=lambda x: x.get("selectionId", 0))
         )
         return hash(
