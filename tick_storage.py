@@ -170,9 +170,16 @@ class TickStorage:
         ]
 
     def clear(self, selection_id: Optional[int] = None):
-        """Pulisce storage."""
+        """
+        Pulisce storage.
+
+        FIX #15: the old guard `if selection_id:` is falsy for 0, so
+        clear(selection_id=0) would fall into the else branch and wipe
+        ALL storage instead of just selection 0.
+        Use `is not None` so that 0 is treated as a valid specific ID.
+        """
         with self.lock:
-            if selection_id:
+            if selection_id is not None:
                 self.ticks.pop(selection_id, None)
                 self.ohlc_cache.pop(selection_id, None)
             else:

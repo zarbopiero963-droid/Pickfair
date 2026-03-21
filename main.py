@@ -14,6 +14,7 @@ Include:
 """
 
 import logging
+import os
 import threading
 import time
 
@@ -186,7 +187,22 @@ class PickfairApp(
             or getattr(self, "telegram_master_chat_id", None)
         )
 
-        self.api_football = APIFootballClient(api_key="INSERISCI_TUA_API_KEY_QUI")
+        # FIX #14: read the API-Football key from the environment or from DB
+        # settings. If neither is configured (or the value is still the
+        # placeholder), create the client with an empty key so that
+        # is_available() → False and no live HTTP requests are fired.
+        _PLACEHOLDER = "INSERISCI_TUA_API_KEY_QUI"
+        _football_key = (
+            os.environ.get("API_FOOTBALL_KEY", "").strip()
+            or (settings.get("api_football_key") or "").strip()
+        )
+        if not _football_key or _football_key == _PLACEHOLDER:
+            self.logger.warning(
+                "[Config] API_FOOTBALL_KEY non configurata — "
+                "GoalEnginePro avviato in modalità disabilitata."
+            )
+            _football_key = ""  # empty → APIFootballClient.is_available() relies on circuit
+        self.api_football = APIFootballClient(api_key=_football_key)
         self.goal_engine = GoalEnginePro(
             api_client=self.api_football,
             betfair_stream=getattr(self, "stream", None),

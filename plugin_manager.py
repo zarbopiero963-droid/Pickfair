@@ -502,8 +502,12 @@ class PluginManager:
         for callback in self.hooks[hook_name]:
             plugin_name = getattr(callback, "_plugin_name", "unknown")
             try:
+                # FIX #13: bind `cb` in the default argument so each lambda
+                # captures its own callback reference instead of sharing the
+                # loop variable `callback` by reference. Without this, all
+                # hooks would call the last `callback` value after the loop.
                 result = self._run_plugin_safe(
-                    lambda: callback(*args, **kwargs), plugin_name
+                    lambda cb=callback: cb(*args, **kwargs), plugin_name
                 )
                 if result is not None:
                     results.append(result)

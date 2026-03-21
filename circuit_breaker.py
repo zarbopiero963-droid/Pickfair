@@ -162,7 +162,13 @@ class CircuitBreaker:
 
     def _on_success(self):
         with self._lock:
-            if self.state in (State.HALF_OPEN, State.OPEN):
+            # FIX #8: only transition to CLOSED from HALF_OPEN, not from OPEN.
+            # A probe call can only succeed while in HALF_OPEN; if we are still
+            # OPEN (e.g. the single probe call was bypassed by the in-flight
+            # guard) we must not silently reset to CLOSED.
+            if self.state == State.OPEN:
+                return
+            if self.state == State.HALF_OPEN:
                 logger.info("[CB] Recovery -> CLOSED")
             self._reset_unlocked()
 
