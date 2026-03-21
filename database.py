@@ -34,6 +34,10 @@ class Database:
         self.db_path = db_path or get_db_path()
         self._local = threading.local()
         self._write_lock = threading.RLock()
+        # FIX #24: track all per-thread connections so we can close them on
+        # threads that never call close() explicitly (worker threads, etc.)
+        self._all_conns: List[sqlite3.Connection] = []
+        self._all_conns_lock = threading.Lock()
         self._init_db()
 
     # =========================================================
@@ -53,6 +57,11 @@ class Database:
             conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
             self._local.transaction_depth = 0
+            # FIX #24: register every new per-thread connection centrally so
+            # close_all_connections() can clean them up even if the thread
+            # never calls close() explicitly.
+            with self._all_conns_lock:
+                self._all_conns.append(conn)
         return self._local.conn
 
     def _execute(
@@ -661,14 +670,48 @@ class Database:
         )
 
     def replace_telegram_chats(self, chats: List[Dict[str, Any]]):
-        self._execute("DELETE FROM telegram_chats")
-        for chat in chats or []:
-            self.save_telegram_chat(
-                chat_id=chat.get("chat_id"),
-                title=chat.get("title"),
-                username=chat.get("username"),
-                is_active=chat.get("is_active", True),
-            )
+        """
+        FIX #24: perform DELETE + INSERT atomically inside a single SQLite
+        transaction so a crash between the two operations cannot leave the
+        table empty.
+
+        Old code called _execute twice with commit=True between them:
+            DELETE FROM telegram_chats   ← committed
+            INSERT …                     ← crash here → table is empty
+        New code wraps both operations in a single SAVEPOINT so either both
+        or neither are committed.
+        """
+        conn = self._get_connection()
+        with self._write_lock:
+            conn.execute("SAVEPOINT replace_chats_sp")
+            try:
+                conn.execute("DELETE FROM telegram_chats")
+                for chat in chats or []:
+                    conn.execute(
+                        """
+                        INSERT INTO telegram_chats (chat_id, title, username, is_active)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(chat_id) DO UPDATE SET
+                            title=excluded.title,
+                            username=excluded.username,
+                            is_active=excluded.is_active
+                        """,
+                        (
+                            str(chat.get("chat_id") or ""),
+                            str(chat.get("title") or ""),
+                            str(chat.get("username") or ""),
+                            1 if chat.get("is_active", True) else 0,
+                        ),
+                    )
+                conn.execute("RELEASE replace_chats_sp")
+                conn.commit()
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK TO replace_chats_sp")
+                    conn.execute("RELEASE replace_chats_sp")
+                except Exception:
+                    pass
+                raise
 
     def delete_telegram_chat(self, chat_id):
         self._execute(
@@ -1131,16 +1174,41 @@ class Database:
     # =========================================================
 
     def close(self):
-        if hasattr(self._local, "conn") and self._local.conn:
+        """Close this thread's connection. Removes it from the global registry."""
+        conn = getattr(self._local, "conn", None)
+        if conn:
             try:
-                self._local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception:
                 pass
             try:
-                self._local.conn.close()
+                conn.close()
             except Exception:
                 pass
             self._local.conn = None
+            # FIX #24: remove from the global registry on explicit close so
+            # close_all_connections does not try to close it a second time.
+            with self._all_conns_lock:
+                try:
+                    self._all_conns.remove(conn)
+                except ValueError:
+                    pass
+
+    def close_all_connections(self):
+        """
+        FIX #24: close every per-thread connection that was ever created by
+        this Database instance, regardless of which thread opened it.
+
+        Call this at application shutdown to ensure worker-thread connections
+        (SafeExecutor, PluginRunner, TelegramSender, etc.) are not leaked.
+        """
+        with self._all_conns_lock:
+            conns, self._all_conns = list(self._all_conns), []
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 class _DummyLock:

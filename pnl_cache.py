@@ -7,6 +7,7 @@ Soluzione: dirty flag + short-circuit + cache
 Impatto: -80% chiamate PnLEngine
 """
 
+import copy
 import threading
 import time
 from dataclasses import dataclass, field
@@ -95,7 +96,11 @@ class PnLCache:
         with self._lock:
             if not orders:
                 self._stats["short_circuits"] += 1
-                return self.ZERO_PNL.copy()
+                # FIX #25: deep copy so callers cannot mutate ZERO_PNL's nested
+                # dicts (by_selection, green_stakes) via the returned object.
+                # Old shallow copy left those nested dicts shared with the class
+                # constant; any write to result["by_selection"] would corrupt it.
+                return copy.deepcopy(self.ZERO_PNL)
 
             state = self._markets.get(market_id)
             if not state:
