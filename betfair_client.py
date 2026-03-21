@@ -853,6 +853,13 @@ class BetfairClient:
     ):
         if side == "BACK":
             potential_profit = original_stake * (original_odds - 1)
+            if current_odds <= 1:
+                return {
+                    "cashout_stake": 0.0,
+                    "profit_if_win": 0.0,
+                    "profit_if_lose": 0.0,
+                    "guaranteed_profit": 0.0,
+                }
             cashout_stake = potential_profit / (current_odds - 1)
 
             if current_odds < original_odds:
@@ -871,6 +878,13 @@ class BetfairClient:
         else:
             liability = original_stake * (original_odds - 1)
             potential_profit = original_stake
+            if current_odds <= 1:
+                return {
+                    "cashout_stake": 0.0,
+                    "profit_if_win": 0.0,
+                    "profit_if_lose": 0.0,
+                    "guaranteed_profit": 0.0,
+                }
             cashout_stake = liability / (current_odds - 1)
 
             return {
@@ -898,15 +912,25 @@ class BetfairClient:
             "profit_loss": 0,
         }
 
+        back_weighted_odds_sum = 0.0
+        lay_weighted_odds_sum = 0.0
+
         for order_list in [orders["matched"], orders["partiallyMatched"]]:
             for order in order_list:
                 if order["selectionId"] == selection_id:
+                    size = order["sizeMatched"]
+                    avg_price = order["averagePriceMatched"] or 0
                     if order["side"] == "BACK":
-                        position["back_stake"] += order["sizeMatched"]
-                        position["back_avg_odds"] = order["averagePriceMatched"] or 0
+                        position["back_stake"] += size
+                        back_weighted_odds_sum += size * avg_price
                     else:
-                        position["lay_stake"] += order["sizeMatched"]
-                        position["lay_avg_odds"] = order["averagePriceMatched"] or 0
+                        position["lay_stake"] += size
+                        lay_weighted_odds_sum += size * avg_price
+
+        if position["back_stake"] > 0:
+            position["back_avg_odds"] = back_weighted_odds_sum / position["back_stake"]
+        if position["lay_stake"] > 0:
+            position["lay_avg_odds"] = lay_weighted_odds_sum / position["lay_stake"]
 
         position["net_position"] = position["back_stake"] - position["lay_stake"]
 
