@@ -213,13 +213,36 @@ class PluginManager:
                         actual_name = alias.asname or alias.name
                         module_aliases[actual_name] = f"{module_name}.{alias.name}"
 
+            # FIX #17: block additional trivial-bypass builtins that the old
+            # code missed: getattr/setattr can retrieve __builtins__ or any
+            # blocked module; globals()/locals() expose the full namespace.
+            # __builtins__ / __import__ are also caught here.
+            # String-construction bypasses (concatenation that evaluates to
+            # "eval", "exec", etc.) cannot be fully caught at AST level, but
+            # we ensure the names themselves trigger rejection.
+            elif isinstance(node, ast.Name):
+                if node.id in {
+                    "__builtins__",
+                    "__loader__",
+                    "__spec__",
+                }:
+                    return False, f"Accesso vietato: {node.id}"
+
             # Check function calls
             elif isinstance(node, ast.Call):
                 func = node.func
 
-                # Check for dangerous builtins: eval(), exec(), compile()
+                # Check for dangerous builtins (expanded list — FIX #17)
                 if isinstance(func, ast.Name):
-                    if func.id in ["eval", "exec", "compile", "__import__"]:
+                    _BLOCKED_NAMES = {
+                        "eval", "exec", "compile", "__import__",
+                        # FIX #17: these allow access to blocked modules /
+                        # builtins at runtime and are not needed by plugins.
+                        "getattr", "setattr", "delattr",
+                        "globals", "locals", "vars",
+                        "open",  # file access — plugins use provided APIs
+                    }
+                    if func.id in _BLOCKED_NAMES:
                         return False, f"Funzione vietata: {func.id}()"
 
                 # Check for dangerous attribute calls: os.system(), etc.
@@ -295,6 +318,28 @@ class PluginManager:
 
             if not requirements:
                 return True, "Requirements vuoto"
+
+            # FIX #17: validate each requirement line before passing to pip.
+            # Reject lines that look like URLs, VCS refs, or --options which
+            # could be used to execute arbitrary code during installation
+            # (e.g. `git+https://…` can run setup.py with arbitrary commands).
+            for req in requirements:
+                if (
+                    req.startswith("-")          # pip options like --index-url
+                    or "://" in req              # URL-style: git+https://, http://
+                    or req.startswith("git+")    # VCS requirement
+                    or req.startswith("svn+")
+                    or req.startswith("hg+")
+                    or req.startswith("bzr+")
+                    or ".." in req              # path traversal
+                    or req.startswith("/")      # absolute path install
+                    or req.startswith("\\")
+                ):
+                    return (
+                        False,
+                        f"Requirement non sicuro rifiutato: {req!r}. "
+                        "Solo pacchetti PyPI per nome/versione sono consentiti.",
+                    )
 
             # Install using pip
             result = subprocess.run(

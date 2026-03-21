@@ -185,8 +185,27 @@ class BetfairClient:
             f.write(self.cert_pem)
 
         key_file_path = os.path.join(self.temp_certs_dir, "client-2048.key")
-        with open(key_file_path, "w") as f:
-            f.write(self.key_pem)
+        # FIX #18: write the private key with owner-read-only permissions.
+        # Old code used the default umask (typically 0o644 on Linux, world-
+        # readable), exposing the private key to other processes on the same
+        # host.  We use os.open with O_CREAT|O_WRONLY and mode 0o600 to
+        # restrict access to the owner only before writing anything.
+        import stat as _stat
+        _fd = os.open(key_file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(_fd, "w") as _f:
+                _f.write(self.key_pem)
+        except Exception:
+            try:
+                os.close(_fd)
+            except OSError:
+                pass
+            raise
+        # Ensure permissions are exactly 0o600 even if umask interfered.
+        try:
+            os.chmod(key_file_path, _stat.S_IRUSR | _stat.S_IWUSR)
+        except OSError:
+            pass  # best-effort: Windows does not support POSIX permissions
 
         return self.temp_certs_dir
 

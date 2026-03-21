@@ -556,9 +556,17 @@ class SafetyLayer:
 
                 age = now - state.last_ping
                 if age > state.timeout_sec:
-                    state.triggered = True
-                    state.last_error = f"Watchdog timeout: {age:.2f}s > {state.timeout_sec:.2f}s"
-                    to_notify.append((name, state.last_error))
+                    # FIX #20: only fire the callback the FIRST time the
+                    # component is detected as timed-out.  The old code set
+                    # state.triggered = True but then appended to to_notify
+                    # unconditionally on every watchdog cycle, causing the
+                    # callback to fire repeatedly for the same event.
+                    if not state.triggered:
+                        state.triggered = True
+                        state.last_error = (
+                            f"Watchdog timeout: {age:.2f}s > {state.timeout_sec:.2f}s"
+                        )
+                        to_notify.append((name, state.last_error))
 
         for name, error in to_notify:
             logger.error("[SafetyLayer] %s -> %s", name, error)
@@ -620,10 +628,25 @@ class SafetyLayer:
 # =========================================================
 
 _global_safety_layer: Optional[SafetyLayer] = None
+_global_safety_layer_lock = threading.Lock()
 
 
 def get_safety_layer() -> SafetyLayer:
+    """
+    FIX #20: thread-safe singleton initialisation.
+
+    Old code used a bare check-then-act pattern without a lock:
+        if _global_safety_layer is None:
+            _global_safety_layer = SafetyLayer()
+    Two threads could both see None, both call SafetyLayer(), and each get a
+    different instance — losing state accumulated by the other.
+
+    Fixed with a double-checked locking pattern to avoid lock contention on
+    the hot path once the singleton exists.
+    """
     global _global_safety_layer
     if _global_safety_layer is None:
-        _global_safety_layer = SafetyLayer()
+        with _global_safety_layer_lock:
+            if _global_safety_layer is None:
+                _global_safety_layer = SafetyLayer()
     return _global_safety_layer

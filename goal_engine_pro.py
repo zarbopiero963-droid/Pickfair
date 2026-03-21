@@ -92,6 +92,12 @@ class GoalEnginePro:
         self.running = False
         self._stop_event = threading.Event()
 
+        # FIX #23: protect shared data structures with a lock.
+        # goal_cache, confirm_cache, and hedged_matches are accessed from
+        # both the main _loop thread and from spawned callback threads
+        # (reopen_callback, hedge_callback).  Without synchronisation,
+        # concurrent reads/writes can corrupt dict/set internal state.
+        self._cache_lock = threading.Lock()
         self.goal_cache = defaultdict(int)
         self.confirm_cache = {}  # match_id -> timestamp first detect
         self.hedged_matches = set()
@@ -155,12 +161,14 @@ class GoalEnginePro:
             goals_away = fixture["goals"]["away"] or 0
             total_goals = goals_home + goals_away
 
-            prev_goals = self.goal_cache[match_id]
+            with self._cache_lock:
+                prev_goals = self.goal_cache[match_id]
 
             if total_goals < prev_goals:
                 logger.info("VAR detected match=%s", match_id)
-                self.goal_cache[match_id] = total_goals
-                self.hedged_matches.discard(match_id)
+                with self._cache_lock:
+                    self.goal_cache[match_id] = total_goals
+                    self.hedged_matches.discard(match_id)
                 threading.Thread(
                     target=self.reopen_callback,
                     args=(match_id,),
@@ -169,16 +177,21 @@ class GoalEnginePro:
                 return
 
             if total_goals > prev_goals:
-                self.goal_cache[match_id] = total_goals
+                with self._cache_lock:
+                    self.goal_cache[match_id] = total_goals
                 logger.info("GOAL detected API match=%s", match_id)
 
                 if self.confirm_mode:
-                    self.confirm_cache[match_id] = time.time()
+                    with self._cache_lock:
+                        self.confirm_cache[match_id] = time.time()
                 else:
                     self._verify_and_hedge(match_id)
 
     def _verify_and_hedge(self, match_id):
-        if match_id in self.hedged_matches:
+        # FIX #23: check hedged_matches under lock
+        with self._cache_lock:
+            already_hedged = match_id in self.hedged_matches
+        if already_hedged:
             return
 
         if not self._verify_with_stream(match_id):
@@ -189,7 +202,10 @@ class GoalEnginePro:
             if self._stop_event.wait(self.hedge_delay_ms):
                 return
 
-        self.hedged_matches.add(match_id)
+        with self._cache_lock:
+            if match_id in self.hedged_matches:
+                return  # double-checked locking
+            self.hedged_matches.add(match_id)
 
         threading.Thread(
             target=self.hedge_callback,
@@ -201,10 +217,14 @@ class GoalEnginePro:
 
     def check_stream_confirmation(self):
         now = time.time()
-        for match_id, ts in list(self.confirm_cache.items()):
-            if now - ts > 2:
-                self._verify_and_hedge(match_id)
+        # FIX #23: snapshot and delete under lock, then call hedge outside
+        with self._cache_lock:
+            to_process = [mid for mid, ts in self.confirm_cache.items()
+                          if now - ts > 2]
+            for match_id in to_process:
                 del self.confirm_cache[match_id]
+        for match_id in to_process:
+            self._verify_and_hedge(match_id)
 
     def _verify_with_stream(self, match_id):
         """

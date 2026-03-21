@@ -80,11 +80,18 @@ class AdaptiveRateLimiter:
         self.consecutive_successes = 0
 
     async def wait_if_needed_async(self):
+        # FIX #21: read current_delay and last_send_time under the lock so
+        # that concurrent calls from other threads (record_success /
+        # record_failure) cannot cause torn reads.
+        with self._lock:
+            current_delay = self.current_delay
+            last_send = self.last_send_time
         now = asyncio.get_event_loop().time()
-        elapsed = now - self.last_send_time
-        if elapsed < self.current_delay:
-            await asyncio.sleep(self.current_delay - elapsed)
-        self.last_send_time = asyncio.get_event_loop().time()
+        elapsed = now - last_send
+        if elapsed < current_delay:
+            await asyncio.sleep(current_delay - elapsed)
+        with self._lock:
+            self.last_send_time = asyncio.get_event_loop().time()
 
     def record_success(self):
         with self._lock:
@@ -137,6 +144,8 @@ class TelegramSender:
         self._queue = Queue()
         self._running = False
         self._worker_thread = None
+        # FIX #21: lock used by queue_message to prevent duplicate worker threads
+        self._worker_lock = threading.Lock()
 
         self._messages_sent = 0
         self._messages_failed = 0
@@ -322,8 +331,12 @@ class TelegramSender:
             flood_wait=0,
         )
 
-        if not self._running:
-            self.start_worker()
+        # FIX #21: guard start_worker under a dedicated lock so that
+        # concurrent queue_message calls cannot each see _running==False
+        # and spawn multiple worker threads.
+        with self._worker_lock:
+            if not self._running:
+                self.start_worker()
 
     def queue_default_message(
         self,
