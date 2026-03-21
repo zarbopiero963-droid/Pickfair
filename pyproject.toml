@@ -7,6 +7,12 @@ name = "pickfair"
 version = "3.19.1"
 description = "Pickfair Trading Bot"
 requires-python = ">=3.11"
+dependencies = [
+    "betfairlightweight>=2.22.0",
+    "pytest>=9.0.2",
+    "requests>=2.32.5",
+    "telethon>=1.42.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
