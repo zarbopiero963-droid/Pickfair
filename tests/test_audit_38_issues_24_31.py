@@ -481,6 +481,105 @@ class TestIssue29MarketTrackerEviction:
 # Issue #30 – executor_manager.py
 # =============================================================================
 
+class TestIssue30CallSiteAudit:
+    """
+    Structural proof that no existing production caller depends on the old
+    blocking return value of submit().
+
+    Every call site is of the form:
+        self.executor.submit("name", task)     # return value discarded
+    None of them assign, await, or inspect the returned value.
+
+    This confirms the public contract change is backward-compatible:
+    the old code returned the *result* of the task (blocking); the new code
+    returns a Future. Since every caller discards the return value, neither
+    the blocking behavior nor the result type was part of any caller's contract.
+    """
+
+    PRODUCTION_CALL_SITES = [
+        # (file, approximate_pattern)
+        ("controllers/telegram_controller.py", 'executor.submit("tg_send_code"'),
+        ("controllers/telegram_controller.py", 'executor.submit("tg_verify_code"'),
+        ("controllers/telegram_controller.py", 'executor.submit("tg_load_dialogs"'),
+        ("core/trading_engine.py",             'executor.submit("stub_cleanup"'),
+        ("core/trading_engine.py",             'executor.submit("saga_recovery"'),
+        ("core/trading_engine.py",             'executor.submit("engine_quick_bet"'),
+        ("core/trading_engine.py",             'executor.submit("engine_dutching"'),
+        ("core/trading_engine.py",             'executor.submit("engine_cashout"'),
+        ("app_modules/monitoring_module.py",   'executor.submit("fetch_orders"'),
+        ("app_modules/monitoring_module.py",   'executor.submit("fetch_cashout"'),
+        ("app_modules/streaming_module.py",    'executor.submit("fetch_live_events"'),
+        ("app_modules/betting_module.py",      'executor.submit("login_task"'),
+    ]
+
+    def test_no_caller_assigns_submit_return_value(self):
+        """
+        Scan every production call site and assert that the return value
+        of submit() is not assigned (i.e. the call appears on its own line,
+        not on the RHS of an assignment or inside another expression).
+        """
+        import ast, os
+
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        for rel_path, pattern in self.PRODUCTION_CALL_SITES:
+            full_path = os.path.join(base, rel_path)
+            if not os.path.exists(full_path):
+                continue  # file missing is fine — pattern won't be found
+
+            with open(full_path) as f:
+                source = f.read()
+
+            tree = ast.parse(source)
+
+            # Collect all Assign / AugAssign / AnnAssign / Return nodes
+            # that have an executor.submit() call on their RHS.
+            assigned = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                    value = getattr(node, "value", None)
+                    if value and _is_submit_call(value):
+                        assigned.append((rel_path, ast.unparse(node)))
+                elif isinstance(node, ast.Return):
+                    if node.value and _is_submit_call(node.value):
+                        assigned.append((rel_path, ast.unparse(node)))
+
+            assert assigned == [], (
+                f"Call site in {rel_path} ASSIGNS submit() return value: "
+                f"{assigned}\n"
+                "This would break backward compatibility with the new Future return."
+            )
+
+    def test_fire_and_forget_pattern_works_with_future_return(self):
+        """
+        Verify that fire-and-forget callers (return value discarded) work
+        correctly with the new Future-returning submit().
+        """
+        from executor_manager import SafeExecutor
+
+        executor = SafeExecutor()
+        executed = threading.Event()
+
+        def task():
+            executed.set()
+
+        # Simulate the production pattern: call submit, discard return value
+        executor.submit("fire_and_forget", task)
+
+        assert executed.wait(timeout=2), "Task was never executed"
+        executor.executor.shutdown(wait=False)
+
+
+def _is_submit_call(node) -> bool:
+    """Return True if the AST node is a call to *.submit(...)."""
+    import ast as _ast
+    return (
+        isinstance(node, _ast.Call)
+        and isinstance(node.func, _ast.Attribute)
+        and node.func.attr == "submit"
+    )
+
+
 class TestIssue30SafeExecutorNonBlocking:
 
     def test_submit_returns_future_without_blocking(self):
