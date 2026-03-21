@@ -146,13 +146,12 @@ class TickDispatcher:
                 ui_ticks = snapshot
                 self._last_ui_update = now
                 self._ui_dispatch_count += 1
+                self._pending_ticks.clear()
 
             if should_check_automation:
                 auto_ticks = snapshot
                 self._last_automation_check = now
                 self._automation_dispatch_count += 1
-
-            if should_update_ui or should_check_automation:
                 self._pending_ticks.clear()
 
         if ui_ticks:

@@ -228,8 +228,11 @@ class PnLEngine:
             gross_profit = stake * (price - 1)
             net_profit = gross_profit * (1 - commission_pct)
         else:
-            # LAY: profitto = stake se perdi (price non sale)
-            # La tua puntata vince quando la selezione perde
-            net_profit = stake * (1 - commission_pct)
+            # LAY: profitto = stake se la selezione perde (vinci tu)
+            # Il profitto è esattamente lo stake (la tua puntata vince)
+            # La responsabilità (liability) è stake * (price - 1) se perdi
+            liability = stake * (price - 1)
+            gross_profit = stake
+            net_profit = gross_profit * (1 - commission_pct)
 
         return round(net_profit, 2)
