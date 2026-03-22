@@ -10,6 +10,7 @@ HEDGE-FUND STABLE:
 
 import asyncio
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -230,8 +231,21 @@ class TelegramSender:
                 error_str = str(e).lower()
 
                 if "floodwait" in error_str or "flood" in error_str:
+                    # FIX #36: parse FloodWait duration robustly.
+                    # Old code: "".join(filter(str.isdigit, str(e))) concatenated
+                    # ALL digit sequences (including error codes, timestamps, port
+                    # numbers) producing e.g. "130420" from "wait 130s [420]".
+                    # New code: look for the first 1-4 digit integer that appears
+                    # either:
+                    #   - as a standalone word boundary match (\b123\b), or
+                    #   - directly before a non-digit (e.g. "130s", "45.")
+                    # This captures the wait duration while ignoring trailing
+                    # error codes like [420] which come after the duration.
                     try:
-                        wait_seconds = int("".join(filter(str.isdigit, str(e)))) or 60
+                        m = re.search(r"(\d{1,4})(?:\D|$)", str(e))
+                        wait_seconds = int(m.group(1)) if m else 60
+                        if wait_seconds <= 0:
+                            wait_seconds = 60
                     except Exception:
                         wait_seconds = 60
 
