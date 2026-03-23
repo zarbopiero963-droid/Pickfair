@@ -231,21 +231,39 @@ class TelegramSender:
                 error_str = str(e).lower()
 
                 if "floodwait" in error_str or "flood" in error_str:
-                    # FIX #36: parse FloodWait duration robustly.
-                    # Old code: "".join(filter(str.isdigit, str(e))) concatenated
-                    # ALL digit sequences (including error codes, timestamps, port
-                    # numbers) producing e.g. "130420" from "wait 130s [420]".
-                    # New code: look for the first 1-4 digit integer that appears
-                    # either:
-                    #   - as a standalone word boundary match (\b123\b), or
-                    #   - directly before a non-digit (e.g. "130s", "45.")
-                    # This captures the wait duration while ignoring trailing
-                    # error codes like [420] which come after the duration.
+                    # FIX #36 (revised): parse FloodWait duration using structured
+                    # exception attribute or context-aware regex.
+                    #
+                    # Previous regex r"(\d{1,4})(?:\D|$)" still returned wrong
+                    # values when a timestamp or other number appeared before the
+                    # actual wait duration in the string.
+                    #
+                    # New strategy (in priority order):
+                    #   1. Structured attribute: Telethon FloodWaitError exposes
+                    #      .seconds — use it directly if available and positive.
+                    #   2. Contextual regex: match "wait X" or "floodwait X"
+                    #      which captures the duration by its semantic context.
+                    #   3. Seconds indicator: match a number immediately followed
+                    #      by 's' word boundary (e.g. "130s").
+                    #   4. Default to 60 if no pattern matches.
                     try:
-                        m = re.search(r"(\d{1,4})(?:\D|$)", str(e))
-                        wait_seconds = int(m.group(1)) if m else 60
-                        if wait_seconds <= 0:
-                            wait_seconds = 60
+                        if hasattr(e, 'seconds') and isinstance(e.seconds, int) and e.seconds > 0:
+                            # Telethon structured attribute — most reliable
+                            wait_seconds = e.seconds
+                        else:
+                            _estr = str(e)
+                            # Contextual: "wait X" / "FloodWait X"
+                            _m = re.search(
+                                r'(?:wait|floodwait)[^\d]*(\d{1,5})', _estr, re.IGNORECASE
+                            )
+                            if not _m:
+                                # Seconds-indicator fallback: number + "s" boundary
+                                _m = re.search(
+                                    r'(\d{1,5})\s*s(?:\b|$)', _estr, re.IGNORECASE
+                                )
+                            wait_seconds = int(_m.group(1)) if _m else 60
+                            if wait_seconds <= 0:
+                                wait_seconds = 60
                     except Exception:
                         wait_seconds = 60
 

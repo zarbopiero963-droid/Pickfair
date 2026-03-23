@@ -157,6 +157,8 @@ class BetfairClient:
         self.stream_thread = None
         self.streaming_active = False
         self.price_callbacks = {}
+        # FIX #34 race: Event used to interrupt backoff sleep on stop_streaming()
+        self._stream_stop_event = threading.Event()
 
         # --- HEDGE-FUND STABLE FIX ---
         self._cb = CircuitBreaker(max_failures=3, reset_timeout=30)
@@ -583,6 +585,8 @@ class BetfairClient:
                 market_filter=market_filter, market_data_filter=market_data_filter
             )
 
+            # FIX #34 race: clear stop guard before new stream session starts
+            self._stream_stop_event.clear()
             self.streaming_active = True
             # FIX #34: persist context so _run_stream can re-subscribe on reconnect
             self._last_stream_market_ids = market_ids
@@ -637,8 +641,14 @@ class BetfairClient:
             logger.info(
                 "Stream: reconnecting in %.1fs (attempt %d)…", backoff, attempts + 1
             )
-            time.sleep(backoff)
+            # FIX #34 race: use Event.wait instead of time.sleep so
+            # stop_streaming() can interrupt the backoff immediately.
+            # If the event fires (returns True), stop was requested.
+            _stopped = self._stream_stop_event.wait(timeout=backoff)
             backoff = min(backoff * 2, 60.0)
+            if _stopped or not self.streaming_active:
+                logger.info("Stream: stop requested during backoff, aborting reconnect.")
+                break
 
             # Re-subscribe using stored context
             _market_ids = getattr(self, "_last_stream_market_ids", None)
@@ -666,6 +676,8 @@ class BetfairClient:
 
     def stop_streaming(self):
         """Stop the active stream."""
+        # FIX #34 race: signal the reconnect backoff to abort immediately
+        self._stream_stop_event.set()
         self.streaming_active = False
         if self.stream:
             try:

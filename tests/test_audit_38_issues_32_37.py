@@ -298,6 +298,58 @@ class TestIssue34BetfairStreamReconnect:
             "no reconnect since streaming_active was already False."
         )
 
+    def test_stop_streaming_during_backoff_prevents_reconnect(self):
+        """
+        FIX #34 race: if stop_streaming() is called while _run_stream is sleeping
+        in the backoff, the reconnect must be aborted — no new subscription.
+        OLD: time.sleep(backoff) cannot be interrupted; thread reconnects after waking.
+        NEW: _stream_stop_event.wait(backoff) is interrupted by stop_streaming().
+        """
+        from betfair_client import BetfairClient
+        import unittest.mock as mock
+
+        client = BetfairClient(username="u", app_key="k", cert_pem="c", key_pem="k")
+        client.streaming_active = True
+        client._last_stream_market_ids = ["1.234"]
+        client._last_stream_price_callback = lambda *a: None
+        client._stream_max_reconnects = 5
+
+        subscribe_calls = [0]
+        start_calls = [0]
+
+        class InterruptedStream:
+            def start(self):
+                start_calls[0] += 1
+                raise ConnectionError("disconnect")
+            def subscribe_to_markets(self, **kw):
+                subscribe_calls[0] += 1
+
+        class FakeStreamingAPI:
+            def create_stream(self, listener):
+                return InterruptedStream()
+
+        class FakeClientCore:
+            streaming = FakeStreamingAPI()
+
+        client.client = FakeClientCore()
+        client.stream = InterruptedStream()
+
+        # Simulate stop_streaming() being called during the backoff:
+        # we set the event directly (same as stop_streaming would do)
+        def fake_wait(timeout):
+            client.streaming_active = False   # stop_streaming side-effect
+            client._stream_stop_event.set()
+            return True  # True = event was set (interrupted)
+
+        with mock.patch.object(client._stream_stop_event, 'wait', side_effect=fake_wait):
+            client._run_stream()
+
+        assert subscribe_calls[0] == 0, (
+            f"OLD: reconnect happened after backoff even though stop was called. "
+            f"NEW: no re-subscribe after stop_streaming() during backoff. "
+            f"subscribe_calls={subscribe_calls[0]}"
+        )
+
     def test_normal_stream_start_no_reconnect(self):
         """When stream.start() succeeds, no reconnect is attempted."""
         from betfair_client import BetfairClient
@@ -391,6 +443,45 @@ class TestIssue35ShutdownManager:
         mgr.shutdown()
         assert order == ["high", "mid", "low"]
 
+    def test_workers_joined_before_resource_handlers(self):
+        """
+        FIX #35: stop_event is set and workers are joined BEFORE resource-closing
+        handlers run. Without this, a handler might close a DB while a worker
+        thread is still writing to it.
+
+        OLD: stop_event.set() then immediately run handlers — worker may still be alive.
+        NEW: stop_event.set() → join workers → run handlers.
+        """
+        from shutdown_manager import ShutdownManager
+        import threading
+
+        mgr = ShutdownManager()
+        timeline = []
+
+        # Worker: waits for stop_event, appends "worker_done"
+        worker_done = threading.Event()
+        def worker_fn():
+            mgr.stop_event.wait(timeout=5)
+            timeline.append("worker_done")
+            worker_done.set()
+
+        worker_thread = threading.Thread(target=worker_fn, daemon=True)
+        worker_thread.start()
+        mgr.register_worker(worker_thread, timeout=5)
+
+        # Handler (resource close): must run AFTER worker_done
+        def resource_handler():
+            timeline.append("resource_closed")
+
+        mgr.register("db", resource_handler, priority=10)
+        mgr.shutdown()
+
+        assert timeline == ["worker_done", "resource_closed"], (
+            f"OLD: handler may run before worker finishes. "
+            f"NEW: worker must be joined before resource handler runs. "
+            f"Got: {timeline}"
+        )
+
     def test_normal_shutdown_no_regression(self):
         """Normal shutdown still executes all unique handlers."""
         from shutdown_manager import ShutdownManager
@@ -419,11 +510,27 @@ class TestIssue36FloodWaitParsing:
          "A wait of 130s [420]" → "130" → 130 seconds (correct)
     """
 
-    def _parse_flood_wait(self, error_str: str) -> int:
-        """Replicate the exact parsing logic from the fix."""
+    def _parse_flood_wait(self, error_str_or_exc) -> int:
+        """
+        Replicate the exact parsing logic from the fix.
+        1. Structured attribute: if exception has .seconds, use it directly.
+        2. Contextual regex: match "wait X" or "floodwait X" before trying
+           any generic number pattern.
+        3. Fallback to 60.
+        """
         import re
         try:
-            m = re.search(r"(\d{1,4})(?:\D|$)", error_str)
+            # Structured attribute (Telethon FloodWaitError.seconds)
+            if hasattr(error_str_or_exc, 'seconds'):
+                s = error_str_or_exc.seconds
+                if isinstance(s, int) and s > 0:
+                    return s
+            error_str = str(error_str_or_exc)
+            # Contextual: "wait X" or "floodwait X"
+            m = re.search(r'(?:wait|floodwait)[^\d]*(\d{1,5})', error_str, re.IGNORECASE)
+            if not m:
+                # Fallback: number directly followed by 's' (seconds indicator)
+                m = re.search(r'(\d{1,5})\s*s(?:\b|$)', error_str, re.IGNORECASE)
             wait_seconds = int(m.group(1)) if m else 60
             if wait_seconds <= 0:
                 wait_seconds = 60
@@ -474,6 +581,33 @@ class TestIssue36FloodWaitParsing:
         assert self._parse_flood_wait("") == 60
         assert self._parse_flood_wait("no numbers here!") == 60
 
+    def test_structured_exception_attribute_used_first(self):
+        """
+        If the exception has a .seconds attribute (Telethon FloodWaitError),
+        that value must be used directly — no regex parsing.
+        """
+        class FakeFloodWait(Exception):
+            def __init__(self, seconds):
+                self.seconds = seconds
+                super().__init__(f"FloodWaitError [420]: wait {seconds}s [some code 9999]")
+
+        exc = FakeFloodWait(45)
+        result = self._parse_flood_wait(exc)
+        assert result == 45, (
+            f"Structured .seconds attribute must take priority. "
+            f"Expected 45, got {result}"
+        )
+
+    def test_contextual_regex_wait_X(self):
+        """'FloodWaitError: wait 130s [420]' → contextual 'wait 130' → 130."""
+        result = self._parse_flood_wait("FloodWaitError: wait 130s [420]")
+        assert result == 130, f"Contextual 'wait X' must extract 130, got {result}"
+
+    def test_contextual_regex_floodwait_X(self):
+        """'FloodWait 45 seconds' → contextual 'FloodWait 45' → 45."""
+        result = self._parse_flood_wait("FloodWait 45 seconds")
+        assert result == 45, f"Contextual 'FloodWait X' must extract 45, got {result}"
+
     def test_normal_flood_wait_120(self):
         """Standard 'FloodWaitError: 120' → 120."""
         assert self._parse_flood_wait("FloodWaitError: 120") == 120
@@ -490,7 +624,7 @@ class TestIssue37EventBusAsyncSubscribers:
         OLD: slow subscriber ran synchronously → publish() blocked.
         NEW: subscriber dispatched to thread pool → publish() returns immediately.
         """
-        from event_bus import EventBus
+        from core.event_bus import EventBus  # FIX #1: test the runtime module
         bus = EventBus()
         started = threading.Event()
 
@@ -517,7 +651,7 @@ class TestIssue37EventBusAsyncSubscribers:
         Failed subscriber must be reported via done-callback logging.
         We verify by confirming the exception is captured in the Future.
         """
-        from event_bus import EventBus
+        from core.event_bus import EventBus  # FIX #1: test the runtime module
         import concurrent.futures
         bus = EventBus()
         exc_captured = []
