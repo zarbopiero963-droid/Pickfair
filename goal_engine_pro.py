@@ -174,7 +174,9 @@ class GoalEnginePro:
                     args=(match_id,),
                     daemon=True,
                 ).start()
-                return
+                # FIX #32: continue instead of return so a VAR in one fixture
+                # does not skip processing all remaining fixtures in the batch.
+                continue
 
             if total_goals > prev_goals:
                 with self._cache_lock:

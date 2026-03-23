@@ -157,6 +157,8 @@ class BetfairClient:
         self.stream_thread = None
         self.streaming_active = False
         self.price_callbacks = {}
+        # FIX #34 race: Event used to interrupt backoff sleep on stop_streaming()
+        self._stream_stop_event = threading.Event()
 
         # --- HEDGE-FUND STABLE FIX ---
         self._cb = CircuitBreaker(max_failures=3, reset_timeout=30)
@@ -583,7 +585,13 @@ class BetfairClient:
                 market_filter=market_filter, market_data_filter=market_data_filter
             )
 
+            # FIX #34 race: clear stop guard before new stream session starts
+            self._stream_stop_event.clear()
             self.streaming_active = True
+            # FIX #34: persist context so _run_stream can re-subscribe on reconnect
+            self._last_stream_market_ids = market_ids
+            self._last_stream_price_callback = price_callback
+            self._stream_max_reconnects = 5
             self.stream_thread = threading.Thread(target=self._run_stream, daemon=True)
             self.stream_thread.start()
 
@@ -594,17 +602,82 @@ class BetfairClient:
             raise Exception(f"Errore avvio streaming: {str(e)}")
 
     def _run_stream(self):
-        """Run the stream in a background thread."""
-        try:
-            if self.stream:
-                self.stream.start()
-        except Exception as e:
-            print(f"Stream error: {e}")
-        finally:
-            self.streaming_active = False
+        """
+        Run the stream in a background thread.
+
+        FIX #34: On disconnect/error, attempt reconnection with exponential
+        backoff instead of silently setting streaming_active=False and leaving
+        the UI to display stale prices indefinitely.
+
+        Reconnect policy:
+        - Up to _stream_max_reconnects attempts (default 5)
+        - Backoff starts at 2s, doubles each attempt, capped at 60s
+        - Gives up after max attempts and sets streaming_active=False
+        """
+        backoff = 2.0
+        attempts = 0
+
+        while True:
+            try:
+                if self.stream:
+                    self.stream.start()
+                # stream.start() returned normally → intentional stop
+                break
+            except Exception as e:
+                logger.warning("Stream error (attempt %d): %s", attempts + 1, e)
+
+            # If stop_streaming() was called externally, do not reconnect
+            if not self.streaming_active:
+                break
+
+            attempts += 1
+            if attempts >= getattr(self, "_stream_max_reconnects", 5):
+                logger.error(
+                    "Stream: max reconnect attempts (%d) reached, giving up.",
+                    attempts,
+                )
+                break
+
+            logger.info(
+                "Stream: reconnecting in %.1fs (attempt %d)…", backoff, attempts + 1
+            )
+            # FIX #34 race: use Event.wait instead of time.sleep so
+            # stop_streaming() can interrupt the backoff immediately.
+            # If the event fires (returns True), stop was requested.
+            _stopped = self._stream_stop_event.wait(timeout=backoff)
+            backoff = min(backoff * 2, 60.0)
+            if _stopped or not self.streaming_active:
+                logger.info("Stream: stop requested during backoff, aborting reconnect.")
+                break
+
+            # Re-subscribe using stored context
+            _market_ids = getattr(self, "_last_stream_market_ids", None)
+            _price_cb = getattr(self, "_last_stream_price_callback", None)
+            if _market_ids and _price_cb and self.client:
+                try:
+                    self.stream = self.client.streaming.create_stream(
+                        listener=PriceStreamListener(_price_cb)
+                    )
+                    self.stream.subscribe_to_markets(
+                        market_filter=filters.streaming_market_filter(
+                            market_ids=_market_ids
+                        ),
+                        market_data_filter=filters.streaming_market_data_filter(
+                            fields=["EX_BEST_OFFERS", "EX_TRADED"]
+                        ),
+                    )
+                except Exception as sub_e:
+                    logger.error("Stream re-subscribe failed: %s", sub_e)
+                    break
+            else:
+                break
+
+        self.streaming_active = False
 
     def stop_streaming(self):
         """Stop the active stream."""
+        # FIX #34 race: signal the reconnect backoff to abort immediately
+        self._stream_stop_event.set()
         self.streaming_active = False
         if self.stream:
             try:
